@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- Page CSP (defense in depth): the server should send the same policy
+         as a Content-Security-Policy response header; this meta tag is the
+         fallback for deployments where the header is missing. Keep both in sync. -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'" />
+    <!-- Build output filenames carry a content hash (index-<hash>.js/css).
+         Long-lived caching for /assets/* is the reverse proxy's job; this
+         page itself must not be cached aggressively. -->
+    <title>MUI 节点管理面板</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx?mui=1"></script>
+  </body>
+</html>

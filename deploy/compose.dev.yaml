@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:17.5-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${MUI_DB_NAME:-mui}
+      POSTGRES_USER: ${MUI_DB_USER:-mui}
+      POSTGRES_PASSWORD: ${MUI_DB_PASSWORD:?set MUI_DB_PASSWORD in the root .env}
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - dev-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MUI_DB_USER:-mui} -d ${MUI_DB_NAME:-mui}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  dev-db-data:

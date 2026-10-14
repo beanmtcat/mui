@@ -1,0 +1,994 @@
+:root {
+  color-scheme: light;
+  --bg: #f7f7f5;
+  --surface: #ffffff;
+  --line: #e3e3df;
+  --line-strong: #cfcfca;
+  --text: #1d1d1b;
+  --muted: #6e6e68;
+  --accent: #1f5fbf;
+  --good: #1b7a3d;
+  --bad: #b3261e;
+  --warn: #946200;
+  --idle: #8a8a84;
+  --ink: #1d1d1b;
+  --ink-text: #ffffff;
+  --code-bg: #f1f1ee;
+  --bar: #4a4a46;
+  --traffic-up: #2563c9;
+  --traffic-down: #d47822;
+  font-family:
+    system-ui,
+    -apple-system,
+    "PingFang SC",
+    "Microsoft YaHei",
+    "Noto Sans SC",
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  font-synthesis: none;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #171716;
+  --surface: #1e1e1d;
+  --line: #30302e;
+  --line-strong: #454542;
+  --text: #e7e7e3;
+  --muted: #9a9a93;
+  --accent: #8ab4f8;
+  --good: #6cc48a;
+  --bad: #f08b84;
+  --warn: #d9a441;
+  --idle: #85857f;
+  --ink: #e7e7e3;
+  --ink-text: #171716;
+  --code-bg: #262625;
+  --bar: #b9b9b3;
+  --traffic-up: #8ab4f8;
+  --traffic-down: #f2ad69;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-width: 320px;
+}
+h1,
+h2,
+p {
+  margin: 0;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button {
+  cursor: pointer;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.mono,
+code,
+pre {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12.5px;
+}
+
+/* Layout */
+.app {
+  display: flex;
+  min-height: 100vh;
+}
+.sidebar {
+  width: 176px;
+  flex: none;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  padding: 20px 12px 16px;
+  border-right: 1px solid var(--line);
+}
+.brand {
+  padding: 0 10px 18px;
+  font-weight: 600;
+}
+.sidebar nav {
+  display: grid;
+  gap: 1px;
+}
+.sidebar nav button,
+.sideBottom button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  text-align: left;
+  color: var(--muted);
+}
+.sidebar nav button svg,
+.sideBottom button svg {
+  flex: none;
+}
+.sidebar nav button:hover,
+.sideBottom button:hover {
+  color: var(--text);
+}
+.sidebar nav button.active {
+  color: var(--text);
+  font-weight: 600;
+  background: var(--line);
+}
+.sideBottom {
+  margin-top: auto;
+}
+main {
+  flex: 1;
+  min-width: 0;
+  max-width: 1320px;
+  padding: 24px 32px 64px;
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+}
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+h1 {
+  font-size: 20px;
+  font-weight: 600;
+}
+h2 {
+  font-size: 14px;
+  font-weight: 600;
+}
+.loading {
+  padding: 40px;
+  color: var(--muted);
+}
+
+/* Buttons */
+.primary,
+.ghost,
+.commandBox button:not(.primary),
+.filters select {
+  padding: 6px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  white-space: nowrap;
+}
+.primary {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--ink-text);
+}
+.primary:hover:not(:disabled) {
+  opacity: 0.85;
+}
+.ghost:hover,
+.commandBox button:not(.primary):hover {
+  border-color: var(--text);
+}
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+}
+.iconButton:hover {
+  border-color: var(--text);
+}
+.inputWithAction {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+}
+.inputWithAction input {
+  min-width: 0;
+  flex: 1;
+}
+.inputWithAction .iconButton {
+  height: auto;
+  min-height: 34px;
+}
+.textButton,
+.actions button,
+td > button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+}
+.textButton:hover,
+.actions button:hover,
+td > button:hover {
+  text-decoration: underline;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+}
+.dangerText,
+.actions button.dangerText,
+td > button.dangerText {
+  color: var(--bad);
+}
+.closeButton {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--muted);
+}
+.closeButton:hover {
+  color: var(--text);
+  background: var(--line);
+}
+
+/* Banners */
+.banner {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--idle);
+  background: var(--surface);
+}
+.banner.error {
+  border-color: var(--bad);
+}
+.banner.success {
+  border-color: var(--good);
+}
+.banner.warning {
+  border-color: var(--warn);
+}
+.banner button {
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+.error {
+  color: var(--bad);
+}
+
+/* Dashboard figures */
+.statGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  margin-bottom: 28px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.statCard {
+  padding: 14px 16px;
+  border-right: 1px solid var(--line);
+}
+.statCard:last-child {
+  border-right: 0;
+}
+.statCard span {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+.statCard strong {
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.twoCol {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 24px;
+}
+.twoCol .panel + .panel {
+  margin-top: 0;
+}
+
+/* Sections and tables */
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.panel + .panel {
+  margin-top: 20px;
+}
+.panelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.panelHead p,
+.settings p,
+.hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+.tableWrap {
+  overflow-x: auto;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+th,
+td {
+  padding: 9px 16px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+th {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+td strong {
+  font-weight: 600;
+}
+td small,
+.listRow small,
+.settingRow small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+td small.dangerText {
+  max-width: 280px;
+  color: var(--bad);
+}
+.errorCell {
+  max-width: 360px;
+  font-size: 12px;
+  color: var(--bad);
+  overflow-wrap: anywhere;
+}
+.empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--muted);
+}
+.listRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.listRow:last-child {
+  border-bottom: 0;
+}
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+.listRow strong {
+  font-weight: 500;
+}
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.serverFilters {
+  flex-wrap: wrap;
+}
+main > .filters {
+  padding: 0 0 14px;
+  border: 0;
+}
+.panel > pre {
+  max-height: 320px;
+  margin: 0;
+  padding: 12px 16px;
+  overflow: auto;
+  white-space: pre;
+}
+
+/* Status and tags */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.status::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.status.good {
+  color: var(--good);
+}
+.status.bad {
+  color: var(--bad);
+}
+.status.warn {
+  color: var(--warn);
+}
+.status.idle {
+  color: var(--idle);
+}
+.chip {
+  padding: 1px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  font-size: 12px;
+}
+.chip.red {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+/* Command and link output */
+.commandBox {
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+}
+.commandBox > div span {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.commandBox code,
+.commandBox pre,
+.totpBox code {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 4px;
+  background: var(--code-bg);
+  overflow-wrap: anywhere;
+}
+.commandBox pre {
+  white-space: pre;
+}
+form .commandBox {
+  margin-top: 16px;
+  padding: 12px 0 0;
+}
+
+/* Forms */
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+}
+textarea {
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+.filters select {
+  width: auto;
+  min-width: 150px;
+}
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+.field,
+.loginCard label {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.formGrid .field {
+  margin-bottom: 0;
+}
+.field input,
+.field select,
+.field textarea,
+.loginCard input {
+  font-size: 14px;
+  color: var(--text);
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text);
+}
+.check small {
+  color: var(--muted);
+}
+.nodePicker {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.hint {
+  margin-top: 12px;
+}
+.submit {
+  margin-top: 16px;
+}
+
+/* Dialogs */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: start center;
+  padding: 8vh 16px 16px;
+  overflow: auto;
+  background: rgb(0 0 0 / 40%);
+}
+.modal {
+  width: min(640px, 100%);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.modalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 12px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.modal > form {
+  padding: 20px;
+}
+.installModal {
+  width: min(760px, 100%);
+}
+.installModal .commandBox {
+  padding: 20px;
+  border-top: 0;
+}
+.installModal .hint {
+  margin: 0;
+}
+.confirmationOverlay {
+  z-index: 20;
+}
+.confirmModal {
+  width: min(440px, 100%);
+}
+.confirmMessage {
+  padding: 20px 20px 8px;
+  white-space: pre-line;
+}
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 20px;
+}
+.trafficTotals {
+  display: flex;
+  gap: 32px;
+  padding: 16px 20px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.trafficTotals strong {
+  display: block;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text);
+}
+.trafficChart {
+  padding: 14px 20px 18px;
+  font-variant-numeric: tabular-nums;
+}
+.trafficChartHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.trafficChartHead .hint {
+  margin: 0;
+}
+.trafficLegend {
+  display: flex;
+  gap: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.trafficLegend span::before {
+  content: "";
+  display: inline-block;
+  width: 16px;
+  margin-right: 5px;
+  vertical-align: 4px;
+  border-top: 2px solid;
+}
+.trafficLegend .up::before { border-color: var(--traffic-up); }
+.trafficLegend .down::before { border-color: var(--traffic-down); border-top-style: dashed; }
+.trafficPlotRow {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+}
+.trafficYAxis {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+  height: 200px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.trafficPlot {
+  position: relative;
+  height: 200px;
+  min-width: 0;
+}
+.trafficPlot svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+.trafficGridLine {
+  stroke: var(--line);
+  stroke-dasharray: 4 5;
+  vector-effect: non-scaling-stroke;
+}
+.trafficLine {
+  fill: none;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+.trafficLine.up { stroke: var(--traffic-up); }
+.trafficLine.down { stroke: var(--traffic-down); stroke-dasharray: 7 5; }
+.trafficCursor {
+  stroke: var(--muted);
+  stroke-dasharray: 3 4;
+  vector-effect: non-scaling-stroke;
+}
+.trafficDot {
+  stroke: var(--surface);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+.trafficDot.up { fill: var(--traffic-up); }
+.trafficDot.down { fill: var(--traffic-down); }
+.trafficZero {
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 4px 8px;
+  color: var(--muted);
+  background: var(--surface);
+  white-space: nowrap;
+  pointer-events: none;
+}
+.trafficXAxis {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  margin: 4px 0 0 66px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.trafficReadout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin-top: 14px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 12px;
+}
+.trafficDetails {
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.trafficDetails summary {
+  cursor: pointer;
+}
+.trafficDetailTable {
+  max-height: 190px;
+  margin-top: 8px;
+  overflow: auto;
+  color: var(--text);
+}
+.trafficDetailTable > div {
+  display: grid;
+  grid-template-columns: 1fr 80px 80px;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+/* Settings */
+.settings {
+  max-width: 640px;
+  padding: 16px 20px 20px;
+}
+.settings > h2 + p {
+  margin-bottom: 12px;
+}
+.settingRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 0 10px;
+  border-top: 1px solid var(--line);
+}
+.settingRow strong {
+  font-weight: 600;
+}
+.totpBox {
+  margin-bottom: 14px;
+}
+.totpBox form,
+form.totpBox {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.totpBox form {
+  margin-top: 10px;
+}
+.totpBox p {
+  flex-basis: 100%;
+  margin-bottom: 4px;
+}
+.totpBox input {
+  width: 220px;
+}
+
+/* Login */
+.loginShell {
+  display: grid;
+  place-items: start center;
+  min-height: 100vh;
+  padding: 18vh 16px 0;
+}
+.loginCard {
+  width: min(340px, 100%);
+}
+.loginCard h1 {
+  margin-bottom: 20px;
+}
+.loginCard .primary {
+  width: 100%;
+  margin-top: 4px;
+  padding: 8px;
+}
+.loginCard .error {
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .app {
+    display: block;
+  }
+  .sidebar {
+    position: static;
+    width: auto;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    overflow-x: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .brand {
+    display: none;
+  }
+  .sidebar nav {
+    display: flex;
+  }
+  .sidebar nav button,
+  .sideBottom button {
+    width: auto;
+    white-space: nowrap;
+  }
+  .sideBottom {
+    margin: 0 0 0 auto;
+  }
+  main {
+    padding: 16px 14px 48px;
+  }
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+  .statCard {
+    border-bottom: 1px solid var(--line);
+  }
+}
+@media (max-width: 500px) {
+  .trafficXAxis .optional { display: none; }
+  .trafficChart { padding-inline: 12px; }
+  .trafficLegend { gap: 8px; }
+  .trafficReadout { gap: 4px 10px; }
+}
+.qrCode {
+  display: block;
+  width: 168px;
+  height: 168px;
+  margin: 10px 0;
+}
+/* Row action menu. */
+.actionMenu > button::after {
+  content: " ▾";
+}
+.menuList {
+  position: fixed;
+  z-index: 5;
+  display: grid;
+  min-width: 176px;
+  max-width: 280px;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 14%);
+}
+.menuList button,
+.actions .menuList button,
+td .menuList button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.menuList button:hover:not(:disabled),
+.menuList button:focus-visible {
+  background: var(--line);
+  text-decoration: none;
+}
+.menuList button.dangerText,
+.actions .menuList button.dangerText {
+  color: var(--bad);
+}
+.menuList button:disabled {
+  color: var(--idle);
+}
+
+.filters input {
+  width: 260px;
+}
+.loadMore {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+}
+.loadMore .hint {
+  margin: 0;
+}
+
+/* Sidebar sub-menus */
+.sidebar nav button.open {
+  color: var(--text);
+}
+.sidebar nav button.child {
+  padding-left: 38px;
+  font-size: 13px;
+}
+
+/* Dashboard */
+.statGrid {
+  margin-top: 20px;
+  margin-bottom: 20px;
+}
+.statCard small {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.twoCol {
+  margin-top: 20px;
+}
+.listRow.attention {
+  align-items: flex-start;
+}
+.listRow.attention .status {
+  margin-top: 7px;
+}
+.listRow.attention .grow {
+  overflow-wrap: anywhere;
+}
+td.rank {
+  width: 1%;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+td.num,
+th.num {
+  text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}

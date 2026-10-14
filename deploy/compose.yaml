@@ -1,0 +1,134 @@
+services:
+  db:
+    image: postgres:17.5-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${MUI_DB_NAME:-mui}
+      POSTGRES_USER: ${MUI_DB_USER:-mui}
+      POSTGRES_PASSWORD: ${MUI_DB_PASSWORD:?set MUI_DB_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MUI_DB_USER:-mui} -d ${MUI_DB_NAME:-mui}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  mui:
+    build:
+      context: ..
+      dockerfile: deploy/Mui.Dockerfile
+    restart: unless-stopped
+    environment:
+      MUI_DB_HOST: db
+      MUI_DB_PORT: 5432
+      MUI_DB_NAME: ${MUI_DB_NAME:-mui}
+      MUI_DB_USER: ${MUI_DB_USER:-mui}
+      MUI_DB_PASSWORD: ${MUI_DB_PASSWORD:?set MUI_DB_PASSWORD}
+      MUI_DB_SSLMODE: disable
+      # Secrets: prefer *_FILE (file-injected) over plain env when the server
+      # supports it: set e.g. MUI_SECRET_FILE=/run/secrets/mui_secret and
+      # REMOVE the corresponding plain MUI_SECRET line below. Never commit
+      # real secret values into this file or .env.
+      MUI_SECRET: ${MUI_SECRET:?set MUI_SECRET}
+      MUI_ADMIN_PASSWORD: ${MUI_ADMIN_PASSWORD:?set MUI_ADMIN_PASSWORD}
+      # No MUI_ADMIN_RESET here on purpose: admin reset is a one-time manual
+      # operation (see README "忘记密码"), never a persistent env value.
+      # Leaving it set would reset the password on every container restart.
+      MUI_PUBLIC_URL: ${MUI_PUBLIC_URL:?set MUI_PUBLIC_URL}
+      MUI_TRUSTED_PROXIES: ${MUI_TRUSTED_PROXIES:-}
+      MUI_RELEASE_PUBLIC_KEY: ${MUI_RELEASE_PUBLIC_KEY:-}
+      MUI_TLS_CERT: ${MUI_TLS_CERT:-}
+      MUI_TLS_KEY: ${MUI_TLS_KEY:-}
+      MUI_TRAFFIC_RETENTION_DAYS: ${MUI_TRAFFIC_RETENTION_DAYS:-90}
+      MUI_LISTEN: :8080
+    ports:
+      # MUI_BIND is the HOST-side port mapping (default 127.0.0.1:8080), NOT
+      # the in-container listen address. In-container listen is MUI_LISTEN
+      # (default :8080). Do not confuse the two: MUI_BIND=0.0.0.0:443 maps
+      # host 443 -> container 8080; the panel itself still listens on :8080.
+      # Default: loopback only, for a reverse proxy on this host that terminates TLS.
+      - ${MUI_BIND:-127.0.0.1:8080}:8080
+    volumes:
+      # Only needed when the panel terminates TLS itself (MUI_TLS_CERT / MUI_TLS_KEY).
+      - ${MUI_TLS_DIR:-./tls}:/app/tls:ro
+      # Built by deploy/build-agent.sh; the panel serves these files to new servers.
+      - ../bin:/app/bin:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # No dedicated /healthz endpoint; a TCP connect proves the panel is
+      # listening. The final image is Debian-based, so bash + /dev/tcp exist.
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/8080'"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  # Daily pg_dump backup. Opt-in: `docker compose --profile backup up -d`.
+  # Dumps land in the db-backups volume (./backups when bound below);
+  # dumps older than 7 days are deleted. Restore: see README "备份与恢复".
+  # MUI_SECRET is NOT in the dump's scope: back it up separately, losing it
+  # makes the encrypted data in the dump undecryptable.
+  backup:
+    profiles: ["backup"]
+    image: postgres:17.5-alpine
+    restart: unless-stopped
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGDATABASE: ${MUI_DB_NAME:-mui}
+      PGUSER: ${MUI_DB_USER:-mui}
+      PGPASSWORD: ${MUI_DB_PASSWORD:?set MUI_DB_PASSWORD}
+    volumes:
+      - db-backups:/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    command:
+      - sh
+      - -c
+      - |
+        set -o pipefail;
+        while true; do
+          f="/backups/mui-$$(date +%Y%m%d-%H%M%S).sql.gz";
+          if pg_dump | gzip > "$$f.tmp" && mv "$$f.tmp" "$$f"; then echo "backup wrote $$f"; else echo "backup FAILED" >&2; rm -f "$$f.tmp"; fi;
+          find /backups -name 'mui-*.sql.gz' -mtime +7 -delete;
+          sleep 86400;
+        done
+volumes:
+  db-data:
+  db-backups:

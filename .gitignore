@@ -1,0 +1,13 @@
+.env
+data/
+web/node_modules/
+web/dist/
+bin/
+.cache/
+*.db
+*.sqlite
+*.sqlite3
+web/*.tsbuildinfo
+deploy/tls/*
+!deploy/tls/.gitkeep
+.claude

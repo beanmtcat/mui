@@ -1,0 +1,10 @@
+.cache
+.git
+.env
+data
+bin
+web/node_modules
+web/dist
+*.db
+deploy/tls
+deploy/.env
