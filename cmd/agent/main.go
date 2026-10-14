@@ -20,7 +20,6 @@ const usage = `usage: mui-agent <command> [args]
   mui-agent helper
   mui-agent version
   mui-agent rollback-if-unconfirmed EXPECTED_SHA256
-  mui-agent rollback-core-if-unconfirmed EXPECTED_SHA256
   mui-agent --help | -h`
 
 func main() {
@@ -44,14 +43,6 @@ func main() {
 			err = fmt.Errorf("usage: mui-agent rollback-if-unconfirmed EXPECTED_SHA256")
 		} else {
 			err = agent.RollbackIfUnconfirmed(os.Args[2])
-		}
-	case "rollback-core-if-unconfirmed":
-		if runtime.GOOS != "linux" {
-			err = fmt.Errorf("rollback-core-if-unconfirmed is only supported on Linux")
-		} else if len(os.Args) != 3 {
-			err = fmt.Errorf("usage: mui-agent rollback-core-if-unconfirmed EXPECTED_SHA256")
-		} else {
-			err = agent.RollbackCoreIfUnconfirmed(os.Args[2])
 		}
 	case "install":
 		if runtime.GOOS != "linux" {

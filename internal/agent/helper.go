@@ -35,7 +35,7 @@ const helperTimeout = 4 * time.Minute
 
 // helperWriteMu serializes every helper write operation (ufw.init,
 // ufw.confirm, all *.apply kinds, agent.upgrade, core.upgrade,
-// upgrade.confirm, core.confirm). Two applies must never interleave: each
+// upgrade.confirm). Two applies must never interleave: each
 // one reads the live state, rewrites it, and rolls back on failure. The
 // read-only status kind is exempt.
 var helperWriteMu sync.Mutex
@@ -55,8 +55,6 @@ type helperRequest struct {
 	Kind            string              `json:"kind"`
 	ProtocolVersion int                 `json:"protocolVersion"`
 	State           shared.DesiredState `json:"state"`
-	// Token is the rotated agent token for "token.persist".
-	Token string `json:"token,omitempty"`
 }
 type helperResponse struct {
 	Error           string      `json:"error,omitempty"`
@@ -186,12 +184,8 @@ func handleHelper(conn net.Conn) {
 		err = runUpgradeOnce("agent.upgrade", req.State.UpgradeSHA256, func() error { return upgradeAgent(req.State.UpgradeSHA256) })
 	case "core.upgrade":
 		err = runUpgradeOnce("core.upgrade", req.State.CoreUpgradeSHA256, func() error { return upgradeCore(req.State.CoreUpgradeSHA256) })
-	case "token.persist":
-		err = persistAgentToken(req.Token)
 	case "upgrade.confirm":
 		err = writeUpgradeConfirmation(UpgradeConfirmedPath, req.State.UpgradeSHA256)
-	case "core.confirm":
-		err = writeUpgradeConfirmation(CoreUpgradeConfirmedPath, req.State.CoreUpgradeSHA256)
 	default:
 		err = errors.New("unsupported helper operation")
 	}
@@ -243,46 +237,6 @@ func writeUpgradeConfirmation(path, sha string) error {
 		return err
 	}
 	return os.Chmod(path, 0600)
-}
-
-// persistAgentToken stores a rotated agent token. The agent account cannot
-// write /etc/mui-agent (it holds the pinned keys and the applied state, which
-// only root may change), so the rewrite of config.json is done here.
-func persistAgentToken(token string) error {
-	if len(token) < 32 || len(token) > 128 || strings.Trim(token, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_") != "" {
-		return errors.New("invalid agent token")
-	}
-	c, err := ReadConfig()
-	if err != nil {
-		return err
-	}
-	c.Token = token
-	raw, err := json.Marshal(c)
-	if err != nil {
-		return err
-	}
-	return writeOwned(ConfigDir+"/config.json", raw, 0640, agentUser)
-}
-
-// PersistAgentToken asks the root helper to store a rotated agent token.
-func PersistAgentToken(token string) error {
-	conn, err := net.DialTimeout("unix", SocketPath, 5*time.Second)
-	if err != nil {
-		return err
-	}
-	defer conn.Close()
-	_ = conn.SetDeadline(time.Now().Add(30 * time.Second))
-	if err = json.NewEncoder(conn).Encode(helperRequest{Kind: "token.persist", ProtocolVersion: 1, Token: token}); err != nil {
-		return err
-	}
-	var resp helperResponse
-	if err = json.NewDecoder(conn).Decode(&resp); err != nil {
-		return err
-	}
-	if resp.Error != "" {
-		return errors.New(resp.Error)
-	}
-	return nil
 }
 
 func callHelper(kind string, state shared.DesiredState) (helperResponse, error) {
@@ -1068,46 +1022,6 @@ func checkManualUFWBypass(state shared.DesiredState) error {
 	return nil
 }
 
-// applyFirewallOnly applies a firewall-only job: it reconciles the UFW
-// rules and refreshes the Rules section of the stored state. It never
-// touches sing-box, certificates, or forward rules.
-func applyFirewallOnly(state shared.DesiredState) error {
-	if err := verifyDesiredSignature(state); err != nil {
-		return err
-	}
-	if err := validateDesired(state); err != nil {
-		return err
-	}
-	if conflict := firewallConflict(); conflict != "" {
-		return conflictError(conflict)
-	}
-	if UFWStatus() != "active" {
-		return errors.New("UFW 未启用；请先在面板初始化 UFW")
-	}
-	if restrictedNodesNeedDeny(state) {
-		status, err := command("ufw", "status", "verbose")
-		if err != nil || !defaultIncomingDeny.MatchString(status) {
-			return errors.New("指定来源模式要求 UFW 默认入站策略为 deny 或 reject")
-		}
-	}
-	if err := checkManualUFWBypass(state); err != nil {
-		return err
-	}
-	if err := syncUFW(state); err != nil {
-		return err
-	}
-	current, err := readCurrentChecked()
-	if err != nil {
-		return err
-	}
-	current.Rules = state.Rules
-	currentJSON, err := mustJSON(sanitizeStateForStorage(current))
-	if err != nil {
-		return err
-	}
-	return writeOwned(CurrentState, []byte(currentJSON), 0640, agentUser)
-}
-
 func runtimeForwards(state shared.DesiredState) []shared.ForwardRule {
 	out := make([]shared.ForwardRule, 0, len(state.Forwards))
 	for _, f := range state.Forwards {
@@ -1450,10 +1364,6 @@ func validateDesired(state shared.DesiredState) error {
 		liveIndex.claim(f.Port, f.Network, f.Listen)
 	}
 	return nil
-}
-
-func forwardListenOverlap(a, b string) bool {
-	return a == b || a == "" || b == "" || a == "0.0.0.0" || b == "0.0.0.0" || a == "::" || b == "::"
 }
 
 // writeOwned atomically writes a root-owned file readable by the given account's group.

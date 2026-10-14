@@ -23,17 +23,11 @@ import (
 const forwardUnit = "[Unit]\nDescription=MUI TCP and UDP forwarder\nAfter=network-online.target\nWants=network-online.target\n[Service]\nUser=mui-forward\nGroup=mui-forward\nExecStart=/usr/local/bin/mui-agent forward\nExecReload=/bin/kill -HUP $MAINPID\nRestart=on-failure\nRestartSec=3\nMemoryMax=384M\nRuntimeDirectory=mui-forward\nRuntimeDirectoryMode=0700\nNoNewPrivileges=true\nProtectHome=true\nProtectSystem=strict\nReadWritePaths=/run/mui-forward\nCapabilityBoundingSet=\nLimitNOFILE=65536\n[Install]\nWantedBy=multi-user.target\n"
 const coreUnit = "[Unit]\nDescription=Managed sing-box\nAfter=network-online.target\nWants=network-online.target\n[Service]\nUser=mui-core\nGroup=mui-core\nExecStart=/usr/local/bin/sing-box run -c " + CoreConfig + "\nRestart=always\nRestartSec=3\nNoNewPrivileges=true\nAmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\nLimitNOFILE=65536\n[Install]\nWantedBy=multi-user.target\n"
 
-// The helper is root and runs ufw, useradd, systemctl and systemd-run. It is
-// deliberately not put under ProtectSystem=strict: useradd writes lock and
-// temporary files next to /etc/passwd, and iptables (behind ufw) needs
-// /run/xtables.lock, so a read-only root breaks user creation and every
-// firewall change. Its protection is the narrow request whitelist instead.
-const helperUnit = "[Unit]\nDescription=MUI privileged helper\nAfter=network.target\n[Service]\nExecStart=/usr/local/bin/mui-agent helper\nRestart=always\nRuntimeDirectory=mui-agent\nRuntimeDirectoryMode=0755\nNoNewPrivileges=true\nPrivateTmp=true\nProtectHome=true\nMemoryMax=512M\n[Install]\nWantedBy=multi-user.target\n"
-
-// Hardened agent unit. The agent runs unprivileged and its bounding set is
-// empty. Everything it writes lives in /var/lib/mui-agent; a rotated token is
-// stored by the helper, since /etc/mui-agent belongs to root.
-const agentUnit = "[Unit]\nDescription=MUI agent\nAfter=network-online.target mui-agent-helper.service\nWants=network-online.target\nRequires=mui-agent-helper.service\n[Service]\nUser=mui-agent\nGroup=mui-agent\nExecStart=/usr/local/bin/mui-agent run\nRestart=always\nRestartSec=5\nNoNewPrivileges=true\nProtectSystem=strict\nPrivateTmp=true\nProtectHome=true\nMemoryMax=256M\nReadWritePaths=/var/lib/mui-agent /run/mui-agent\nCapabilityBoundingSet=\n[Install]\nWantedBy=multi-user.target\n"
+// The helper is root and runs ufw, useradd, systemctl and systemd-run; its
+// protection is the narrow request whitelist. The agent itself runs
+// unprivileged.
+const helperUnit = "[Unit]\nDescription=MUI privileged helper\nAfter=network.target\n[Service]\nExecStart=/usr/local/bin/mui-agent helper\nRestart=always\nRuntimeDirectory=mui-agent\nRuntimeDirectoryMode=0755\nNoNewPrivileges=true\n[Install]\nWantedBy=multi-user.target\n"
+const agentUnit = "[Unit]\nDescription=MUI agent\nAfter=network-online.target mui-agent-helper.service\nWants=network-online.target\nRequires=mui-agent-helper.service\n[Service]\nUser=mui-agent\nGroup=mui-agent\nExecStart=/usr/local/bin/mui-agent run\nRestart=always\nRestartSec=5\nNoNewPrivileges=true\n[Install]\nWantedBy=multi-user.target\n"
 
 // installRollback tracks files replaced or created during install so a
 // failure after the first mutation can restore the previous state: replaced

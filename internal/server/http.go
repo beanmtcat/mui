@@ -356,7 +356,6 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /agent/enroll", a.agentEnroll)
 	mux.HandleFunc("GET /agent/job", a.agentAuth(a.agentJob))
 	mux.HandleFunc("POST /agent/report", a.agentAuth(a.agentReport))
-	mux.HandleFunc("POST /agent/rotate-token", a.agentAuth(a.rotateAgentToken))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
 	return a.SecurityHeaders(mux)
 }
@@ -657,14 +656,13 @@ func (a *App) agentAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Server-ID")
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		var hash, prevHash string
-		var prevExpires, signs int64
-		if id == "" || token == "" || a.Store.DB.QueryRow(`SELECT agent_hash,prev_agent_hash,prev_agent_expires,agent_signs FROM mui_servers WHERE id=$1`, id).Scan(&hash, &prevHash, &prevExpires, &signs) != nil || hash == "" {
+		var hash string
+		var signs int64
+		if id == "" || token == "" || a.Store.DB.QueryRow(`SELECT agent_hash,agent_signs FROM mui_servers WHERE id=$1`, id).Scan(&hash, &signs) != nil || hash == "" {
 			errorJSON(w, 401, "agent authentication failed")
 			return
 		}
-		want := Hash(token)
-		if !hmac.Equal([]byte(hash), []byte(want)) && !(prevHash != "" && time.Now().Unix() < prevExpires && hmac.Equal([]byte(prevHash), []byte(want))) {
+		if !hmac.Equal([]byte(hash), []byte(Hash(token))) {
 			errorJSON(w, 401, "agent authentication failed")
 			return
 		}
@@ -681,19 +679,12 @@ func (a *App) agentAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		signed := r.Header.Get("X-Agent-Signature") != ""
-		if !signed && (signs != 0 || r.URL.Path == "/agent/rotate-token") {
+		if !signed && signs != 0 {
 			errorJSON(w, 401, "agent signature required")
 			return
 		}
 		if signed {
-			// A rotated-but-not-yet-replaced agent signs with the old token
-			// during the grace window; accept either key, but check the
-			// nonce exactly once so a replay cannot slip through the retry.
-			keys := []string{hash}
-			if prevHash != "" && time.Now().Unix() < prevExpires && hmac.Equal([]byte(prevHash), []byte(want)) {
-				keys = append(keys, prevHash)
-			}
-			if err := a.verifyAgentSignature(r, body, keys); err != nil {
+			if err := a.verifyAgentSignature(r, body, []string{hash}); err != nil {
 				errorJSON(w, 401, "agent signature verification failed")
 				return
 			}
@@ -3346,27 +3337,4 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
-}
-
-// rotateAgentToken issues a replacement agent token. The caller proves the
-// current token (and its request signature); the old token keeps working for
-// 5 minutes so an in-flight agent is not locked out by the rotation.
-func (a *App) rotateAgentToken(w http.ResponseWriter, r *http.Request) {
-	id := r.Header.Get("X-Server-ID")
-	var currentHash string
-	if err := a.Store.DB.QueryRow(`SELECT agent_hash FROM mui_servers WHERE id=$1`, id).Scan(&currentHash); err != nil {
-		errorJSON(w, 404, "服务器不存在")
-		return
-	}
-	if currentHash == "" {
-		errorJSON(w, 409, "该服务器尚未接入 Agent")
-		return
-	}
-	newToken := Token()
-	if _, err := a.Store.DB.Exec(`UPDATE mui_servers SET prev_agent_hash=agent_hash,prev_agent_expires=$1,agent_hash=$2 WHERE id=$3`, time.Now().Add(5*time.Minute).Unix(), Hash(newToken), id); err != nil {
-		errorJSON(w, 500, err.Error())
-		return
-	}
-	a.Store.Audit("agent.rotate", id, "")
-	writeJSON(w, 200, map[string]string{"agentToken": newToken})
 }

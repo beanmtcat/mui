@@ -260,29 +260,6 @@ func TestWeakSecretRejected(t *testing.T) {
 	}
 }
 
-// TestRotateAgentToken: rotation issues a working token and the old token
-// keeps working through the grace window.
-func TestRotateAgentToken(t *testing.T) {
-	p := newTestMui(t)
-	_, agent := p.enroll("rotate-server")
-	oldToken := strings.TrimPrefix(agent["Authorization"], "Bearer ")
-	code, out, _ := p.do("POST", "/agent/rotate-token", map[string]any{}, agent)
-	if code != 200 || out["agentToken"] == nil || out["agentToken"] == "" {
-		t.Fatalf("rotate: %d %v", code, out)
-	}
-	newToken := out["agentToken"].(string)
-	if newToken == oldToken {
-		t.Fatal("rotation must issue a different token")
-	}
-	newAgent := map[string]string{"X-Server-ID": agent["X-Server-ID"], "Authorization": "Bearer " + newToken}
-	if code, _, _ := p.do("GET", "/agent/job", nil, newAgent); code != 200 && code != 204 {
-		t.Fatalf("new token should work: %d", code)
-	}
-	if code, _, _ := p.do("GET", "/agent/job", nil, agent); code != 200 && code != 204 {
-		t.Fatalf("old token should work during the grace window: %d", code)
-	}
-}
-
 // TestListPaginationEnvelope: ?limit= returns the envelope; no parameter
 // returns the legacy bare array.
 func TestListPaginationEnvelope(t *testing.T) {
@@ -308,6 +285,9 @@ func TestListPaginationEnvelope(t *testing.T) {
 		t.Fatalf("envelope should carry total and nextCursor: %v", page)
 	}
 	code, body = rawDo(t, p, "GET", "/api/servers?limit=2&cursor="+page["nextCursor"].(string), nil, nil)
+	if code != 200 {
+		t.Fatalf("second page: %d %s", code, body)
+	}
 	var page2 map[string]any
 	if err := json.Unmarshal(body, &page2); err != nil {
 		t.Fatal(err)
@@ -520,9 +500,6 @@ func TestUnsignedAgentRequests(t *testing.T) {
 		}
 	} else {
 		t.Fatalf("legacy agent did not receive its job: %d", code)
-	}
-	if code, _ := rawDo(t, p, "POST", "/agent/rotate-token", map[string]any{}, agent); code != 401 {
-		t.Fatalf("unsigned token rotation accepted: %d", code)
 	}
 	// Once the agent has signed a request, unsigned ones are refused, so a
 	// stripped signature cannot downgrade it.

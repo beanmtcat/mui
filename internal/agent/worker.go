@@ -311,15 +311,9 @@ func Run(ctx context.Context) error {
 		supportedWarned = true
 	}
 	var ipv4, ipv6 string
-	// Token rotation: attempted at most once every 24h. Set once the panel
-	// answers 404/501, rotation is unsupported and is never retried.
-	lastRotate := time.Now()
-	tokenUnsaved := false
-	rotateUnsupported := false
-	// confirmedBuild/CoreExpected remember what this process already confirmed
-	// through the helper, so a successful report does not re-confirm every 30s.
+	// confirmedBuild remembers what this process already confirmed through
+	// the helper, so a successful report does not re-confirm every 30s.
 	confirmedBuild := ""
-	confirmedCoreExpected := ""
 
 	// reportJobResult sends one executed job's result. On success it clears
 	// the pending file and runs the post-acknowledgement confirmations.
@@ -343,22 +337,6 @@ func Run(ctx context.Context) error {
 		}
 		if result.JobKind == "ufw.init" && result.JobStatus == "success" {
 			confirmUFWRollback(ctx)
-		}
-		if result.JobKind == "core.upgrade" && result.JobStatus == "success" {
-			// The expected value is the job's CoreUpgradeSHA256; for an
-			// old-format pending result without the job, the reported core
-			// build digest is the same value.
-			expected := job.State.CoreUpgradeSHA256
-			if expected == "" {
-				expected = result.CoreBuild
-			}
-			if expected != "" && expected != confirmedCoreExpected {
-				if err := CallHelper("core.confirm", shared.DesiredState{CoreUpgradeSHA256: expected}); err != nil {
-					fmt.Fprintln(os.Stderr, "core confirm:", err)
-				} else {
-					confirmedCoreExpected = expected
-				}
-			}
 		}
 		return true
 	}
@@ -481,31 +459,6 @@ func Run(ctx context.Context) error {
 				fmt.Fprintln(os.Stderr, "report:", err)
 				loopFailed = true
 			}
-			// A rotated token that could not be written is retried every loop.
-			if tokenUnsaved {
-				if err := PersistAgentToken(c.Token); err != nil {
-					fmt.Fprintln(os.Stderr, "rotate-token: persist config:", err)
-				} else {
-					tokenUnsaved = false
-				}
-			}
-			// Token rotation, at most once every 24h, never blocking the loop.
-			if !rotateUnsupported && !tokenUnsaved && time.Since(lastRotate) >= 24*time.Hour {
-				lastRotate = time.Now()
-				if err := rotateToken(ctx, client, &c); err != nil {
-					var statusErr *serverStatusError
-					var unsaved *unsavedTokenError
-					if errors.As(err, &unsaved) {
-						tokenUnsaved = true
-					}
-					if errors.As(err, &statusErr) && (statusErr.Status == http.StatusNotFound || statusErr.Status == http.StatusNotImplemented) {
-						fmt.Fprintln(os.Stderr, "rotate-token: panel does not implement token rotation; not retrying")
-						rotateUnsupported = true
-					} else {
-						fmt.Fprintln(os.Stderr, "rotate-token:", err)
-					}
-				}
-			}
 		}
 
 		// Pending job: a persisted result is (re)sent every loop; a
@@ -598,35 +551,6 @@ func checkPanelURL(raw string) (*url.URL, error) {
 		return nil, errors.New("panel URL must contain a host")
 	}
 	return u, nil
-}
-
-// unsavedTokenError means the panel issued a new token that is in use but not
-// yet on disk; the worker keeps retrying the write, because a restart would
-// otherwise bring back a token the panel no longer accepts.
-type unsavedTokenError struct{ err error }
-
-func (e *unsavedTokenError) Error() string { return "rotate-token: persist config: " + e.err.Error() }
-
-// rotateToken asks the panel for a fresh agent token, switches to it and has
-// the root helper rewrite config.json, which the agent account cannot write.
-func rotateToken(ctx context.Context, client *http.Client, c *Config) error {
-	var out struct {
-		AgentToken string `json:"agentToken"`
-	}
-	headers := map[string]string{"X-Server-ID": c.ServerID, "Authorization": "Bearer " + c.Token}
-	if err := sendJSON(ctx, client, "POST", c.URL+"/agent/rotate-token", nil, headers, &out, c.Token); err != nil {
-		return err
-	}
-	if out.AgentToken == "" {
-		return errors.New("rotate-token: panel returned an empty agent token")
-	}
-	// From here on the panel accepts the old token only for a short grace
-	// period, so switch to the new one at once, whatever happens to the file.
-	c.Token = out.AgentToken
-	if err := PersistAgentToken(out.AgentToken); err != nil {
-		return &unsavedTokenError{err}
-	}
-	return nil
 }
 
 // writeFileAtomic writes data to path via a temp file in the same directory,

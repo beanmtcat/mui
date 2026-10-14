@@ -263,47 +263,6 @@ func randomUnitSuffix() string {
 	return hex.EncodeToString(b[:])
 }
 
-// rotateBackup rolls the existing .previous backup to .previous2 (dropping
-// the old .previous2), so two generations of backups are kept.
-func rotateBackup(backup string) {
-	_ = os.Remove(backup + "2")
-	_ = os.Rename(backup, backup+"2")
-}
-
-// writeWatchdogTimer installs a persistent timer + service that runs
-// execStart once after the given delay. Persistent=true makes the timer fire
-// after a reboot if the machine was down when it was due.
-func writeWatchdogTimer(name, execStart, delay string) error {
-	servicePath := "/etc/systemd/system/" + name + ".service"
-	timerPath := "/etc/systemd/system/" + name + ".timer"
-	service := "[Unit]\nDescription=MUI upgrade watchdog\n[Service]\nType=oneshot\nExecStart=" + execStart + "\n"
-	timer := "[Unit]\nDescription=MUI upgrade watchdog timer\n[Timer]\nOnActiveSec=" + delay + "\nPersistent=true\nUnit=" + name + ".service\n[Install]\nWantedBy=timers.target\n"
-	if err := os.WriteFile(servicePath, []byte(service), 0644); err != nil {
-		return err
-	}
-	if err := os.WriteFile(timerPath, []byte(timer), 0644); err != nil {
-		return err
-	}
-	if _, err := command("systemctl", "daemon-reload"); err != nil {
-		return err
-	}
-	if _, err := command("systemctl", "enable", "--now", name+".timer"); err != nil {
-		return err
-	}
-	return nil
-}
-
-// clearWatchdogTimer stops and removes a persistent watchdog timer + service.
-// Best effort: a stale watchdog that still fires is harmless (it checks the
-// confirmation file and the running binary's hash before acting), but a
-// leftover timer must not roll back a later, healthy upgrade.
-func clearWatchdogTimer(name string) {
-	_, _ = command("systemctl", "disable", "--now", name+".timer")
-	_ = os.Remove("/etc/systemd/system/" + name + ".service")
-	_ = os.Remove("/etc/systemd/system/" + name + ".timer")
-	_, _ = command("systemctl", "daemon-reload")
-}
-
 func upgradeAgent(expected string) error {
 	candidate, err := downloadUpgradeArtifact("mui-agent", expected, maxAgentBinarySize)
 	if err != nil {
@@ -336,15 +295,13 @@ func upgradeAgent(expected string) error {
 	}
 	dst := "/usr/local/bin/mui-agent"
 	backup := dst + ".previous"
-	rotateBackup(backup)
-	if err = copyFile(dst, backup, 0700); err != nil {
+	if err = copyFile(dst, backup, 0755); err != nil {
 		return fmt.Errorf("backup current Agent: %w", err)
 	}
 	restore := func(cause error) error {
 		if restoreErr := copyFile(backup, dst, 0755); restoreErr != nil {
 			return fmt.Errorf("%w; restore old Agent: %v", cause, restoreErr)
 		}
-		clearWatchdogTimer("mui-agent-upgrade-watchdog")
 		return cause
 	}
 	if err = os.Rename(candidate, dst); err != nil {
@@ -357,15 +314,14 @@ func upgradeAgent(expected string) error {
 	if err = os.Remove(DataDir + "/upgrade-confirmed"); err != nil && !os.IsNotExist(err) {
 		return restore(fmt.Errorf("clear previous upgrade confirmation: %w", err))
 	}
-	// Persistent watchdog: if the new agent never confirms a successful
-	// report, roll back. It runs the old, known-good binary: the new binary
-	// itself may be too broken to execute the rollback.
-	if err = writeWatchdogTimer("mui-agent-upgrade-watchdog", backup+" rollback-if-unconfirmed "+expected, "4min"); err != nil {
-		return restore(fmt.Errorf("install upgrade watchdog: %w", err))
-	}
-	// systemd owns the delayed restart, so it survives the helper replacing its
-	// own executable. The running sing-box service is left untouched.
+	// Watchdog: if the new agent has not confirmed a successful report within
+	// four minutes, roll back. It runs the old, known-good binary, because the
+	// new one may be too broken to do it, and systemd owns it, so it outlives
+	// the helper replacing its own executable.
 	suffix := randomUnitSuffix()
+	if _, err = command("systemd-run", "--quiet", "--unit", "mui-agent-upgrade-"+suffix+"-watchdog", "--on-active=4m", backup, "rollback-if-unconfirmed", expected); err != nil {
+		return restore(fmt.Errorf("schedule upgrade watchdog: %w", err))
+	}
 	_, err = command("systemd-run", "--quiet", "--unit", "mui-agent-upgrade-"+suffix+"-restart", "--on-active=10s", "/bin/systemctl", "restart", "mui-agent-helper.service", "mui-agent.service")
 	if err == nil && forwardActive() {
 		_, err = command("systemd-run", "--quiet", "--unit", "mui-agent-upgrade-"+suffix+"-forward", "--on-active=12s", "/bin/systemctl", "try-restart", "mui-forward.service")
@@ -397,7 +353,8 @@ func upgradeCore(expected string) error {
 		return statErr
 	}
 	hadBinary := statErr == nil
-	// Refuse a candidate that is not newer than the running core.
+	// Refuse a candidate older than the running core; a rebuild of the same
+	// version (other build options) is allowed.
 	if hadBinary {
 		probeCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
 		candidateOut, probeErr := exec.CommandContext(probeCtx, candidate, "version").CombinedOutput()
@@ -410,8 +367,8 @@ func upgradeCore(expected string) error {
 			return fmt.Errorf("candidate sing-box version: %w", err)
 		}
 		if currentVer, err := parseSemver(CoreVersion()); err == nil {
-			if candidateVer.compare(currentVer) <= 0 {
-				return fmt.Errorf("candidate sing-box version %d.%d.%d is not newer than current %s", candidateVer.Major, candidateVer.Minor, candidateVer.Patch, strings.TrimSpace(CoreVersion()))
+			if candidateVer.compare(currentVer) < 0 {
+				return fmt.Errorf("candidate sing-box version %d.%d.%d is older than current %s", candidateVer.Major, candidateVer.Minor, candidateVer.Patch, strings.TrimSpace(CoreVersion()))
 			}
 		}
 		// An unparseable current version (e.g. "unavailable") does not block
@@ -438,13 +395,10 @@ func upgradeCore(expected string) error {
 	}
 	backup := dst + ".previous"
 	if hadBinary {
-		rotateBackup(backup)
-		if err = copyFile(dst, backup, 0700); err != nil {
+		if err = copyFile(dst, backup, 0755); err != nil {
 			return fmt.Errorf("backup current sing-box: %w", err)
 		}
 	}
-	// A stale confirmation from an earlier upgrade must not satisfy this one.
-	_ = os.Remove(CoreUpgradeConfirmedPath)
 	if err = os.Rename(candidate, dst); err != nil {
 		return err
 	}
@@ -456,8 +410,6 @@ func upgradeCore(expected string) error {
 		} else {
 			_ = os.Remove(dst)
 		}
-		_ = os.Remove(DataDir + "/core-upgrade-pending")
-		clearWatchdogTimer("mui-core-upgrade-watchdog")
 		if previouslyActive {
 			if _, restoreErr := command("systemctl", "restart", "mui-sing-box.service"); restoreErr != nil {
 				return fmt.Errorf("%w; restart old sing-box: %v", cause, restoreErr)
@@ -481,16 +433,6 @@ func upgradeCore(expected string) error {
 			return rollback(err)
 		}
 	}
-	// The upgrade succeeded. Arm the persistent watchdog and record the
-	// pending upgrade: if the worker never confirms the new core healthy,
-	// the watchdog restores the previous binary. The worker confirms via
-	// CallHelper("core.confirm") after the panel acknowledges the result.
-	if err = writeWatchdogTimer("mui-core-upgrade-watchdog", "/usr/local/bin/mui-agent rollback-core-if-unconfirmed "+expected, "5min"); err != nil {
-		return rollback(fmt.Errorf("install core upgrade watchdog: %w", err))
-	}
-	if err = writeFileAtomic(DataDir+"/core-upgrade-pending", []byte(expected), 0600); err != nil {
-		return rollback(fmt.Errorf("record pending core upgrade: %w", err))
-	}
 	return nil
 }
 
@@ -506,19 +448,10 @@ func RollbackIfUnconfirmed(expected string) error {
 	if _, err := hex.DecodeString(expected); err != nil {
 		return errors.New("invalid upgrade SHA-256")
 	}
-	if confirmed, err := os.ReadFile(UpgradeConfirmedPath); err == nil && string(confirmed) == expected {
-		// Confirmed: drop the superseded backup and the watchdog.
-		_ = os.Remove("/usr/local/bin/mui-agent.previous")
-		clearWatchdogTimer("mui-agent-upgrade-watchdog")
-		return nil
-	}
-	if confirmed, err := os.ReadFile(DataDir + "/upgrade-confirmed"); err == nil && string(confirmed) == expected {
-		// Legacy confirmation path, kept for one transition: installations
-		// whose confirmation was written before the path moved.
-		_ = os.Remove("/usr/local/bin/mui-agent.previous")
-		_ = os.Remove(DataDir + "/upgrade-confirmed")
-		clearWatchdogTimer("mui-agent-upgrade-watchdog")
-		return nil
+	for _, path := range []string{UpgradeConfirmedPath, DataDir + "/upgrade-confirmed"} {
+		if confirmed, err := os.ReadFile(path); err == nil && string(confirmed) == expected {
+			return nil
+		}
 	}
 	dst := "/usr/local/bin/mui-agent"
 	sum, err := fileSHA256(dst)
@@ -528,7 +461,6 @@ func RollbackIfUnconfirmed(expected string) error {
 	if err := copyFile(dst+".previous", dst, 0755); err != nil {
 		return fmt.Errorf("restore previous Agent: %w", err)
 	}
-	clearWatchdogTimer("mui-agent-upgrade-watchdog")
 	_, err = command("systemctl", "restart", "mui-agent-helper.service", "mui-agent.service")
 	if err != nil {
 		return err
@@ -536,38 +468,5 @@ func RollbackIfUnconfirmed(expected string) error {
 	if forwardActive() {
 		_, err = command("systemctl", "try-restart", "mui-forward.service")
 	}
-	return err
-}
-
-// RollbackCoreIfUnconfirmed is the core-upgrade watchdog's entry point. If the
-// new core was confirmed healthy, it cleans the watchdog and the pending
-// marker. If the running sing-box is not the unconfirmed new build, it does
-// nothing. Otherwise the new build never proved itself healthy: restore the
-// previous binary and restart the service.
-func RollbackCoreIfUnconfirmed(expected string) error {
-	if os.Geteuid() != 0 {
-		return errors.New("core upgrade rollback must run as root")
-	}
-	if len(expected) != 64 {
-		return errors.New("invalid upgrade SHA-256")
-	}
-	if _, err := hex.DecodeString(expected); err != nil {
-		return errors.New("invalid upgrade SHA-256")
-	}
-	if confirmed, err := os.ReadFile(CoreUpgradeConfirmedPath); err == nil && string(confirmed) == expected {
-		_ = os.Remove(DataDir + "/core-upgrade-pending")
-		clearWatchdogTimer("mui-core-upgrade-watchdog")
-		return nil
-	}
-	sum, err := fileSHA256(CoreBinaryPath)
-	if err != nil || sum != expected {
-		return nil // A newer/manual install replaced this build; leave it alone.
-	}
-	if err := copyFile(CoreBinaryPath+".previous", CoreBinaryPath, 0755); err != nil {
-		return fmt.Errorf("restore previous sing-box: %w", err)
-	}
-	_ = os.Remove(DataDir + "/core-upgrade-pending")
-	clearWatchdogTimer("mui-core-upgrade-watchdog")
-	_, err = command("systemctl", "restart", "mui-sing-box.service")
 	return err
 }

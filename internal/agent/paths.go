@@ -34,12 +34,9 @@ const (
 	// UpgradeConfirmedPath records the agent build the panel has seen
 	// reporting successfully after a self-update.
 	UpgradeConfirmedPath = ConfigDir + "/upgrade-confirmed"
-	// CoreUpgradeConfirmedPath records the sing-box build the panel has
-	// seen reporting successfully after a core update.
-	CoreUpgradeConfirmedPath = ConfigDir + "/core-upgrade-confirmed"
-	agentUser                = "mui-agent"
-	coreUser                 = "mui-core"
-	forwardUser              = "mui-forward"
+	agentUser            = "mui-agent"
+	coreUser             = "mui-core"
+	forwardUser          = "mui-forward"
 )
 
 // HostStatus is what the privileged helper can see and the unprivileged agent cannot.
