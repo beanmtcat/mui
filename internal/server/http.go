@@ -48,8 +48,8 @@ type App struct {
 	mu     sync.Mutex
 	rateMu sync.Mutex
 	rates  map[string]rateBucket
-	// serverLocks serialises work on one server: agentJob/agentReport for that
-	// server and queueApply for that server. Admin writes keep the global mu.
+	// serverLocks serialises server edits, agent reports and queueApply for one
+	// server. Admin writes also keep the global mu.
 	serverLocksMu sync.Mutex
 	serverLocks   map[string]*sync.Mutex
 	// nonces remembers agent request nonces for replay detection.
@@ -1153,6 +1153,10 @@ func (a *App) revokeAgent(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	// PATCH writes the whole server document, including fields supplied by
+	// heartbeats. Share their lock so neither writer restores an older snapshot.
+	unlock := a.lockServer(id)
+	defer unlock()
 	old, err := a.Store.Server(id)
 	if err != nil {
 		errorJSON(w, 404, "服务器不存在")

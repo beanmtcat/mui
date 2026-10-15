@@ -355,7 +355,7 @@ func ValidateForward(f ForwardRule) error {
 		return errors.New("监听地址必须是 IP")
 	}
 	host := strings.TrimSpace(f.TargetHost)
-	if host == "" || len(host) > 253 || strings.ContainsAny(host, " /:@\t\r\n") {
+	if host == "" || len(host) > 253 {
 		return errors.New("目标地址必须是 IP 或域名")
 	}
 	if net.ParseIP(host) == nil && !validForwardHost(host) {

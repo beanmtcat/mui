@@ -6,14 +6,12 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/netip"
 	"os"
 	"os/signal"
 	"sort"
-	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -59,40 +57,16 @@ func readForwardRules() ([]shared.ForwardRule, string, error) {
 	return rules, hex.EncodeToString(digest[:]), nil
 }
 
-var blockedTargetPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("169.254.0.0/16"),
-	netip.MustParsePrefix("100.100.0.0/8"),
-}
-
-// validateForwardRule checks one rule the way the panel is supposed to: ports
-// in range, network tcp/udp only, a non-empty target, and a literal target
-// that is not loopback, private, link-local, multicast, unspecified or in a
-// blocked range. A domain target passes here; the forwarding process checks
-// it again when it resolves.
+// validateForwardRule shares the panel's structural validation and the
+// forwarder's target policy. Private destinations are valid; loopback,
+// link-local, multicast, unspecified and metadata addresses are refused.
 func validateForwardRule(rule shared.ForwardRule) error {
-	if rule.Port < 1 || rule.Port > 65535 {
-		return fmt.Errorf("port %d out of range 1-65535", rule.Port)
-	}
-	if rule.TargetPort < 1 || rule.TargetPort > 65535 {
-		return fmt.Errorf("target port %d out of range 1-65535", rule.TargetPort)
-	}
-	if rule.Network != "tcp" && rule.Network != "udp" {
-		return fmt.Errorf("network %q must be tcp or udp", rule.Network)
-	}
-	if strings.TrimSpace(rule.TargetHost) == "" {
-		return errors.New("target host must not be empty")
+	if err := shared.ValidateForward(rule); err != nil {
+		return err
 	}
 	if addr, err := netip.ParseAddr(rule.TargetHost); err == nil {
-		// Unmap first: an IPv4-mapped IPv6 address such as ::ffff:127.0.0.1
-		// must be judged as the IPv4 address it really is.
-		addr = addr.Unmap()
-		if addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsLinkLocalMulticast() || addr.IsMulticast() || addr.IsUnspecified() {
-			return fmt.Errorf("target address %s is private, loopback, link-local, multicast or unspecified", rule.TargetHost)
-		}
-		for _, prefix := range blockedTargetPrefixes {
-			if prefix.Contains(addr) {
-				return fmt.Errorf("target address %s is in blocked range %s", rule.TargetHost, prefix)
-			}
+		if forward.ForbiddenTarget(addr) {
+			return fmt.Errorf("target address %s is loopback, link-local, multicast, unspecified or metadata", rule.TargetHost)
 		}
 		return nil
 	}
@@ -101,9 +75,6 @@ func validateForwardRule(rule shared.ForwardRule) error {
 	// literal address) and not contain characters a host name cannot have.
 	if isNumericShorthand(rule.TargetHost) {
 		return fmt.Errorf("target host %q looks like a numeric IP address; use dotted-quad notation", rule.TargetHost)
-	}
-	if strings.ContainsAny(rule.TargetHost, " /\\:[]@") {
-		return fmt.Errorf("target host %q is not a valid host name", rule.TargetHost)
 	}
 	return nil
 }
@@ -169,16 +140,25 @@ func RunForward(ctx context.Context) error {
 		return err
 	}
 	instanceID := hex.EncodeToString(instance[:])
-	var lastSnapshot map[string]forward.Counter
-	firstStats := true
+	statsCtx, stopStats := context.WithCancel(ctx)
+	statsDone := make(chan struct{})
+	defer func() { stopStats(); <-statsDone; _ = os.Remove(ForwardStats) }()
+	go func() {
+		defer close(statsDone)
+		runForwardStats(statsCtx, ForwardStats, instanceID, service.Snapshot, 5*time.Second)
+	}()
+	return service.Run(ctx)
+}
+
+// Publish even unchanged counters: UpdatedAt is the forwarder's heartbeat,
+// not the time of its last byte. The helper must still report idle counters
+// after the panel reconnects, until the process stops.
+func runForwardStats(ctx context.Context, path, instanceID string, snapshot func() map[string]forward.Counter, interval time.Duration) {
 	writeStats := func() {
-		snapshot := service.Snapshot()
-		if !firstStats && snapshotsEqual(lastSnapshot, snapshot) {
-			return
-		}
-		points := make([]shared.ForwardTrafficPoint, 0, len(snapshot))
+		counts := snapshot()
+		points := make([]shared.ForwardTrafficPoint, 0, len(counts))
 		now := time.Now()
-		for id, count := range snapshot {
+		for id, count := range counts {
 			points = append(points, shared.ForwardTrafficPoint{ForwardID: id, InstanceID: instanceID, Uplink: count.Uplink, Downlink: count.Downlink, UpdatedAt: now})
 		}
 		sort.Slice(points, func(i, j int) bool { return points[i].ForwardID < points[j].ForwardID })
@@ -188,38 +168,29 @@ func RunForward(ctx context.Context) error {
 			forwardStatsFailures.Add(1)
 			return
 		}
-		if err = os.WriteFile(ForwardStats+".tmp", raw, 0600); err != nil {
+		if err = os.WriteFile(path+".tmp", raw, 0600); err != nil {
 			fmt.Fprintln(os.Stderr, "forward stats:", err)
 			forwardStatsFailures.Add(1)
 			return
 		}
-		if err = os.Rename(ForwardStats+".tmp", ForwardStats); err != nil {
+		if err = os.Rename(path+".tmp", path); err != nil {
 			fmt.Fprintln(os.Stderr, "forward stats:", err)
 			forwardStatsFailures.Add(1)
 			return
 		}
-		lastSnapshot = snapshot
-		firstStats = false
 	}
 	writeStats()
-	statsCtx, stopStats := context.WithCancel(ctx)
-	statsDone := make(chan struct{})
-	defer func() { stopStats(); <-statsDone; _ = os.Remove(ForwardStats) }()
-	go func() {
-		defer close(statsDone)
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-statsCtx.Done():
-				writeStats()
-				return
-			case <-ticker.C:
-				writeStats()
-			}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			writeStats()
+			return
+		case <-ticker.C:
+			writeStats()
 		}
-	}()
-	return service.Run(ctx)
+	}
 }
 
 // writeForwardReady publishes the rules digest atomically (tmp + rename) so
@@ -230,17 +201,4 @@ func writeForwardReady(digest string) error {
 		return err
 	}
 	return os.Rename(tmp, ForwardReady)
-}
-
-func snapshotsEqual(a, b map[string]forward.Counter) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for id, av := range a {
-		bv, ok := b[id]
-		if !ok || av != bv {
-			return false
-		}
-	}
-	return true
 }
