@@ -1,6 +1,7 @@
 # Standalone frontend for a separate host. Configure MUI_BACKEND_URL in .env.
 services:
   mui-web:
+    image: mui-web:latest
     container_name: mui-web
     build:
       context: ..

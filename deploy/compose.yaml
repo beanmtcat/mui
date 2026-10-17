@@ -1,5 +1,6 @@
 services:
   mui-service:
+    image: mui-service:latest
     container_name: mui-service
     build:
       context: ..
@@ -58,6 +59,7 @@ services:
         max-size: "10m"
         max-file: "3"
   mui-web:
+    image: mui-web:latest
     container_name: mui-web
     build:
       context: ..
