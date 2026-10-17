@@ -17,6 +17,10 @@ import {
   type ConnectionIP,
   type Operation,
   type AuditEntry,
+  type Route,
+  type RouteHop,
+  type Role,
+  roleLabels,
 } from "./api";
 import "./style.css";
 // Heavy / rarely-used UI split out of the main bundle and lazy-loaded:
@@ -33,6 +37,7 @@ type Tab =
   | "certificates"
   | "firewall"
   | "forwards"
+  | "routes"
   | "subscriptions"
   | "customers"
   | "accesses"
@@ -52,6 +57,7 @@ const tabs: { id: Exclude<Tab, SubPage>; label: string; icon: IconName; children
   { id: "templates", label: "节点模板", icon: "templates" },
   { id: "certificates", label: "证书", icon: "certificates" },
   { id: "firewall", label: "防火墙", icon: "firewall" },
+  { id: "routes", label: "链路", icon: "routes" },
   { id: "forwards", label: "端口转发", icon: "forwards" },
   { id: "subscriptions", label: "订阅", icon: "subscriptions" },
   {
@@ -73,7 +79,8 @@ const tabs: { id: Exclude<Tab, SubPage>; label: string; icon: IconName; children
 ];
 const emptyServer: Partial<Server> = {
   name: "",
-  purpose: "node",
+  roles: ["exit"],
+  internalAddress: "",
   country: "SG",
   region: "",
   city: "",
@@ -99,6 +106,7 @@ const emptyNode: Partial<Node> = {
   certificateId: "",
   firewallPolicy: "all",
   firewallSources: "",
+  direct: false,
   enabled: true,
 };
 const emptyTemplate: Partial<NodeTemplate> = {
@@ -188,6 +196,7 @@ function Icon({ name }: { name: IconName }) {
     certificates: <><path d="M12 2 4 5v7c0 5 3.5 8 8 10 4.5-2 8-5 8-10V5l-8-3Z" /><path d="m9 12 2 2 4-4" /></>,
     firewall: <><path d="M4 3h16v18H4V3ZM4 9h16M4 15h16M9 3v6m6 0v6m-6 0v6" /></>,
     forwards: <><path d="M3 7h12m0 0-3-3m3 3-3 3M21 17H9m0 0 3-3m-3 3 3 3" /></>,
+    routes: <><circle cx="4" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="20" cy="12" r="2" /><path d="M6 12h4m4 0h4" /></>,
     subscriptions: <><path d="M4 7a13 13 0 0 1 13 13M4 12a8 8 0 0 1 8 8" /><circle cx="5" cy="19" r="1" fill="currentColor" stroke="none" /></>,
     customers: <><circle cx="9" cy="8" r="3" /><path d="M3 20v-2a6 6 0 0 1 12 0v2H3Z" /><circle cx="18" cy="9" r="2" /><path d="M17 15a5 5 0 0 1 4 5" /></>,
     operations: <><path d="M4 4v6h6M4.8 10a8 8 0 1 1-.2 5M12 7v5l3 2" /></>,
@@ -209,8 +218,20 @@ const emptyRule: Partial<FirewallRule> = {
 // Opening a forward to the whole internet requires an explicit choice below.
 const emptyForward: Partial<ForwardRule> = {
   serverId: "", name: "", network: "tcp", listen: "0.0.0.0", port: 50000,
-  targetHost: "", targetPort: 443, firewallPolicy: "restricted", firewallSources: "", enabled: true,
+  targets: [{ host: "", port: 443 }], balance: "failover", firewallPolicy: "restricted", firewallSources: "", enabled: true,
 };
+const emptyRoute: Partial<Route> = { name: "", entryServerId: "", hops: [], nodeId: "", nodeInternal: false, port: 0, enabled: true, notes: "" };
+const roleOrder: Role[] = ["entry", "line", "transit", "exit"];
+const rolesText = (roles: Role[] | undefined) => roleOrder.filter((r) => roles?.includes(r)).map((r) => roleLabels[r]).join(" / ") || "未设置";
+// Forward targets are edited as one "host:port" per line; IPv6 hosts go in
+// brackets.
+const targetsText = (targets: ForwardRule["targets"] | undefined) =>
+  (targets || []).map((t) => (t.host.includes(":") ? `[${t.host}]` : t.host) + (t.port ? ":" + t.port : "")).join("\n");
+const parseTargets = (text: string): ForwardRule["targets"] =>
+  text.split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+    const m = line.match(/^\[(.+)\]:(\d+)$/) || line.match(/^([^:]+):(\d+)$/);
+    return m ? { host: m[1], port: Number(m[2]) } : { host: line, port: 0 };
+  });
 
 function App() {
   const templateRequest = useRef(0);
@@ -253,6 +274,7 @@ function App() {
     [certificates, setCertificates] = useState<Certificate[]>([]),
     [rules, setRules] = useState<FirewallRule[]>([]),
     [forwards, setForwards] = useState<ForwardRule[]>([]),
+    [routes, setRoutes] = useState<Route[]>([]),
     [subs, setSubs] = useState<Subscription[]>([]),
     [customers, setCustomers] = useState<Customer[]>([]),
     [operations, setOperations] = useState<Operation[]>([]),
@@ -262,7 +284,7 @@ function App() {
     [notice, setNotice] = useState(""),
     [templateLoading, setTemplateLoading] = useState(false),
     [modal, setModal] = useState<
-      "server" | "node" | "template" | "certificate" | "rule" | "forward" | "subscription" | "customer" | null
+      "server" | "node" | "template" | "certificate" | "rule" | "forward" | "route" | "subscription" | "customer" | null
     >(null),
     [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [serverForm, setServerForm] = useState<Partial<Server>>(emptyServer),
@@ -280,10 +302,13 @@ function App() {
     }),
     [ruleForm, setRuleForm] = useState<Partial<FirewallRule>>(emptyRule),
     [forwardForm, setForwardForm] = useState<Partial<ForwardRule>>(emptyForward),
+    [forwardTargets, setForwardTargets] = useState(""),
+    [routeForm, setRouteForm] = useState<Partial<Route>>(emptyRoute),
     [subForm, setSubForm] = useState<Partial<Subscription>>({
       name: "",
       format: "sing-box",
       nodeIds: [],
+      routeIds: [],
       enabled: true,
     }),
     [customerForm, setCustomerForm] = useState<Partial<Customer>>({ name: "", notes: "" });
@@ -355,6 +380,7 @@ function App() {
       load<Certificate>("/api/certificates", setCertificates),
       load<FirewallRule>("/api/firewall", setRules),
       load<ForwardRule>("/api/forwards", setForwards),
+      load<Route>("/api/routes", setRoutes),
       load<Subscription>("/api/subscriptions", (u) => {
         setSubs(u);
         setTrafficSub((current) => current ? u.find((item) => item.id === current.id) || null : null);
@@ -457,6 +483,14 @@ function App() {
             setForwards(f);
             break;
           }
+          case "routes": {
+            const [s, n, f, r] = await Promise.all([loadAll<Server>("/api/servers"), loadAll<Node>("/api/nodes"), loadAll<ForwardRule>("/api/forwards"), loadAll<Route>("/api/routes")]);
+            setServers(s);
+            setNodes(n);
+            setForwards(f);
+            setRoutes(r);
+            break;
+          }
           case "operations":
             setOperations(await loadAll<Operation>("/api/operations"));
             // Leave a list alone once the reader has paged into older entries.
@@ -548,16 +582,40 @@ function App() {
   const expiring = useMemo(() => certificates.filter(
     (c) => c.expiringSoon === true || (c.daysUntilExpiry !== undefined && c.daysUntilExpiry <= 30),
   ), [certificates]);
+  // What a node's port really admits: route-only nodes admit their routes'
+  // last hops, direct ones what the administrator chose (plus route hops).
+  const nodeAccessText = (n: Node) => {
+    const routeHops = (n.routeSources || "").split(",").filter(Boolean);
+    if (!n.direct) return routeHops.length ? "链路：" + routeHops.join("、") : "不开放（无链路）";
+    if (n.firewallPolicy === "manual") return "手动管理";
+    if (n.firewallPolicy === "restricted") return [...n.firewallSources.split(","), ...routeHops].join("、");
+    return "任意来源";
+  };
   const serverName = useCallback((id: string) =>
     servers.find((s) => s.id === id)?.name || id.slice(0, 8), [servers]);
-  // Nodes of a subscription whose configuration is not live on their server yet.
-  const pendingNodes = useCallback((sub: Subscription) =>
-    (sub.pendingNodeIds || []).map((id) => nodes.find((item) => item.id === id)).filter((n): n is Node => !!n), [nodes]);
-  const pendingSummary = useCallback((sub: Subscription) =>
-    pendingNodes(sub).map((n) => {
+  // Nodes and routes of a subscription whose configuration is not live yet.
+  const pendingNodes = useCallback((sub: Subscription) => [
+    ...(sub.pendingNodeIds || []).map((id) => nodes.find((item) => item.id === id)).filter((n): n is Node => !!n).map((n) => {
       const server = servers.find((item) => item.id === n.serverId);
       return `${n.name}（${server?.name || "未知服务器"}${server && server.status !== "online" ? "，离线" : ""}）`;
-    }).join("、"), [pendingNodes, servers]);
+    }),
+    ...(sub.pendingRouteIds || []).map((id) => routes.find((r) => r.id === id)).filter((r): r is Route => !!r).map((r) => `链路 ${r.name}`),
+  ], [nodes, routes, servers]);
+  const pendingSummary = useCallback((sub: Subscription) => pendingNodes(sub).join("、"), [pendingNodes]);
+  // Every node a subscription has a login on: its direct nodes and the exit
+  // nodes of its routes.
+  const subNodeIds = useCallback((sub: Partial<Subscription>) => [
+    ...(sub.nodeIds || []),
+    ...(sub.routeIds || []).map((id) => routes.find((r) => r.id === id)?.nodeId || ""),
+  ].filter(Boolean), [routes]);
+  const routePath = (r: Route) => {
+    const node = nodes.find((n) => n.id === r.nodeId);
+    return [
+      serverName(r.entryServerId),
+      ...r.hops.map((h) => h.serverIds.map(serverName).join(h.balance === "round-robin" ? " + " : " / ") + (h.internal ? "（内网）" : "")),
+      (node ? `${node.name}@${serverName(node.serverId)}` : "已删除节点") + (r.nodeInternal ? "（内网）" : ""),
+    ].join(" → ");
+  };
   // sing-box has to restart to add or remove a login, which drops the
   // connections of everyone on that server.
   const restartNotice = useCallback((nodeIds: string[]) => {
@@ -627,7 +685,7 @@ function App() {
     setNodeForm(
       n
         ? { ...n, password: "", shadowTlsPassword: "" }
-        : { ...emptyNode, serverId: servers[0]?.id || "" },
+        : { ...emptyNode, serverId: servers.find((s) => s.roles?.includes("exit"))?.id || "" },
     );
     setModal("node");
   };
@@ -798,7 +856,23 @@ function App() {
   };
   const doSubmitForward = async () => {
     const path = "/api/forwards" + (forwardForm.id ? "/" + forwardForm.id : "");
-    if (await act(() => mutation(path, forwardForm.id ? "PATCH" : "POST", forwardForm), "转发配置已提交，等待 Agent 应用")) close();
+    const body = { ...forwardForm, targets: parseTargets(forwardTargets) };
+    if (await act(() => mutation(path, forwardForm.id ? "PATCH" : "POST", body), "转发配置已提交，等待 Agent 应用")) close();
+  };
+  const openForward = (f?: ForwardRule) => {
+    const form = f ? { ...f } : { ...emptyForward, serverId: servers[0]?.id || "" };
+    setForwardForm(form);
+    setForwardTargets(targetsText(form.targets));
+    setModal("forward");
+  };
+  const openRoute = (r?: Route) => {
+    setRouteForm(r ? { ...r, hops: r.hops.map((h) => ({ ...h, serverIds: [...h.serverIds] })) } : { ...emptyRoute });
+    setModal("route");
+  };
+  const submitRoute = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const path = "/api/routes" + (routeForm.id ? "/" + routeForm.id : "");
+    if (await act(() => mutation(path, routeForm.id ? "PATCH" : "POST", routeForm), "链路已保存，各跳转发等待 Agent 应用")) close();
   };
   const submitForward = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -806,7 +880,7 @@ function App() {
     if (forwardForm.firewallPolicy === "all") {
       setConfirmation({
         title: "确认公开转发",
-        message: `转发「${forwardForm.name || ""}」将放行所有来源，目标 ${forwardForm.targetHost || ""}:${forwardForm.targetPort || ""} 会暴露给全网。确定公开吗？如只需特定来源，请改用“仅放行指定 IP / CIDR”。`,
+        message: `转发「${forwardForm.name || ""}」将放行所有来源，目标 ${forwardTargets.split("\n").filter(Boolean).join("、")} 会暴露给全网。确定公开吗？如只需特定来源，请改用“仅放行指定 IP / CIDR”。`,
         confirmLabel: "确认公开",
         onConfirm: () => { void doSubmitForward(); },
       });
@@ -951,7 +1025,7 @@ function App() {
   for (const sub of liveSubs) {
     const waiting = pendingNodes(sub);
     if (waiting.length)
-      attention.push({ tone: "warn", tab: "subscriptions", text: `订阅 ${sub.name} 有 ${waiting.length} 个节点尚未生效：${pendingSummary(sub)}` });
+      attention.push({ tone: "warn", tab: "subscriptions", text: `订阅 ${sub.name} 有 ${waiting.length} 项尚未生效：${pendingSummary(sub)}` });
     const days = sub.expiresAt ? Math.floor((new Date(sub.expiresAt).getTime() - Date.now()) / 86400000) : Infinity;
     if (days < 7)
       attention.push({ tone: "info", tab: "subscriptions", text: `订阅 ${sub.name} 将在 ${days < 1 ? "今天" : days + " 天后"}到期` });
@@ -1282,14 +1356,14 @@ function App() {
                         <small>{s.provider || "—"}</small>
                         {(s.region || s.city) && <small>{[s.region, s.city].filter(Boolean).join(" · ")}</small>}
                       </td>
-                      <td className="mono">{s.domain || s.ipv4 || s.ipv6}</td>
+                      <td className="mono">{s.domain || s.ipv4 || s.ipv6}{s.internalAddress && <small>内网 {s.internalAddress}</small>}</td>
                       <td>
                         <Status value={s.status} />
                         <small>{s.agentVersion || "未接入"}</small>
                         {s.agentSelfUpdate && agentReleases[s.arch] && <small>{s.agentBuild === agentReleases[s.arch] ? "已是当前构建" : "有可用升级"}</small>}
                         {!s.agentSelfUpdate && !!s.agentVersion && <small>需先人工升级一次</small>}
                         {!!s.agentVersion && <small>{s.releaseKeyPinned ? "升级需发布签名" : "升级未启用签名校验"}</small>}
-                        <small>{s.purpose === "relay" ? "仅转发" : "节点服务器"} · sing-box：{s.coreVersion || "未安装"}</small>
+                        <small>{rolesText(s.roles)} · sing-box：{s.coreVersion || "未安装"}</small>
                         {s.coreSelfUpdate && coreReleases[s.arch] && <small>{s.coreBuild === coreReleases[s.arch] ? "核心已是当前构建" : "核心有可用升级"}</small>}
                         {!s.coreSelfUpdate && !!s.agentVersion && <small>升级 Agent 后可一键升级核心</small>}
                         {operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status)) && <small>程序升级进行中，详情见操作记录</small>}
@@ -1334,7 +1408,7 @@ function App() {
                               });
                             }}
                           >
-                            {s.coreBuild ? "一键升级 sing-box" : s.purpose === "relay" ? "转为节点机并安装 sing-box" : "安装 sing-box"}
+                            {s.coreBuild ? "一键升级 sing-box" : s.roles?.includes("exit") ? "安装 sing-box" : "安装 sing-box 并设为落地"}
                           </button>
                           <button
                             onClick={() =>
@@ -1464,6 +1538,7 @@ function App() {
                         <span className="mono">:{n.port}</span>
                         {n.protocol === "snell" && n.shadowTlsHost && <small>ShadowTLS v3 · {n.shadowTlsHost}</small>}
                         {n.protocol === "snell" && !n.shadowTlsHost && <small className="dangerText">旧节点未启用 ShadowTLS，请编辑节点升级</small>}
+                        <small>{n.direct ? "允许直连" : "仅链路访问"}</small>
                       </td>
                       <td>{bytes(n.uplink)}</td>
                       <td>{bytes(n.downlink)}</td>
@@ -1746,7 +1821,7 @@ function App() {
                         <td>{n.name}</td>
                         <td className="mono">{n.port}</td>
                         <td>{n.protocol === "ss" ? "TCP + UDP" : "TCP"}</td>
-                        <td className="mono">{n.firewallPolicy === "manual" ? "手动管理" : n.firewallPolicy === "restricted" ? n.firewallSources.split(",").join("、") : "任意来源"}</td>
+                        <td className="mono">{nodeAccessText(n)}</td>
                         <td>
                           <Status value={n.status} />
                         </td>
@@ -1802,6 +1877,44 @@ function App() {
             </section>
           </>
         )}
+        {tab === "routes" && (
+          <section className="panel">
+            <div className="panelHead">
+              <div>
+                <h2>链路</h2>
+                <p>入口或线路 → 中转（每跳可多台负载均衡）→ 落地节点。面板在每一跳自动生成转发，整条链路使用同一个端口。</p>
+              </div>
+              <button className="primary" onClick={() => openRoute()} disabled={!nodes.length}>新建链路</button>
+            </div>
+            <div className="tableWrap">
+              <table>
+                <thead><tr><th>名称</th><th>路径</th><th>端口</th><th>落地节点</th><th>状态</th><th>操作</th></tr></thead>
+                <tbody>
+                  {routes.map((r) => {
+                    const node = nodes.find((n) => n.id === r.nodeId);
+                    return (
+                      <tr key={r.id}>
+                        <td><strong>{r.name}</strong>{r.notes && <small>{r.notes}</small>}</td>
+                        <td>{routePath(r)}</td>
+                        <td className="mono">{r.port}</td>
+                        <td>{node ? node.name : "已删除"}{node && <small>{node.protocol.toUpperCase()} · {serverName(node.serverId)}</small>}</td>
+                        <td><Status value={r.status || "pending"} /></td>
+                        <td><div className="actions">
+                          <button onClick={() => openRoute(r)}>编辑</button>
+                          <ActionMenu>
+                            <button onClick={() => void act(() => mutation("/api/routes/" + r.id, "PATCH", { ...r, enabled: !r.enabled }), r.enabled ? "链路已停用" : "链路已启用")}>{r.enabled ? "停用" : "启用"}</button>
+                            <button className="dangerText" onClick={() => deleteItem("/api/routes/" + r.id, "链路")}>删除</button>
+                          </ActionMenu>
+                        </div></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {!routes.length && <Empty text="暂无链路" />}
+            </div>
+          </section>
+        )}
         {tab === "forwards" && (
           <section className="panel">
             <div className="panelHead">
@@ -1809,7 +1922,7 @@ function App() {
                 <h2>端口转发</h2>
                 <p>在所选服务器监听 TCP 或 UDP，并转发到目标地址；TCP 使用服务器新建的连接。</p>
               </div>
-              <button className="primary" onClick={() => { setForwardForm({ ...emptyForward, serverId: servers[0]?.id || "" }); setModal("forward"); }} disabled={!servers.length}>新建转发</button>
+              <button className="primary" onClick={() => openForward()} disabled={!servers.length}>新建转发</button>
             </div>
             {servers.some((s) => s.ufwStatus && s.ufwStatus !== "active") && (
               <div className="banner error">有服务器的 UFW 未启用，转发规则无法应用；请先在服务器列表执行“初始化 UFW”。</div>
@@ -1823,18 +1936,18 @@ function App() {
                 <tbody>
                   {forwards.map((f) => (
                     <tr key={f.id}>
-                      <td><strong>{f.name}</strong></td>
+                      <td><strong>{f.name}</strong>{f.routeId && <small>链路自动生成</small>}</td>
                       <td>{serverName(f.serverId)}</td>
                       <td className="mono">{f.network.toUpperCase()} {f.listen || "0.0.0.0"}:{f.port}</td>
-                      <td className="mono">{f.targetHost}:{f.targetPort}</td>
+                      <td className="mono">{f.targets.map((t) => `${t.host}:${t.port}`).join("、")}{f.targets.length > 1 && <small>{f.balance === "round-robin" ? "轮询" : "主备"}</small>}</td>
                       <td>↑ {bytes(f.uplink || 0)} · ↓ {bytes(f.downlink || 0)}</td>
-                      <td className="mono">{f.firewallPolicy === "manual" ? "手动管理" : f.firewallPolicy === "restricted" ? f.firewallSources.split(",").join("、") : "任意来源"}</td>
+                      <td className="mono">{f.firewallPolicy === "closed" ? "不开放" : f.firewallPolicy === "manual" ? "手动管理" : f.firewallPolicy === "restricted" ? f.firewallSources.split(",").join("、") : "任意来源"}</td>
                       <td><Status value={f.deleting ? "deleting" : f.status} />{f.error && <small className="hint">{f.error}</small>}{!servers.find((s) => s.id === f.serverId)?.forwardSupport && <small className="hint">等待 Agent 更新</small>}</td>
-                      <td><div className="actions">
-                        <button disabled={f.deleting} onClick={() => { setForwardForm({ ...f }); setModal("forward"); }}>编辑</button>
+                      <td>{f.routeId ? <button className="textButton" style={{ whiteSpace: "nowrap" }} onClick={() => setTab("routes")}>在链路中管理</button> : <div className="actions">
+                        <button disabled={f.deleting} onClick={() => openForward(f)}>编辑</button>
                         <button disabled={f.deleting} onClick={() => void act(() => mutation("/api/forwards/" + f.id, "PATCH", { ...f, enabled: !f.enabled }), f.enabled ? "转发已停用" : "转发已启用")}>{f.enabled ? "停用" : "启用"}</button>
                         <button className="dangerText" onClick={() => deleteItem("/api/forwards/" + f.id, "转发")}>删除</button>
-                      </div></td>
+                      </div>}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -1857,6 +1970,7 @@ function App() {
                     name: "",
                     format: "sing-box",
                     nodeIds: [],
+                    routeIds: [],
                     enabled: true,
                   });
                   setIssuedURL("");
@@ -1877,7 +1991,7 @@ function App() {
                     <th>名称</th>
                     <th>客户</th>
                     <th>格式</th>
-                    <th>节点数</th>
+                    <th>内容</th>
                     <th>已用流量</th>
                     <th>状态</th>
                     <th>到期</th>
@@ -1894,7 +2008,7 @@ function App() {
                       <td>
                         <span className="chip">{s.format}</span>
                       </td>
-                      <td>{s.nodeIds?.length || 0}</td>
+                      <td>{s.routeIds?.length || 0} 条链路<small>{s.nodeIds?.length || 0} 个直连节点</small></td>
                       <td>
                         <button className="textButton" onClick={() => { setSubTraffic([]); setTrafficSub(s); }}>
                           {bytes((s.uplink || 0) + (s.downlink || 0))}
@@ -1950,7 +2064,7 @@ function App() {
                                 title: s.enabled ? "停用订阅" : "启用订阅",
                                 message: (s.enabled
                                   ? `停用「${s.name}」？该订阅的链接和已导入的节点会立即失效。`
-                                  : `启用「${s.name}」？`) + restartNotice(s.nodeIds || []),
+                                  : `启用「${s.name}」？`) + restartNotice(subNodeIds(s)),
                                 confirmLabel: s.enabled ? "停用" : "启用",
                                 onConfirm: () => {
                                   void act(
@@ -1985,7 +2099,7 @@ function App() {
                             onClick={() =>
                               setConfirmation({
                                 title: "删除订阅",
-                                message: `确定删除「${s.name}」？链接和已导入的节点会立即失效，此操作无法撤销。` + restartNotice(s.nodeIds || []),
+                                message: `确定删除「${s.name}」？链接和已导入的节点会立即失效，此操作无法撤销。` + restartNotice(subNodeIds(s)),
                                 confirmLabel: "删除",
                                 onConfirm: () => { void act(() => mutation("/api/subscriptions/" + s.id, "DELETE"), "订阅已删除"); },
                               })
@@ -2077,7 +2191,7 @@ function App() {
               </div>
               <div className="tableWrap"><table><thead><tr><th>最近连接</th><th>服务器</th><th>节点</th><th>来源 IP</th><th>订阅关联</th></tr></thead><tbody>
                 {connectionLog.items.map((item) => {
-                  const linked = subs.filter((s) => (s.nodeIds || []).includes(item.nodeId));
+                  const linked = subs.filter((s) => subNodeIds(s).includes(item.nodeId));
                   return <tr key={item.serverId + item.nodeId + item.ip}>
                     <td>{new Date(item.lastSeen).toLocaleString()}</td>
                     <td>{serverName(item.serverId)}</td>
@@ -2391,6 +2505,8 @@ function App() {
                           ? customerForm.id ? "编辑客户" : "新建客户"
                         : modal === "rule"
                           ? "新建 UFW 规则"
+                          : modal === "route"
+                            ? routeForm.id ? "编辑链路" : "新建链路"
                           : modal === "forward"
                             ? forwardForm.id ? "编辑端口转发" : "新建端口转发"
                           : subForm.id
@@ -2414,11 +2530,22 @@ function App() {
                       }
                     />
                   </Field>
-                  <Field label="用途">
-                    <select value={serverForm.purpose || "node"} disabled={!!serverForm.id && !!serverForm.agentVersion} onChange={(e) => setServerForm({ ...serverForm, purpose: e.target.value as Server["purpose"] })}>
-                      <option value="node">节点服务器（安装 sing-box）</option>
-                      <option value="relay">仅转发服务器（只安装 Agent）</option>
-                    </select>
+                  <Field label="类型（可多选） *">
+                    <div className="checkRow">
+                      {roleOrder.map((role) => (
+                        <label className="check" key={role}>
+                          <input
+                            type="checkbox"
+                            checked={serverForm.roles?.includes(role) || false}
+                            onChange={(e) => setServerForm({
+                              ...serverForm,
+                              roles: e.target.checked ? [...(serverForm.roles || []), role] : (serverForm.roles || []).filter((r) => r !== role),
+                            })}
+                          />
+                          {roleLabels[role]}
+                        </label>
+                      ))}
+                    </div>
                   </Field>
                   <Field label="国家代码 *">
                     <input
@@ -2438,6 +2565,15 @@ function App() {
                       value={serverForm.ipv4 || ""}
                       onChange={(e) =>
                         setServerForm({ ...serverForm, ipv4: e.target.value })
+                      }
+                    />
+                  </Field>
+                  <Field label="内网地址">
+                    <input
+                      value={serverForm.internalAddress || ""}
+                      placeholder="内网 / 专线互通时填写，如 10.0.0.2"
+                      onChange={(e) =>
+                        setServerForm({ ...serverForm, internalAddress: e.target.value })
                       }
                     />
                   </Field>
@@ -2501,7 +2637,8 @@ function App() {
                     />
                   </Field>
                 </div>
-                <p className="hint">至少填写一个公网 IP 或订阅用域名。仅转发服务器不会下载 sing-box；以后可在服务器列表一键安装并转为节点服务器。</p>
+                <p className="hint">至少填写一个公网 IP 或订阅用域名。入口、线路可作为链路首跳并被订阅；中转、线路可作为链路中间跳；落地安装 sing-box 并搭建节点。</p>
+                <p className="hint">只有落地会下载 sing-box。已接入的服务器要加落地类型，请在服务器列表中安装 sing-box，安装成功后自动成为落地。</p>
                 <button className="primary submit">保存服务器</button>
               </form>
             )}
@@ -2521,8 +2658,8 @@ function App() {
                           : "",
                       })}
                     >
-                      <option value="">选择服务器</option>
-                      {servers.map((s) => (
+                      <option value="">选择落地服务器</option>
+                      {servers.filter((s) => s.roles?.includes("exit") || s.id === nodeForm.serverId).map((s) => (
                         <option key={s.id} value={s.id}>
                           {s.name}
                         </option>
@@ -2609,7 +2746,13 @@ function App() {
                       }
                     />
                   </Field>
-                  <Field label="节点端口 UFW 规则">
+                  <Field label="访问方式">
+                    <label className="check">
+                      <input type="checkbox" checked={!!nodeForm.direct} onChange={(e) => setNodeForm({ ...nodeForm, direct: e.target.checked })} />
+                      允许直连（可直接加入订阅）
+                    </label>
+                  </Field>
+                  {nodeForm.direct && <Field label="节点端口 UFW 规则">
                     <select
                       value={nodeForm.firewallPolicy || "all"}
                       onChange={(e) => setNodeForm({ ...nodeForm, firewallPolicy: e.target.value as Node["firewallPolicy"], firewallSources: "" })}
@@ -2618,8 +2761,9 @@ function App() {
                       <option value="restricted">仅自动放行指定 IP / CIDR</option>
                       <option value="manual">不生成自动规则，手动管理</option>
                     </select>
-                  </Field>
-                  {nodeForm.firewallPolicy === "restricted" && (
+                  </Field>}
+                  {!nodeForm.direct && <p className="hint">未开启直连：节点端口只放行以它为终点的链路最后一跳{nodeForm.routeSources ? `（当前 ${nodeForm.routeSources.split(",").join("、")}）` : "；还没有链路时端口不对外开放"}。</p>}
+                  {nodeForm.direct && nodeForm.firewallPolicy === "restricted" && (
                     <Field label="允许的来源 IP / CIDR *">
                       <textarea
                         required
@@ -2891,16 +3035,90 @@ function App() {
                 <button className="primary submit">保存证书</button>
               </form>
             )}
+            {modal === "route" && (() => {
+              const hops = routeForm.hops || [];
+              const node = nodes.find((n) => n.id === routeForm.nodeId);
+              const setHop = (i: number, patch: Partial<RouteHop>) =>
+                setRouteForm({ ...routeForm, hops: hops.map((h, j) => (j === i ? { ...h, ...patch } : h)) });
+              // A server appears once per route, and the exit is never a hop.
+              const taken = (i: number) => new Set([
+                routeForm.entryServerId || "",
+                node?.serverId || "",
+                ...hops.flatMap((h, j) => (j === i ? [] : h.serverIds)),
+              ]);
+              return (
+                <form onSubmit={submitRoute}>
+                  <div className="formGrid">
+                    <Field label="名称 *"><input required maxLength={100} value={routeForm.name || ""} onChange={(e) => setRouteForm({ ...routeForm, name: e.target.value })} /></Field>
+                    <Field label="首跳（入口 / 线路） *">
+                      <select required value={routeForm.entryServerId || ""} onChange={(e) => setRouteForm({ ...routeForm, entryServerId: e.target.value })}>
+                        <option value="">选择服务器</option>
+                        {servers.filter((s) => s.roles?.some((r) => r === "entry" || r === "line")).map((s) => <option key={s.id} value={s.id}>{s.name}（{rolesText(s.roles)}）</option>)}
+                      </select>
+                    </Field>
+                    <Field label="落地节点 *">
+                      <select required value={routeForm.nodeId || ""} onChange={(e) => setRouteForm({ ...routeForm, nodeId: e.target.value })}>
+                        <option value="">选择节点</option>
+                        {nodes.filter((n) => !n.deleting).map((n) => <option key={n.id} value={n.id}>{n.name}（{n.protocol.toUpperCase()} · {serverName(n.serverId)}）</option>)}
+                      </select>
+                    </Field>
+                    <Field label="端口（留空自动）"><input type="number" min={1024} max={65535} value={routeForm.port || ""} placeholder="优先使用落地节点端口" onChange={(e) => setRouteForm({ ...routeForm, port: Number(e.target.value) || 0 })} /></Field>
+                    <Field label="备注"><input maxLength={200} value={routeForm.notes || ""} onChange={(e) => setRouteForm({ ...routeForm, notes: e.target.value })} /></Field>
+                    <Field label="状态"><label className="check"><input type="checkbox" checked={!!routeForm.enabled} onChange={(e) => setRouteForm({ ...routeForm, enabled: e.target.checked })} /> 启用链路</label></Field>
+                  </div>
+                  <Field label="中间跳（按顺序，可为空）">
+                    <div className="hopList">
+                      {hops.map((hop, i) => (
+                        <div className="hop" key={i}>
+                          <div className="hopHead">
+                            <strong>第 {i + 1} 跳</strong>
+                            <select aria-label={`第 ${i + 1} 跳的模式`} value={hop.balance} onChange={(e) => setHop(i, { balance: e.target.value as RouteHop["balance"] })}>
+                              <option value="failover">主备</option>
+                              <option value="round-robin">轮询</option>
+                            </select>
+                            <label className="check"><input type="checkbox" checked={hop.internal} onChange={(e) => setHop(i, { internal: e.target.checked })} /> 上一跳走内网地址连过来</label>
+                            <button type="button" onClick={() => setRouteForm({ ...routeForm, hops: hops.filter((_, j) => j !== i) })}>移除</button>
+                          </div>
+                          <div className="nodePicker">
+                            {servers.filter((s) => s.roles?.some((r) => r === "transit" || r === "line") && (!taken(i).has(s.id) || hop.serverIds.includes(s.id))).map((s) => (
+                              <label className="check" key={s.id}>
+                                <input
+                                  type="checkbox"
+                                  checked={hop.serverIds.includes(s.id)}
+                                  onChange={(e) => setHop(i, { serverIds: e.target.checked ? [...hop.serverIds, s.id] : hop.serverIds.filter((id) => id !== s.id) })}
+                                />
+                                {s.name} <small>{rolesText(s.roles)}{s.internalAddress ? ` · 内网 ${s.internalAddress}` : ""}</small>
+                              </label>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
+                      <button type="button" onClick={() => setRouteForm({ ...routeForm, hops: [...hops, { serverIds: [], balance: "failover", internal: false }] })}>添加一跳</button>
+                    </div>
+                  </Field>
+                  <label className="check"><input type="checkbox" checked={!!routeForm.nodeInternal} onChange={(e) => setRouteForm({ ...routeForm, nodeInternal: e.target.checked })} /> 最后一跳走内网地址连接落地</label>
+                  <p className="hint">一跳选多台服务器即为负载均衡组：主备优先用第一台可用的，轮询把新连接轮流分配；故障服务器自动停用，恢复后自动启用。</p>
+                  <p className="hint">中间跳只放行上一跳的地址；落地节点未开启直连时只放行最后一跳。服务器出口 IP 与填写的公网 IP 不同时，请把出口 IP 填进公网 IPv4。</p>
+                  <button className="primary submit">保存链路</button>
+                </form>
+              );
+            })()}
             {modal === "forward" && (
               <form onSubmit={submitForward}>
                 <div className="formGrid">
                   <Field label="服务器 *"><select required value={forwardForm.serverId || ""} disabled={!!forwardForm.id} onChange={(e) => setForwardForm({ ...forwardForm, serverId: e.target.value })}><option value="">选择服务器</option>{servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
                   <Field label="名称 *"><input required maxLength={100} value={forwardForm.name || ""} onChange={(e) => setForwardForm({ ...forwardForm, name: e.target.value })} /></Field>
-                  <Field label="协议"><select value={forwardForm.network || "tcp"} onChange={(e) => setForwardForm({ ...forwardForm, network: e.target.value as ForwardRule["network"] })}><option value="tcp">TCP</option><option value="udp">UDP</option></select></Field>
+                  <Field label="协议"><select value={forwardForm.network || "tcp"} onChange={(e) => setForwardForm({ ...forwardForm, network: e.target.value as ForwardRule["network"], healthCheck: "" })}><option value="tcp">TCP</option><option value="udp">UDP</option></select></Field>
                   <Field label="监听 IP"><input required value={forwardForm.listen || ""} onChange={(e) => setForwardForm({ ...forwardForm, listen: e.target.value })} placeholder="0.0.0.0" /></Field>
                   <Field label="监听端口 *"><input required type="number" min={1024} max={65535} value={forwardForm.port || ""} onChange={(e) => setForwardForm({ ...forwardForm, port: Number(e.target.value) })} /></Field>
-                  <Field label="目标地址 *"><input required value={forwardForm.targetHost || ""} onChange={(e) => setForwardForm({ ...forwardForm, targetHost: e.target.value })} placeholder="例如 203.0.113.10 或 example.com" /></Field>
-                  <Field label="目标端口 *"><input required type="number" min={1} max={65535} value={forwardForm.targetPort || ""} onChange={(e) => setForwardForm({ ...forwardForm, targetPort: Number(e.target.value) })} /></Field>
+                  <Field label="目标（每行一个 地址:端口） *"><textarea required rows={3} value={forwardTargets} onChange={(e) => setForwardTargets(e.target.value)} placeholder={"203.0.113.10:443\nexample.com:443\n[2001:db8::1]:443"} /></Field>
+                  {parseTargets(forwardTargets).length > 1 && <Field label="多目标模式"><select value={forwardForm.balance || "failover"} onChange={(e) => setForwardForm({ ...forwardForm, balance: e.target.value as ForwardRule["balance"] })}><option value="failover">主备：优先第一个可用目标</option><option value="round-robin">轮询：新连接轮流分配</option></select></Field>}
+                  {forwardForm.network === "udp" && parseTargets(forwardTargets).length > 1 && <Field label="健康检查">
+                    <select value={forwardForm.healthCheck || "none"} onChange={(e) => setForwardForm({ ...forwardForm, healthCheck: e.target.value as "tcp" | "none" })}>
+                      <option value="none">被动检查（纯 UDP 服务）</option>
+                      <option value="tcp">TCP 探测（目标须有同端口 TCP 服务）</option>
+                    </select>
+                  </Field>}
                   <Field label="UFW 规则"><select value={forwardForm.firewallPolicy || "all"} onChange={(e) => setForwardForm({ ...forwardForm, firewallPolicy: e.target.value as ForwardRule["firewallPolicy"], firewallSources: e.target.value === "restricted" ? forwardForm.firewallSources : "" })}><option value="all">自动放行所有来源</option><option value="restricted">仅放行指定 IP / CIDR</option><option value="manual">手动管理</option></select></Field>
                   {forwardForm.firewallPolicy === "all" && <p className="hint">公开转发会把目标暴露给全网；如无必要请改用“仅放行指定 IP / CIDR”。提交时会再次确认。</p>}
                   {forwardForm.firewallPolicy === "restricted" && <Field label="允许的来源 IP / CIDR *"><textarea required value={forwardForm.firewallSources || ""} onChange={(e) => setForwardForm({ ...forwardForm, firewallSources: e.target.value })} placeholder="每行一个 IP 或 CIDR" /></Field>}
@@ -2909,6 +3127,7 @@ function App() {
                 {forwardForm.serverId && !servers.find((s) => s.id === forwardForm.serverId)?.forwardSupport && <p className="hint">这台服务器的 Agent 尚未上报端口转发能力。规则可以先保存；升级 Agent 后会自动应用。</p>}
                 <p className="hint">目标服务器需允许来自转发服务器的连接；UFW 规则只控制本机入口。</p>
                 <p className="hint">目标可以填域名：转发进程每 30 秒重新解析一次，域名指向新地址后新连接会跟着走。修改或删除一条转发只影响它自己的连接。</p>
+                <p className="hint">多目标 TCP 或已选择 TCP 探测的 UDP 规则，每 5 秒探测一次，连续 2 次失败停用、2 次成功恢复。纯 UDP 默认通过套接字错误切换目标，10 秒后允许重试；仅无响应无法判断故障。</p>
                 <button className="primary submit" type="submit">提交配置</button>
               </form>
             )}
@@ -3041,6 +3260,10 @@ function App() {
                             const node = nodes.find((item) => item.id === id);
                             return !!node && subscriptionNodeEligible(e.target.value, node);
                           }),
+                          routeIds: (subForm.routeIds || []).filter((id) => {
+                            const node = nodes.find((item) => item.id === routes.find((r) => r.id === id)?.nodeId);
+                            return !!node && subscriptionNodeEligible(e.target.value, node);
+                          }),
                         })
                       }
                     >
@@ -3070,12 +3293,39 @@ function App() {
                     />
                   </Field>
                 </div>
-                <Field label="选择节点">
+                <Field label="选择链路">
+                  <div className="nodePicker">
+                    {routes
+                      .filter((r) => {
+                        const node = nodes.find((n) => n.id === r.nodeId);
+                        return (r.enabled && !!node && subscriptionNodeEligible(subForm.format, node)) || subForm.routeIds?.includes(r.id);
+                      })
+                      .map((r) => (
+                        <label className="check" key={r.id}>
+                          <input
+                            type="checkbox"
+                            checked={subForm.routeIds?.includes(r.id) || false}
+                            onChange={(e) =>
+                              setSubForm({
+                                ...subForm,
+                                routeIds: e.target.checked
+                                  ? [...(subForm.routeIds || []), r.id]
+                                  : (subForm.routeIds || []).filter((id) => id !== r.id),
+                              })
+                            }
+                          />
+                          {r.name} <small>{routePath(r)}</small>
+                        </label>
+                      ))}
+                    {!routes.some((r) => r.enabled) && <p className="hint">尚无链路</p>}
+                  </div>
+                </Field>
+                <Field label="直连节点（需在节点中开启“允许直连”）">
                   <div className="nodePicker">
                     {nodes
                       .filter(
                         (n) =>
-                          (n.status === "active" && subscriptionNodeEligible(subForm.format, n)) ||
+                          (n.status === "active" && n.direct && subscriptionNodeEligible(subForm.format, n)) ||
                           subForm.nodeIds?.includes(n.id),
                       )
                       .map((n) => (
@@ -3101,12 +3351,13 @@ function App() {
                           </small>
                         </label>
                       ))}
-                    {nodes.filter((n) => n.status === "active" && subscriptionNodeEligible(subForm.format, n)).length ===
-                      0 && <p className="hint">尚无已生效节点</p>}
+                    {nodes.filter((n) => n.status === "active" && n.direct && subscriptionNodeEligible(subForm.format, n)).length ===
+                      0 && <p className="hint">尚无允许直连的已生效节点</p>}
                   </div>
                 </Field>
                 <p className="hint">Surge 格式支持 AES-GCM 的 SS 2022 节点和启用 ShadowTLS 的 Snell 节点；AnyTLS 请使用 sing-box 格式。</p>
-                <p className="hint">保存后，所选节点所在服务器的 sing-box 会重启以更新登录凭据，其上所有连接将中断数秒。订阅到期时也会自动执行一次。</p>
+                <p className="hint">链路的订阅地址是首跳服务器的地址和链路端口，协议与登录凭据来自落地节点。</p>
+                <p className="hint">保存后，所选节点（含链路的落地节点）所在服务器的 sing-box 会重启以更新登录凭据，其上所有连接将中断数秒。订阅到期时也会自动执行一次。</p>
                 <button className="primary submit">
                   {subForm.id ? "保存订阅" : "创建订阅"}
                 </button>

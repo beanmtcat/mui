@@ -55,7 +55,7 @@ func TestPanelServesAgentInstallerAndArtifacts(t *testing.T) {
 	if rec.Code != 404 {
 		t.Fatalf("symlinked artifact was served: %d", rec.Code)
 	}
-	code, out, _ := p.do("POST", "/api/servers", map[string]any{"name": "test", "country": "SG", "ipv4": "203.0.113.10"}, nil)
+	code, out, _ := p.do("POST", "/api/servers", map[string]any{"name": "test", "roles": []string{"exit"}, "country": "SG", "ipv4": "203.0.113.10"}, nil)
 	if code != 201 {
 		t.Fatalf("create server: %d %v", code, out)
 	}

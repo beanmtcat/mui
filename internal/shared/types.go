@@ -3,18 +3,23 @@ package shared
 import "time"
 
 type Server struct {
-	ID                   string     `json:"id"`
-	Name                 string     `json:"name"`
-	Purpose              string     `json:"purpose"`
-	Country              string     `json:"country"`
-	Region               string     `json:"region"`
-	City                 string     `json:"city"`
-	Provider             string     `json:"provider"`
-	Tags                 string     `json:"tags"`
-	Notes                string     `json:"notes"`
-	IPv4                 string     `json:"ipv4"`
-	IPv6                 string     `json:"ipv6"`
-	Domain               string     `json:"domain"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Roles is any combination of entry, line, transit and exit. Only an exit
+	// server runs sing-box and carries nodes; the others run forwards.
+	Roles    []string `json:"roles"`
+	Country  string   `json:"country"`
+	Region   string   `json:"region"`
+	City     string   `json:"city"`
+	Provider string   `json:"provider"`
+	Tags     string   `json:"tags"`
+	Notes    string   `json:"notes"`
+	IPv4     string   `json:"ipv4"`
+	IPv6     string   `json:"ipv6"`
+	Domain   string   `json:"domain"`
+	// InternalAddress is how other servers on the same private network or
+	// dedicated line (IPLC/IEPL) reach this one; a route hop can use it.
+	InternalAddress      string     `json:"internalAddress"`
 	Status               string     `json:"status"`
 	OS                   string     `json:"os"`
 	Arch                 string     `json:"arch"`
@@ -46,28 +51,35 @@ type Server struct {
 }
 
 type Node struct {
-	ID              string    `json:"id"`
-	ServerID        string    `json:"serverId"`
-	Name            string    `json:"name"`
-	Protocol        string    `json:"protocol"`
-	Port            int       `json:"port"`
-	Listen          string    `json:"listen"`
-	PublishAddress  string    `json:"publishAddress"`
-	Method          string    `json:"method"`
-	SnellVersion    int       `json:"snellVersion"`
-	Obfs            string    `json:"obfs"`
-	ShadowTLSHost   string    `json:"shadowTlsHost"`
-	TLSName         string    `json:"tlsName"`
-	CertificateID   string    `json:"certificateId"`
-	FirewallPolicy  string    `json:"firewallPolicy"`
-	FirewallSources string    `json:"firewallSources"`
-	Enabled         bool      `json:"enabled"`
-	Deleting        bool      `json:"deleting"`
-	Status          string    `json:"status"`
-	Error           string    `json:"error"`
-	Uplink          int64     `json:"uplink"`
-	Downlink        int64     `json:"downlink"`
-	CreatedAt       time.Time `json:"createdAt"`
+	ID              string `json:"id"`
+	ServerID        string `json:"serverId"`
+	Name            string `json:"name"`
+	Protocol        string `json:"protocol"`
+	Port            int    `json:"port"`
+	Listen          string `json:"listen"`
+	PublishAddress  string `json:"publishAddress"`
+	Method          string `json:"method"`
+	SnellVersion    int    `json:"snellVersion"`
+	Obfs            string `json:"obfs"`
+	ShadowTLSHost   string `json:"shadowTlsHost"`
+	TLSName         string `json:"tlsName"`
+	CertificateID   string `json:"certificateId"`
+	FirewallPolicy  string `json:"firewallPolicy"`
+	FirewallSources string `json:"firewallSources"`
+	// Direct allows clients to connect to the node itself, so it can be put
+	// into a subscription as is. Without it the node is reachable only through
+	// routes: its port admits nothing but their last hops (RouteSources).
+	Direct bool `json:"direct"`
+	// RouteSources is computed by the panel from the routes ending at this
+	// node: the addresses their last hops connect from.
+	RouteSources string    `json:"routeSources"`
+	Enabled      bool      `json:"enabled"`
+	Deleting     bool      `json:"deleting"`
+	Status       string    `json:"status"`
+	Error        string    `json:"error"`
+	Uplink       int64     `json:"uplink"`
+	Downlink     int64     `json:"downlink"`
+	CreatedAt    time.Time `json:"createdAt"`
 }
 
 // NodeTemplate stores reusable node settings without a server-specific address
@@ -113,17 +125,30 @@ type FirewallRule struct {
 	Status   string `json:"status"`
 }
 
+// ForwardTarget is one destination of a forward.
+type ForwardTarget struct {
+	Host string `json:"host"`
+	Port int    `json:"port"`
+}
+
 // ForwardRule terminates an inbound TCP connection or UDP association on the
-// managed server and opens a new connection to the configured destination.
+// managed server and opens a new connection to one of its destinations. With
+// several destinations, Balance picks among the healthy ones: "failover" uses
+// the first healthy one in order, "round-robin" spreads new connections.
 type ForwardRule struct {
-	ID              string `json:"id"`
-	ServerID        string `json:"serverId"`
-	Name            string `json:"name"`
-	Network         string `json:"network"`
-	Listen          string `json:"listen"`
-	Port            int    `json:"port"`
-	TargetHost      string `json:"targetHost"`
-	TargetPort      int    `json:"targetPort"`
+	ID       string          `json:"id"`
+	ServerID string          `json:"serverId"`
+	Name     string          `json:"name"`
+	Network  string          `json:"network"`
+	Listen   string          `json:"listen"`
+	Port     int             `json:"port"`
+	Targets  []ForwardTarget `json:"targets"`
+	Balance  string          `json:"balance"`
+	// Empty defaults to TCP probing for TCP rules and passive errors for UDP.
+	HealthCheck string `json:"healthCheck,omitempty"`
+	// RouteID marks a forward the panel generated for a route; it is edited
+	// through the route, never directly.
+	RouteID         string `json:"routeId,omitempty"`
 	FirewallPolicy  string `json:"firewallPolicy"`
 	FirewallSources string `json:"firewallSources"`
 	Enabled         bool   `json:"enabled"`
@@ -140,6 +165,7 @@ type Subscription struct {
 	CustomerID string     `json:"customerId"`
 	Format     string     `json:"format"`
 	NodeIDs    []string   `json:"nodeIds"`
+	RouteIDs   []string   `json:"routeIds"`
 	Enabled    bool       `json:"enabled"`
 	ExpiresAt  *time.Time `json:"expiresAt"`
 	URL        string     `json:"url,omitempty"`
@@ -148,8 +174,55 @@ type Subscription struct {
 	// Filled in for the list view only: nodes this subscription names whose
 	// configuration is not live on their server yet, and whether the link can
 	// be shown again.
-	PendingNodeIDs []string `json:"pendingNodeIds,omitempty"`
-	LinkAvailable  bool     `json:"linkAvailable,omitempty"`
+	PendingNodeIDs  []string `json:"pendingNodeIds,omitempty"`
+	PendingRouteIDs []string `json:"pendingRouteIds,omitempty"`
+	LinkAvailable   bool     `json:"linkAvailable,omitempty"`
+}
+
+// Server roles. A server may hold several.
+const (
+	RoleEntry   = "entry"   // first hop of a route; subscribable
+	RoleLine    = "line"    // first or middle hop of a route; subscribable
+	RoleTransit = "transit" // middle hop of a route
+	RoleExit    = "exit"    // runs sing-box; its nodes end routes
+)
+
+func HasRole(s Server, role string) bool {
+	for _, r := range s.Roles {
+		if r == role {
+			return true
+		}
+	}
+	return false
+}
+
+// Route carries clients from a first-hop server through zero or more middle
+// hops to a node on an exit server. Every hop listens on the same Port; the
+// panel generates the forwards.
+type Route struct {
+	ID            string     `json:"id"`
+	Name          string     `json:"name"`
+	EntryServerID string     `json:"entryServerId"`
+	Hops          []RouteHop `json:"hops"`
+	NodeID        string     `json:"nodeId"`
+	// NodeInternal makes the last hop reach the exit server by its internal
+	// address instead of its public one.
+	NodeInternal bool   `json:"nodeInternal"`
+	Port         int    `json:"port"`
+	Enabled      bool   `json:"enabled"`
+	Notes        string `json:"notes"`
+	// Filled in for the list view: whether every hop has applied its forward.
+	Status string `json:"status,omitempty"`
+}
+
+// RouteHop is one middle hop. With several servers it is a load-balanced
+// group: the previous hop sends to the healthy ones as Balance says.
+type RouteHop struct {
+	ServerIDs []string `json:"serverIds"`
+	Balance   string   `json:"balance"`
+	// Internal makes the previous hop reach these servers by their internal
+	// addresses.
+	Internal bool `json:"internal"`
 }
 
 type Customer struct {
@@ -200,10 +273,13 @@ type Operation struct {
 }
 
 // NodeDeployment records what one node looks like on its server: a fingerprint
-// of everything a client depends on, and the subscriptions with a login on it.
+// of everything a client depends on, the subscriptions with a login on it,
+// and the firewall sources the server successfully applied.
 type NodeDeployment struct {
-	Fingerprint   string   `json:"fingerprint"`
-	Subscriptions []string `json:"subscriptions"`
+	Fingerprint     string   `json:"fingerprint"`
+	Subscriptions   []string `json:"subscriptions"`
+	FirewallPolicy  string   `json:"firewallPolicy"`
+	FirewallSources string   `json:"firewallSources"`
 }
 
 type ManagedNode struct {

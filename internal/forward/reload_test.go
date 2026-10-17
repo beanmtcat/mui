@@ -90,7 +90,7 @@ func TestReloadKeepsUnchangedRulesAndTheirConnections(t *testing.T) {
 	a, b, c := tcpBackend(t, "127.0.0.1:0", "A"), tcpBackend(t, "127.0.0.1:0", "B"), tcpBackend(t, "127.0.0.1:0", "C")
 	keepPort, movePort, dropPort := freePort(t, "tcp"), freePort(t, "tcp"), freePort(t, "tcp")
 	rule := func(id string, port, target int) shared.ForwardRule {
-		return shared.ForwardRule{ID: id, Name: id, Network: "tcp", Listen: "127.0.0.1", Port: port, TargetHost: "127.0.0.1", TargetPort: target, Enabled: true}
+		return shared.ForwardRule{ID: id, Name: id, Network: "tcp", Listen: "127.0.0.1", Port: port, Targets: []shared.ForwardTarget{{Host: "127.0.0.1", Port: target}}, Enabled: true}
 	}
 	service, err := Start([]shared.ForwardRule{rule("keep", keepPort, a), rule("move", movePort, b), rule("drop", dropPort, b)})
 	if err != nil {
@@ -163,7 +163,7 @@ func TestSlowDNSDoesNotDelayListeningOrShutdown(t *testing.T) {
 	}
 	port := freePort(t, "tcp")
 	start := time.Now()
-	service, err := Start([]shared.ForwardRule{{ID: "dns", Name: "dns", Network: "tcp", Listen: "127.0.0.1", Port: port, TargetHost: "slow.test", TargetPort: 443, Enabled: true}})
+	service, err := Start([]shared.ForwardRule{{ID: "dns", Name: "dns", Network: "tcp", Listen: "127.0.0.1", Port: port, Targets: []shared.ForwardTarget{{Host: "slow.test", Port: 443}}, Enabled: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestIdleTCPConnectionIsClosedAndABusyOneIsNot(t *testing.T) {
 	defer func(old time.Duration) { tcpIdleTimeout = old }(tcpIdleTimeout)
 	tcpIdleTimeout = 250 * time.Millisecond
 	port := freePort(t, "tcp")
-	service, err := Start([]shared.ForwardRule{{ID: "r", Name: "r", Network: "tcp", Listen: "127.0.0.1", Port: port, TargetHost: "127.0.0.1", TargetPort: tcpBackend(t, "127.0.0.1:0", "A"), Enabled: true}})
+	service, err := Start([]shared.ForwardRule{{ID: "r", Name: "r", Network: "tcp", Listen: "127.0.0.1", Port: port, Targets: []shared.ForwardTarget{{Host: "127.0.0.1", Port: tcpBackend(t, "127.0.0.1:0", "A")}}, Enabled: true}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,8 +251,8 @@ func TestHostNameTargetFollowsDNS(t *testing.T) {
 	}
 	tcpPort, udpPort := freePort(t, "tcp"), freePort(t, "udp")
 	service, err := Start([]shared.ForwardRule{
-		{ID: "t", Name: "t", Network: "tcp", Listen: "127.0.0.1", Port: tcpPort, TargetHost: "target.test", TargetPort: v4, Enabled: true},
-		{ID: "u", Name: "u", Network: "udp", Listen: "127.0.0.1", Port: udpPort, TargetHost: "target.test", TargetPort: v4, Enabled: true},
+		{ID: "t", Name: "t", Network: "tcp", Listen: "127.0.0.1", Port: tcpPort, Targets: []shared.ForwardTarget{{Host: "target.test", Port: v4}}, Enabled: true},
+		{ID: "u", Name: "u", Network: "udp", Listen: "127.0.0.1", Port: udpPort, Targets: []shared.ForwardTarget{{Host: "target.test", Port: v4}}, Enabled: true},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -323,7 +323,7 @@ func TestUDPSessionGrowsForLargeDatagrams(t *testing.T) {
 		}
 	}()
 	port := freePort(t, "udp")
-	service, err := Start([]shared.ForwardRule{{ID: "u", Name: "u", Network: "udp", Listen: "127.0.0.1", Port: port, TargetHost: "127.0.0.1", TargetPort: backend.LocalAddr().(*net.UDPAddr).Port, Enabled: true}})
+	service, err := Start([]shared.ForwardRule{{ID: "u", Name: "u", Network: "udp", Listen: "127.0.0.1", Port: port, Targets: []shared.ForwardTarget{{Host: "127.0.0.1", Port: backend.LocalAddr().(*net.UDPAddr).Port}}, Enabled: true}})
 	if err != nil {
 		t.Fatal(err)
 	}

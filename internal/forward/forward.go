@@ -1,7 +1,8 @@
 // Package forward relays TCP connections and UDP datagrams from a local port to
-// a fixed destination. One Service runs every rule of a server and can be
-// reloaded in place: rules that did not change keep their listeners and
-// connections.
+// one of a rule's destinations. One Service runs every rule of a server and can
+// be reloaded in place: rules that did not change keep their listeners and
+// connections. A rule with several destinations checks their health and sends
+// new connections only to healthy ones.
 package forward
 
 import (
@@ -55,6 +56,11 @@ var (
 	// How often a destination given as a host name is looked up again.
 	resolveInterval = 30 * time.Second
 	lookupNetIP     = net.DefaultResolver.LookupNetIP
+	// How often each destination of a multi-destination rule is probed, and
+	// how many probes in a row it takes to mark it down or up again.
+	healthInterval = 5 * time.Second
+	healthTimeout  = 3 * time.Second
+	healthStreak   = 2
 )
 
 // TestAllowLoopbackTarget is a test-only escape hatch for the SSRF guards
@@ -81,6 +87,42 @@ type Service struct {
 	errors             chan error
 	closed             chan struct{}
 	once               sync.Once
+
+	// Rules that share a destination (a route's TCP and UDP forwards) share
+	// its health probe instead of each connecting on its own.
+	probeMu sync.Mutex
+	probes  map[string]*probe
+}
+
+type probe struct {
+	at   time.Time
+	done chan struct{}
+	ok   bool
+}
+
+// probe connects to a destination once per half health interval, whichever
+// rule asks; concurrent askers wait for the same attempt.
+func (s *Service) probe(ctx context.Context, t *target) bool {
+	key := t.host + "\x00" + strconv.Itoa(t.port)
+	s.probeMu.Lock()
+	if p := s.probes[key]; p != nil && time.Since(p.at) < healthInterval/2 {
+		s.probeMu.Unlock()
+		<-p.done
+		return p.ok
+	}
+	if s.probes == nil || len(s.probes) > 1024 {
+		s.probes = map[string]*probe{} // Forget destinations no rule uses any more.
+	}
+	p := &probe{at: time.Now(), done: make(chan struct{})}
+	s.probes[key] = p
+	s.probeMu.Unlock()
+	conn, err := t.dialTCP(ctx)
+	if err == nil {
+		_ = conn.Close()
+	}
+	p.ok = err == nil
+	close(p.done)
+	return p.ok
 }
 
 // Start binds every enabled rule before returning.
@@ -166,7 +208,7 @@ func (s *Service) Reload(rules []shared.ForwardRule) error {
 		// 预检通过后、正式 bind 之前抢占端口；正式 bind 失败时仍会走下面
 		// 的回滚路径，只是窗口内的抢占无法被预检发现。
 		if err := tryBind(spec); err != nil {
-			return fmt.Errorf("转发 %q 预绑定 %s 失败: %w", spec.Name, net.JoinHostPort(spec.Listen, strconv.Itoa(spec.Port)), err)
+			return fmt.Errorf("转发 %q 预绑定 %s 失败: %w", spec.Name, forwardAddress(spec), err)
 		}
 	}
 	// Stop first: a changed rule may want the port its old self still holds.
@@ -230,10 +272,24 @@ func listenKey(spec shared.ForwardRule) string {
 	return spec.Network + "\x00" + spec.Listen + "\x00" + strconv.Itoa(spec.Port)
 }
 
+// An IPv6 wildcard means dual stack, with Go selecting IPv4 on hosts where
+// IPv6 is unavailable. An explicit address keeps its original address family.
+func forwardAddress(spec shared.ForwardRule) string {
+	host := spec.Listen
+	if host == "::" {
+		host = ""
+	}
+	return net.JoinHostPort(host, strconv.Itoa(spec.Port))
+}
+
+func tcpHealth(spec shared.ForwardRule) bool {
+	return spec.HealthCheck == "tcp" || spec.HealthCheck == "" && spec.Network == "tcp"
+}
+
 // tryBind binds a rule's listen address once and closes it immediately, to
 // find out before anything is stopped whether the address is usable.
 func tryBind(spec shared.ForwardRule) error {
-	address := net.JoinHostPort(spec.Listen, strconv.Itoa(spec.Port))
+	address := forwardAddress(spec)
 	if spec.Network == "tcp" {
 		listener, err := net.Listen("tcp", address)
 		if err != nil {
@@ -251,7 +307,15 @@ func tryBind(spec shared.ForwardRule) error {
 func sameEndpoints(a, b shared.ForwardRule) bool {
 	// The firewall policy is part of a rule's identity: changing only the
 	// policy must restart the rule so the new source check takes effect.
-	return a.Network == b.Network && a.Listen == b.Listen && a.Port == b.Port && a.TargetHost == b.TargetHost && a.TargetPort == b.TargetPort && a.FirewallPolicy == b.FirewallPolicy && a.FirewallSources == b.FirewallSources
+	if a.Network != b.Network || a.Listen != b.Listen || a.Port != b.Port || a.Balance != b.Balance || a.HealthCheck != b.HealthCheck || a.FirewallPolicy != b.FirewallPolicy || a.FirewallSources != b.FirewallSources || len(a.Targets) != len(b.Targets) {
+		return false
+	}
+	for i := range a.Targets {
+		if a.Targets[i] != b.Targets[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // Run blocks until the context ends or a listener fails for good.
@@ -326,13 +390,14 @@ func (s *Service) sweep() {
 	}
 }
 
-// rule is one running forward: a listener, its destination and whatever is
+// rule is one running forward: a listener, its destinations and whatever is
 // currently connected through it.
 type rule struct {
 	svc          *Service
 	spec         shared.ForwardRule
 	stats        *counter
-	target       *target
+	targets      []*target
+	next         atomic.Uint32 // round-robin position
 	listener     io.Closer
 	done         chan struct{}
 	stopOnce     sync.Once
@@ -347,25 +412,33 @@ type rule struct {
 
 func (s *Service) startRule(spec shared.ForwardRule, stats *counter) (*rule, error) {
 	r := &rule{svc: s, spec: spec, stats: stats, done: make(chan struct{}), pairs: map[*tcpPair]struct{}{}, sessions: map[netip.AddrPort]*udpSession{}, perSource: map[netip.Addr]int{}}
-	r.target = newTarget(spec.TargetHost, spec.TargetPort)
-	// A literal target that rejectPrivateAddr refused must never start: the
-	// administrator configured it, but forwarding to it would turn this host
-	// into an SSRF relay. TestAllowLoopbackTarget (set only by tests)
-	// lifts both this and the self-loop check below.
-	if !TestAllowLoopbackTarget {
-		if r.target.illegal {
-			return nil, fmt.Errorf("转发 %q 目标地址 %s 被拒绝: 目标不得为回环/链路本地/组播/未指定或云元数据地址", spec.Name, spec.TargetHost)
-		}
-		// Self-loop check: a target that is one of this host's own interface
-		// addresses would forward traffic back into this host. There is no
-		// TargetPort == Port premise: any port on a local address is a loop.
-		for _, addr := range r.target.snapshot() {
-			if isLocalAddr(addr) {
-				return nil, fmt.Errorf("转发 %q 目标地址 %s 属于本机网卡地址, 拒绝自环转发", spec.Name, addr)
+	dynamic := false
+	for _, t := range spec.Targets {
+		target := newTarget(t.Host, t.Port)
+		// A literal target that rejectPrivateAddr refused must never start:
+		// the administrator configured it, but forwarding to it would turn
+		// this host into an SSRF relay. TestAllowLoopbackTarget (set only by
+		// tests) lifts both this and the self-loop check below.
+		if !TestAllowLoopbackTarget {
+			if target.illegal {
+				return nil, fmt.Errorf("转发 %q 目标地址 %s 被拒绝: 目标不得为回环/链路本地/组播/未指定或云元数据地址", spec.Name, t.Host)
+			}
+			// Self-loop check: a target that is one of this host's own
+			// interface addresses would forward traffic back into this host.
+			// Any port on a local address is a loop.
+			for _, addr := range target.snapshot() {
+				if isLocalAddr(addr) {
+					return nil, fmt.Errorf("转发 %q 目标地址 %s 属于本机网卡地址, 拒绝自环转发", spec.Name, addr)
+				}
 			}
 		}
+		dynamic = dynamic || !target.static
+		r.targets = append(r.targets, target)
 	}
-	address := net.JoinHostPort(spec.Listen, strconv.Itoa(spec.Port))
+	if len(r.targets) == 0 {
+		return nil, fmt.Errorf("转发 %q 没有目标", spec.Name)
+	}
+	address := forwardAddress(spec)
 	if spec.Network == "tcp" {
 		listener, err := net.Listen("tcp", address)
 		if err != nil {
@@ -383,11 +456,20 @@ func (s *Service) startRule(spec shared.ForwardRule, stats *counter) (*rule, err
 		s.wg.Add(1)
 		go r.serveUDP(listener.(*net.UDPConn))
 	}
-	if !r.target.static {
+	if dynamic || len(r.targets) > 1 {
 		ctx, cancel := context.WithCancel(context.Background())
 		r.cancelLookup = cancel
-		s.wg.Add(1)
-		go r.followTarget(ctx)
+		if dynamic {
+			s.wg.Add(1)
+			go r.followTargets(ctx)
+		}
+		if len(r.targets) > 1 && tcpHealth(spec) {
+			s.wg.Add(1)
+			go r.checkHealth(ctx)
+		} else if len(r.targets) > 1 && spec.Balance != "round-robin" {
+			s.wg.Add(1)
+			go r.retryPreferred()
+		}
 	}
 	return r, nil
 }
@@ -491,36 +573,154 @@ func (r *rule) allowedSource(src netip.Addr) bool {
 	}
 }
 
-// followTarget keeps a host-name destination current and moves UDP sessions
-// off addresses the name no longer resolves to.
-func (r *rule) followTarget(parent context.Context) {
+// followTargets keeps host-name destinations current and moves UDP sessions
+// off addresses a name no longer resolves to.
+func (r *rule) followTargets(parent context.Context) {
 	defer r.svc.wg.Done()
 	ticker := time.NewTicker(resolveInterval)
 	defer ticker.Stop()
 	for {
-		ctx, cancel := context.WithTimeout(parent, 5*time.Second)
-		ok := r.target.refresh(ctx)
-		cancel()
-		if ok {
-			r.mu.Lock()
-			for key, session := range r.sessions {
-				if !r.target.current(session.remote) {
-					// Drop the stale mapping as well as the connection: the
-					// client's next datagram must open a fresh session to
-					// the new address instead of reusing this one. The
-					// session's reply loop releases its admit slot when the
-					// close ends its read.
-					delete(r.sessions, key)
-					_ = session.conn.Close()
-				}
+		changed := false
+		for _, t := range r.targets {
+			if t.static {
+				continue
 			}
-			r.mu.Unlock()
+			ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+			changed = t.refresh(ctx) || changed
+			cancel()
+		}
+		if changed {
+			r.dropSessions(func(session *udpSession) bool { return !session.target.current(session.remote) })
 		}
 		select {
 		case <-r.done:
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+// checkHealth probes rules that explicitly support a TCP health endpoint.
+// Plain UDP destinations use passive socket errors instead of TCP probes. A destination goes down after healthStreak failed probes in a row
+// (or at once, when a client connection to it fails) and comes back after
+// healthStreak successful ones. UDP sessions then follow: off a destination
+// that went down and, in failover mode, back to a recovered preferred one.
+// retryPreferred is the passive failover's way back: once a preferred
+// destination's cooldown ends, sessions on a backup move back to it. It runs on
+// a timer, not per datagram, because rebalancing walks every session.
+func (r *rule) retryPreferred() {
+	defer r.svc.wg.Done()
+	ticker := time.NewTicker(healthInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.done:
+			return
+		case <-ticker.C:
+			r.rebalanceSessions()
+		}
+	}
+}
+
+func (r *rule) checkHealth(parent context.Context) {
+	defer r.svc.wg.Done()
+	ticker := time.NewTicker(healthInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.done:
+			return
+		case <-ticker.C:
+		}
+		var wg sync.WaitGroup
+		changed := make([]bool, len(r.targets))
+		for i, t := range r.targets {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				ctx, cancel := context.WithTimeout(parent, healthTimeout)
+				ok := r.svc.probe(ctx, t)
+				cancel()
+				changed[i] = t.observe(ok)
+			}()
+		}
+		wg.Wait()
+		for _, c := range changed {
+			if c {
+				r.rebalanceSessions()
+				break
+			}
+		}
+	}
+}
+
+// rebalanceSessions closes UDP sessions that should no longer use their
+// destination; the client's next datagram opens one on the right destination.
+func (r *rule) rebalanceSessions() {
+	preferred := r.candidates()[0]
+	r.dropSessions(func(session *udpSession) bool {
+		if !session.target.up() {
+			return preferred.up()
+		}
+		return r.spec.Balance != "round-robin" && session.target != preferred
+	})
+}
+
+func (r *rule) dropSessions(stale func(*udpSession) bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, session := range r.sessions {
+		if stale(session) {
+			// Drop the mapping as well as the connection: the client's next
+			// datagram must open a fresh session instead of reusing this
+			// one. The session's reply loop releases its admit slot when the
+			// close ends its read.
+			delete(r.sessions, key)
+			_ = session.conn.Close()
+		}
+	}
+}
+
+// candidates lists the destinations in the order a new connection tries them:
+// healthy ones first (in configuration order for failover, rotated for
+// round-robin), then the rest as a last resort.
+func (r *rule) candidates() []*target {
+	if len(r.targets) == 1 {
+		return r.targets
+	}
+	healthy := make([]*target, 0, len(r.targets))
+	var down []*target
+	for _, t := range r.targets {
+		if t.up() {
+			healthy = append(healthy, t)
+		} else {
+			down = append(down, t)
+		}
+	}
+	ordered := append(healthy, down...)
+	count := len(healthy)
+	if count == 0 {
+		count = len(ordered)
+	}
+	if r.spec.Balance == "round-robin" && count > 1 {
+		start := int(r.next.Add(1)-1) % count
+		rotated := append([]*target{}, ordered[start:count]...)
+		rotated = append(rotated, ordered[:start]...)
+		return append(rotated, ordered[count:]...)
+	}
+	return ordered
+}
+
+func (r *rule) failedTarget(t *target) {
+	if len(r.targets) < 2 || r.stopped() {
+		return
+	}
+	cooldown := time.Duration(0)
+	if !tcpHealth(r.spec) {
+		cooldown = 2 * healthInterval
+	}
+	if t.markDownFor(cooldown) {
+		r.rebalanceSessions()
 	}
 }
 
@@ -602,10 +802,8 @@ func (r *rule) proxyTCP(client *net.TCPConn) {
 		r.mu.Unlock()
 		pair.close()
 	}()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	upstream, err := r.target.dialTCP(ctx)
-	cancel()
-	if err != nil {
+	upstream := r.dialUpstream()
+	if upstream == nil {
 		return
 	}
 	r.mu.Lock()
@@ -621,6 +819,32 @@ func (r *rule) proxyTCP(client *net.TCPConn) {
 	}()
 	relay(client, upstream, &r.stats.down, &pair.last)
 	<-done
+}
+
+// dialUpstream connects to the first destination that answers, in candidate
+// order, within ten seconds overall. A destination that refuses is marked down
+// at once when there are others to use.
+func (r *rule) dialUpstream() *net.TCPConn {
+	deadline := time.Now().Add(10 * time.Second)
+	candidates := r.candidates()
+	for i, t := range candidates {
+		budget := time.Until(deadline)
+		if budget <= 0 {
+			return nil
+		}
+		if left := len(candidates) - i; left > 1 {
+			// Leave time for the remaining destinations.
+			budget = min(budget, max(budget/time.Duration(left), 3*time.Second))
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), budget)
+		conn, err := t.dialTCP(ctx)
+		cancel()
+		if err == nil {
+			return conn
+		}
+		r.failedTarget(t)
+	}
+	return nil
 }
 
 // relay moves one direction of a connection. Both ends are plain TCP sockets
@@ -658,6 +882,7 @@ func relay(dst, src *net.TCPConn, count, last *atomic.Int64) {
 
 type udpSession struct {
 	conn   *net.UDPConn
+	target *target
 	remote netip.Addr
 	last   atomic.Int64
 	// Per-session byte counters for the reply/request ratio alert in
@@ -710,6 +935,8 @@ func (r *rule) serveUDP(listener *net.UDPConn) {
 		if sent, err := session.conn.Write(buffer[:n]); err == nil {
 			r.stats.up.Add(int64(sent))
 			session.up.Add(int64(sent))
+		} else if !errors.Is(err, net.ErrClosed) {
+			r.failedTarget(session.target)
 		}
 	}
 }
@@ -718,9 +945,16 @@ func (r *rule) serveUDP(listener *net.UDPConn) {
 // the resolver's last answer and connecting a UDP socket sends nothing, so one
 // new client cannot hold up the datagrams of all the others.
 func (r *rule) openSession(listener *net.UDPConn, client netip.AddrPort) *udpSession {
-	remote, ok := r.target.first()
-	if !ok {
-		return nil // The name has not resolved yet; the client will retry.
+	var target *target
+	var remote netip.Addr
+	for _, t := range r.candidates() {
+		if addr, ok := t.first(); ok {
+			target, remote = t, addr
+			break
+		}
+	}
+	if target == nil {
+		return nil // No name has resolved yet; the client will retry.
 	}
 	src := client.Addr().Unmap()
 	if !r.allowedSource(src) {
@@ -729,12 +963,12 @@ func (r *rule) openSession(listener *net.UDPConn, client netip.AddrPort) *udpSes
 	if !r.admit(src, &r.svc.udpTotal, maxUDPTotal, maxUDPPerRule, maxUDPPerSource) {
 		return nil
 	}
-	conn, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(netip.AddrPortFrom(remote, uint16(r.spec.TargetPort))))
+	conn, err := net.DialUDP("udp", nil, net.UDPAddrFromAddrPort(netip.AddrPortFrom(remote, uint16(target.port))))
 	if err != nil {
 		r.release(src, &r.svc.udpTotal)
 		return nil
 	}
-	session := &udpSession{conn: conn, remote: remote}
+	session := &udpSession{conn: conn, target: target, remote: remote}
 	session.last.Store(time.Now().UnixNano())
 	r.mu.Lock()
 	r.sessions[client] = session
@@ -766,6 +1000,9 @@ func (r *rule) udpReplies(listener *net.UDPConn, client netip.AddrPort, session 
 			var netErr net.Error
 			if errors.As(err, &netErr) && netErr.Timeout() && time.Since(time.Unix(0, session.last.Load())) < udpIdleTimeout {
 				continue
+			}
+			if !errors.Is(err, net.ErrClosed) && !(errors.As(err, &netErr) && netErr.Timeout()) {
+				r.failedTarget(session.target)
 			}
 			return
 		}
@@ -813,11 +1050,58 @@ type target struct {
 	// startRule rejects the rule instead of letting it start.
 	illegal bool
 
+	// Health, used only when a rule has several targets. A target starts up.
+	healthMu sync.Mutex
+	down     bool
+	streak   int       // consecutive probe results contradicting the current state
+	retryAt  time.Time // passive checks retry after a bounded cooldown
+
 	mu sync.RWMutex
 	// latest is the most recent answer, in resolver order. previous is the one
 	// before: an address counts as current while it is in either, which keeps
 	// names that rotate between several records from looking like a move.
 	latest, previous []netip.Addr
+}
+
+func (t *target) up() bool {
+	t.healthMu.Lock()
+	defer t.healthMu.Unlock()
+	if t.down && !t.retryAt.IsZero() && !time.Now().Before(t.retryAt) {
+		t.down, t.streak, t.retryAt = false, 0, time.Time{}
+	}
+	return !t.down
+}
+
+// observe records one probe result and reports whether the state changed.
+func (t *target) observe(ok bool) bool {
+	t.healthMu.Lock()
+	defer t.healthMu.Unlock()
+	if ok != t.down {
+		t.streak = 0 // The probe agrees with the current state.
+		return false
+	}
+	if t.streak++; t.streak < healthStreak {
+		return false
+	}
+	t.down, t.streak = !ok, 0
+	return true
+}
+
+// markDown takes a target out of use after a failed client connection and
+// reports whether it was up.
+func (t *target) markDown() bool { return t.markDownFor(0) }
+
+func (t *target) markDownFor(cooldown time.Duration) bool {
+	t.healthMu.Lock()
+	defer t.healthMu.Unlock()
+	was := !t.down
+	t.down, t.streak = true, 0
+	if cooldown > 0 {
+		t.retryAt = time.Now().Add(cooldown)
+	} else {
+		t.retryAt = time.Time{}
+	}
+	return was
 }
 
 func newTarget(host string, port int) *target {

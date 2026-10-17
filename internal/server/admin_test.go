@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	agentpkg "mui/internal/agent"
 	"mui/internal/shared"
 )
 
@@ -133,7 +134,7 @@ func (p *testMui) do(method, path string, body any, headers map[string]string) (
 // enroll creates a server and returns its ID and agent headers.
 func (p *testMui) enroll(name string) (string, map[string]string) {
 	p.t.Helper()
-	code, out, _ := p.do("POST", "/api/servers", map[string]any{"name": name, "country": "SG", "ipv4": "203.0.113.10"}, nil)
+	code, out, _ := p.do("POST", "/api/servers", map[string]any{"name": name, "roles": []string{"exit"}, "country": "SG", "ipv4": "203.0.113.10"}, nil)
 	if code != 201 {
 		p.t.Fatalf("server: %d %v", code, out)
 	}
@@ -160,6 +161,19 @@ func (p *testMui) applyAll(agent map[string]string) {
 		code, job, _ := p.do("GET", "/agent/job", nil, agent)
 		if code != 200 {
 			return
+		}
+		if kind, _ := job["kind"].(string); strings.HasSuffix(kind, ".apply") {
+			raw, err := json.Marshal(job["state"])
+			if err != nil {
+				p.t.Fatal(err)
+			}
+			var state shared.DesiredState
+			if err = json.Unmarshal(raw, &state); err != nil {
+				p.t.Fatal(err)
+			}
+			if err = agentpkg.ValidateDesired(state); err != nil {
+				p.t.Fatalf("agent rejected %s: %v", kind, err)
+			}
 		}
 		if code, out, _ := p.do("POST", "/agent/report", map[string]any{"jobId": job["id"], "jobStatus": "success"}, agent); code != 200 {
 			p.t.Fatalf("report: %d %v", code, out)
@@ -203,7 +217,7 @@ func TestQueuedJobStateIsEncryptedAndClearedWhenFinished(t *testing.T) {
 	p := newTestMui(t)
 	id, agent := p.enroll("a")
 	const psk = "PLAINTEXT-PSK-MARKER"
-	if code, out, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": id, "name": "n", "protocol": "snell", "port": 8443, "password": psk, "shadowTlsHost": "www.example.com"}, nil); code != 201 {
+	if code, out, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": id, "name": "n", "protocol": "snell", "port": 8443, "password": psk, "shadowTlsHost": "www.example.com"}, nil); code != 201 {
 		t.Fatalf("node: %d %v", code, out)
 	}
 	var state string
@@ -301,7 +315,7 @@ func TestNodeTemplateLifecycle(t *testing.T) {
 		t.Fatalf("template detail: %d %v", code, detail)
 	}
 	serverID, _ := p.enroll("template-server")
-	code, node, _ := p.do("POST", "/api/nodes", map[string]any{
+	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true,
 		"serverId": serverID, "name": "from-template", "protocol": "ss", "port": 8388,
 		"method": "2022-blake3-aes-128-gcm", "templateId": id,
 	}, nil)
@@ -311,7 +325,7 @@ func TestNodeTemplateLifecycle(t *testing.T) {
 	if got, err := p.store.NodeSecret(node["id"].(string)); err != nil || got != psk {
 		t.Fatalf("node did not use template password: %q %v", got, err)
 	}
-	if code, _, _ := p.do("POST", "/api/nodes", map[string]any{
+	if code, _, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true,
 		"serverId": serverID, "name": "wrong-method", "protocol": "ss", "port": 8389,
 		"method": "2022-blake3-aes-256-gcm", "templateId": id,
 	}, nil); code != 400 {
@@ -383,7 +397,7 @@ func TestNodeFirewallAccessPolicy(t *testing.T) {
 func TestSnellShadowTLSTemplateNodeAndSubscription(t *testing.T) {
 	p := newTestMui(t)
 	serverID, agent := p.enroll("shadowtls-server")
-	if code, _, _ := p.do("POST", "/api/nodes", map[string]any{
+	if code, _, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true,
 		"serverId": serverID, "name": "missing-host", "protocol": "snell", "port": 54320,
 	}, nil); code != 400 {
 		t.Fatalf("Snell node without ShadowTLS SNI accepted: %d", code)
@@ -410,7 +424,7 @@ func TestSnellShadowTLSTemplateNodeAndSubscription(t *testing.T) {
 	if code, detail, _ := p.do("GET", "/api/node-templates/"+templateID, nil, nil); code != 200 || detail["shadowTlsPassword"] != outerPassword {
 		t.Fatalf("template secret detail: %d %v", code, detail)
 	}
-	code, node, _ := p.do("POST", "/api/nodes", map[string]any{
+	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true,
 		"serverId": serverID, "name": "Snell TLS", "protocol": "snell", "port": 54321,
 		"shadowTlsHost": "www.example.com", "templateId": templateID,
 	}, nil)
@@ -465,7 +479,7 @@ func TestSnellShadowTLSTemplateNodeAndSubscription(t *testing.T) {
 func TestOfflineServerCanBeForceDeleted(t *testing.T) {
 	p := newTestMui(t)
 	id, agent := p.enroll("gone")
-	_, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": id, "name": "n", "protocol": "snell", "port": 8443, "shadowTlsHost": "www.example.com"}, nil)
+	_, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": id, "name": "n", "protocol": "snell", "port": 8443, "shadowTlsHost": "www.example.com"}, nil)
 	nodeID := node["id"].(string)
 	p.do("POST", "/agent/report", map[string]any{"traffic": []map[string]any{{"nodeId": nodeID, "instanceId": "i", "sequence": 1, "uplink": 5, "downlink": 5, "at": time.Now()}}}, agent)
 	p.applyNext(agent, "success")
@@ -537,7 +551,7 @@ func TestReservedAndSSHPortsAreRefused(t *testing.T) {
 	id, agent := p.enroll("s")
 	p.do("POST", "/agent/report", map[string]any{"hostReported": true, "sshPorts": []int{22, 2222}, "ufwStatus": "active"}, agent)
 	for _, port := range []int{22, 2222, shared.StatsAPIPort} {
-		if code, out, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": id, "name": "n", "protocol": "snell", "port": port, "shadowTlsHost": "www.example.com"}, nil); code != 400 {
+		if code, out, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": id, "name": "n", "protocol": "snell", "port": port, "shadowTlsHost": "www.example.com"}, nil); code != 400 {
 			t.Fatalf("node on port %d accepted: %d %v", port, code, out)
 		}
 	}
@@ -555,7 +569,7 @@ func TestReservedAndSSHPortsAreRefused(t *testing.T) {
 func TestResentTrafficIsCountedOnceAndTotalsSurvivePruning(t *testing.T) {
 	p := newTestMui(t)
 	id, agent := p.enroll("s")
-	_, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": id, "name": "n", "protocol": "snell", "port": 8443, "shadowTlsHost": "www.example.com"}, nil)
+	_, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": id, "name": "n", "protocol": "snell", "port": 8443, "shadowTlsHost": "www.example.com"}, nil)
 	nodeID := node["id"].(string)
 	old := time.Now().Add(-100 * 24 * time.Hour)
 	report := map[string]any{
@@ -694,7 +708,7 @@ func TestSubscriptionServesLiveNodesWhileAnotherServerLags(t *testing.T) {
 	p.newAgent(agentA)
 	p.newAgent(agentB)
 	node := func(server, name string, port int) string {
-		code, n, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": server, "name": name, "protocol": "ss", "port": port}, nil)
+		code, n, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": server, "name": name, "protocol": "ss", "port": port}, nil)
 		if code != 201 {
 			t.Fatalf("node: %d %v", code, n)
 		}
@@ -737,7 +751,7 @@ func TestSubscriptionServesLiveNodesWhileAnotherServerLags(t *testing.T) {
 	served("unrelated change queued on an offline server", "node-a", "node-b")
 
 	// An edit that changes what clients must send takes the node out until applied.
-	if code, out, _ := p.do("PATCH", "/api/nodes/"+b, map[string]any{"name": "node-b", "protocol": "ss", "port": 50003, "method": "2022-blake3-aes-128-gcm", "enabled": true}, nil); code != 200 {
+	if code, out, _ := p.do("PATCH", "/api/nodes/"+b, map[string]any{"name": "node-b", "direct": true, "protocol": "ss", "port": 50003, "method": "2022-blake3-aes-128-gcm", "enabled": true}, nil); code != 200 {
 		t.Fatalf("edit: %d %v", code, out)
 	}
 	served("node edit not applied yet", "node-a")
@@ -786,14 +800,14 @@ func TestOldAgentWithForwardsStillReceivesNodeJobs(t *testing.T) {
 	p := newTestMui(t)
 	id, agent := p.enroll("old")
 	p.do("POST", "/agent/report", map[string]any{"agentVersion": "0.3.0", "multiUserStats": true, "nodeFirewallPolicies": true, "ufwStatus": "active"}, agent)
-	code, forward, _ := p.do("POST", "/api/forwards", map[string]any{"serverId": id, "name": "f", "network": "tcp", "port": 30000, "targetHost": "192.0.2.9", "targetPort": 443, "enabled": true}, nil)
+	code, forward, _ := p.do("POST", "/api/forwards", map[string]any{"serverId": id, "name": "f", "network": "tcp", "port": 30000, "targets": []map[string]any{{"host": "192.0.2.9", "port": 443}}, "enabled": true}, nil)
 	if code != 201 {
 		t.Fatalf("forward: %d %v", code, forward)
 	}
 	if code, _, _ := p.do("GET", "/agent/job", nil, agent); code != 204 {
 		t.Fatalf("a forward job was sent to an agent that cannot run it: %d", code)
 	}
-	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": id, "name": "n", "protocol": "ss", "port": 50001}, nil)
+	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": id, "name": "n", "protocol": "ss", "port": 50001}, nil)
 	if code != 201 {
 		t.Fatalf("node: %d %v", code, node)
 	}
@@ -815,7 +829,7 @@ func TestDeletingNodeCannotBeEdited(t *testing.T) {
 	p := newTestMui(t)
 	id, agent := p.enroll("s")
 	p.newAgent(agent)
-	_, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": id, "name": "n", "protocol": "ss", "port": 50001}, nil)
+	_, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": id, "name": "n", "protocol": "ss", "port": 50001}, nil)
 	p.applyAll(agent)
 	path := "/api/nodes/" + node["id"].(string)
 	p.do("DELETE", path, nil, nil)

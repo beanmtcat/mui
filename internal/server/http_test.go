@@ -100,7 +100,7 @@ func TestServerNodeSubscriptionLifecycle(t *testing.T) {
 	if code != 200 || cookie == nil {
 		t.Fatalf("login: %d", code)
 	}
-	code, serverResult, _ := call("POST", "/api/servers", map[string]any{"name": "Singapore 1", "country": "SG", "ipv4": "203.0.113.10"}, cookie, nil)
+	code, serverResult, _ := call("POST", "/api/servers", map[string]any{"name": "Singapore 1", "roles": []string{"exit"}, "country": "SG", "ipv4": "203.0.113.10"}, cookie, nil)
 	if code != 201 {
 		t.Fatalf("server: %d %v", code, serverResult)
 	}
@@ -119,7 +119,7 @@ func TestServerNodeSubscriptionLifecycle(t *testing.T) {
 	if code != 202 {
 		t.Fatalf("ufw init: %d", code)
 	}
-	code, nodeResult, _ := call("POST", "/api/nodes", map[string]any{"serverId": serverID, "name": "SS 1", "protocol": "ss", "port": 8388, "method": "2022-blake3-aes-128-gcm"}, cookie, nil)
+	code, nodeResult, _ := call("POST", "/api/nodes", map[string]any{"direct": true, "serverId": serverID, "name": "SS 1", "protocol": "ss", "port": 8388, "method": "2022-blake3-aes-128-gcm"}, cookie, nil)
 	if code != 201 {
 		t.Fatalf("node: %d %v", code, nodeResult)
 	}

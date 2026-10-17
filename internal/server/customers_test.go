@@ -9,7 +9,7 @@ func TestCustomerSubscriptionAndSourceIPs(t *testing.T) {
 	p := newTestMui(t)
 	serverID, agent := p.enroll("Singapore")
 	p.newAgent(agent)
-	code, node, _ := p.do("POST", "/api/nodes", map[string]any{
+	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true,
 		"serverId": serverID, "name": "test-node", "protocol": "snell", "port": 54321,
 		"password": "test-psk-123456", "shadowTlsHost": "www.example.com",
 	}, nil)

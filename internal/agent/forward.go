@@ -64,17 +64,19 @@ func validateForwardRule(rule shared.ForwardRule) error {
 	if err := shared.ValidateForward(rule); err != nil {
 		return err
 	}
-	if addr, err := netip.ParseAddr(rule.TargetHost); err == nil {
-		if forward.ForbiddenTarget(addr) {
-			return fmt.Errorf("target address %s is loopback, link-local, multicast, unspecified or metadata", rule.TargetHost)
+	for _, target := range rule.Targets {
+		if addr, err := netip.ParseAddr(target.Host); err == nil {
+			if forward.ForbiddenTarget(addr) {
+				return fmt.Errorf("target address %s is loopback, link-local, multicast, unspecified or metadata", target.Host)
+			}
+			continue
 		}
-		return nil
-	}
-	// Not a literal address: it must be a host name, not a numeric shorthand
-	// such as "127.1" or "2130706433" (which the resolver would treat as a
-	// literal address) and not contain characters a host name cannot have.
-	if isNumericShorthand(rule.TargetHost) {
-		return fmt.Errorf("target host %q looks like a numeric IP address; use dotted-quad notation", rule.TargetHost)
+		// Not a literal address: it must be a host name, not a numeric
+		// shorthand such as "127.1" or "2130706433", which the resolver
+		// would treat as a literal address.
+		if isNumericShorthand(target.Host) {
+			return fmt.Errorf("target host %q looks like a numeric IP address; use dotted-quad notation", target.Host)
+		}
 	}
 	return nil
 }

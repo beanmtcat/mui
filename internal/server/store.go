@@ -324,6 +324,11 @@ var migrations = [][]string{
 		// upgraded.
 		`ALTER TABLE mui_servers ADD COLUMN agent_signs INTEGER NOT NULL DEFAULT 0`,
 	},
+	{
+		// Routes: entry → hop groups → exit node. Their forwards live in
+		// mui_forwards, marked with the route ID.
+		`CREATE TABLE mui_routes (id TEXT PRIMARY KEY, data TEXT NOT NULL)`,
+	},
 }
 
 func ID() string {

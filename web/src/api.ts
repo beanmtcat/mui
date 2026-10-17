@@ -1,7 +1,13 @@
+// A server may hold several roles. Only an exit runs sing-box and carries
+// nodes; entry and line servers can be the first hop of a route, transit and
+// line servers a middle hop.
+export type Role = "entry" | "line" | "transit" | "exit";
+export const roleLabels: Record<Role, string> = { entry: "入口", line: "线路", transit: "中转", exit: "落地" };
 export type Server = {
   id: string;
   name: string;
-  purpose: "node" | "relay";
+  roles: Role[];
+  internalAddress: string;
   country: string;
   region: string;
   city: string;
@@ -55,6 +61,10 @@ export type Node = {
   certificateId: string;
   firewallPolicy: "all" | "restricted" | "manual";
   firewallSources: string;
+  // Off: clients reach the node only through routes, and its port admits
+  // only their last hops (routeSources, computed by the panel).
+  direct: boolean;
+  routeSources?: string;
   enabled: boolean;
   deleting?: boolean;
   status: string;
@@ -108,9 +118,12 @@ export type ForwardRule = {
   network: "tcp" | "udp";
   listen: string;
   port: number;
-  targetHost: string;
-  targetPort: number;
-  firewallPolicy: "all" | "restricted" | "manual";
+  targets: { host: string; port: number }[];
+  balance: "failover" | "round-robin" | "";
+  healthCheck?: "tcp" | "none" | "";
+  // Set on forwards the panel generated for a route; edit the route instead.
+  routeId?: string;
+  firewallPolicy: "all" | "restricted" | "manual" | "closed";
   firewallSources: string;
   enabled: boolean;
   deleting: boolean;
@@ -125,13 +138,28 @@ export type Subscription = {
   customerId?: string;
   format: string;
   nodeIds: string[];
+  routeIds: string[];
   enabled: boolean;
   expiresAt?: string;
   url?: string;
   uplink: number;
   downlink: number;
   pendingNodeIds?: string[];
+  pendingRouteIds?: string[];
   linkAvailable?: boolean;
+};
+export type RouteHop = { serverIds: string[]; balance: "failover" | "round-robin"; internal: boolean };
+export type Route = {
+  id: string;
+  name: string;
+  entryServerId: string;
+  hops: RouteHop[];
+  nodeId: string;
+  nodeInternal: boolean;
+  port: number;
+  enabled: boolean;
+  notes: string;
+  status?: string;
 };
 export type AuditEntry = { id: string; at: string; action: string; target: string; detail: string };
 export type Customer = { id: string; name: string; notes: string; createdAt: string };

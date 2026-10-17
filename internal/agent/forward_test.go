@@ -26,7 +26,7 @@ func TestForwardTargetValidation(t *testing.T) {
 		{"127.1", false}, {"2130706433", false}, {"https://example.com", false},
 	} {
 		t.Run(tc.host, func(t *testing.T) {
-			rule := shared.ForwardRule{Name: "relay", Network: "tcp", Listen: "0.0.0.0", Port: 51000, TargetHost: tc.host, TargetPort: 443, Enabled: true}
+			rule := shared.ForwardRule{Name: "relay", Network: "tcp", Listen: "0.0.0.0", Port: 51000, Targets: []shared.ForwardTarget{{Host: tc.host, Port: 443}}, Enabled: true}
 			err := validateForwardRule(rule)
 			if (err == nil) != tc.allow {
 				t.Fatalf("allow=%v, error=%v", tc.allow, err)

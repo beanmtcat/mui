@@ -992,3 +992,30 @@ th.num {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+
+.checkRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.hopList {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+.hop {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+}
+.hopHead select {
+  width: auto;
+}
+.hopHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}

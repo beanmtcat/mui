@@ -26,7 +26,7 @@ func TestServerPatchPreservesConcurrentAgentReport(t *testing.T) {
 	p := newTestMui(t)
 	id, agent := p.enroll("concurrent")
 	body := &gatedServerBody{
-		reader:  strings.NewReader(`{"name":"edited","country":"SG","ipv4":"203.0.113.10"}`),
+		reader:  strings.NewReader(`{"name":"edited","roles":["exit"],"country":"SG","ipv4":"203.0.113.10"}`),
 		entered: make(chan struct{}), release: make(chan struct{}),
 	}
 	req := httptest.NewRequest("PATCH", "/api/servers/"+id, body)

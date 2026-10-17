@@ -2,6 +2,7 @@ package agent
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"mui/internal/shared"
@@ -270,5 +271,38 @@ func TestOwnedRulesDuplicateSource(t *testing.T) {
 	}
 	if rules[0].ID == rules[1].ID {
 		t.Fatalf("duplicate rule IDs: %+v", rules)
+	}
+}
+
+func TestClosedAccessValidatesAndRemovesPreviousAllows(t *testing.T) {
+	id := strings.Repeat("a", 32)
+	node := shared.Node{ID: id, Name: "closed", Protocol: "ss", Port: 51000, Listen: "::", Method: "2022-blake3-aes-128-gcm", Enabled: true, FirewallPolicy: "closed"}
+	state := shared.DesiredState{Revision: 1, Nodes: []shared.ManagedNode{{Node: node, Password: "AAAAAAAAAAAAAAAAAAAAAA=="}}}
+	if err := ValidateDesired(state); err != nil {
+		t.Fatal(err)
+	}
+	if err := ownedRulesError(state); err != nil {
+		t.Fatal(err)
+	}
+	if len(ownedRules(state)) != 0 || !restrictedNodesNeedDeny(state) {
+		t.Fatal("closed node must generate no allows and require default deny")
+	}
+	node.FirewallPolicy = "all"
+	old := ownedRules(shared.DesiredState{Nodes: []shared.ManagedNode{{Node: node}}})
+	present := []ufwLine{}
+	for i, rule := range old {
+		present = append(present, ufwLine{Index: i + 1, ID: rule.ID})
+	}
+	remove, add := planUFW(present, nil)
+	if len(remove) != 2 || len(add) != 0 {
+		t.Fatalf("closing SS did not remove TCP/UDP allows: %v %v", remove, add)
+	}
+	state.Nodes = nil
+	state.Forwards = []shared.ForwardRule{{ID: id, Name: "closed-forward", Network: "tcp", Listen: "::", Port: 51000, Targets: []shared.ForwardTarget{{Host: "192.0.2.1", Port: 443}}, Enabled: true, FirewallPolicy: "closed"}}
+	if err := ValidateDesired(state); err != nil {
+		t.Fatal(err)
+	}
+	if len(ownedRules(state)) != 0 || !restrictedNodesNeedDeny(state) {
+		t.Fatal("closed forward generated an allow or missed default deny")
 	}
 }

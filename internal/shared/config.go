@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -102,7 +103,7 @@ func NormalizeFirewallAccess(policy, sources string) (string, string, error) {
 	if policy == "" {
 		policy = "all"
 	}
-	if policy != "all" && policy != "restricted" && policy != "manual" {
+	if policy != "all" && policy != "restricted" && policy != "manual" && policy != "closed" {
 		return "", "", errors.New("节点防火墙模式无效")
 	}
 	if policy != "restricted" {
@@ -114,8 +115,8 @@ func NormalizeFirewallAccess(policy, sources string) (string, string, error) {
 	parts := strings.FieldsFunc(sources, func(r rune) bool {
 		return r == ',' || r == ';' || r == '\n' || r == '\r' || r == ' ' || r == '\t'
 	})
-	if len(parts) == 0 || len(parts) > 32 {
-		return "", "", errors.New("指定来源模式需要 1–32 个 IP 或 CIDR")
+	if len(parts) == 0 || len(parts) > 256 {
+		return "", "", errors.New("指定来源模式需要 1–256 个 IP 或 CIDR")
 	}
 	seen := make(map[string]bool, len(parts))
 	normalized := make([]string, 0, len(parts))
@@ -140,6 +141,20 @@ func NormalizeFirewallAccess(policy, sources string) (string, string, error) {
 		}
 	}
 	return policy, strings.Join(normalized, ","), nil
+}
+
+// NormalizeAdminFirewallAccess is NormalizeFirewallAccess for what an
+// administrator types: at most 32 sources, and no "closed", which only the
+// panel sets. Lists the panel generates for routes may be longer.
+func NormalizeAdminFirewallAccess(policy, sources string) (string, string, error) {
+	if policy == "closed" {
+		return "", "", errors.New("节点防火墙模式无效")
+	}
+	policy, sources, err := NormalizeFirewallAccess(policy, sources)
+	if err == nil && strings.Count(sources, ",") >= 32 {
+		err = errors.New("指定来源模式需要 1–32 个 IP 或 CIDR")
+	}
+	return policy, sources, err
 }
 
 func validShadowTLSHost(host string) bool {
@@ -345,8 +360,8 @@ func ValidateForward(f ForwardRule) error {
 	if f.Network != "tcp" && f.Network != "udp" {
 		return errors.New("转发协议只能是 TCP 或 UDP")
 	}
-	if f.Port < 1024 || f.Port > 65535 || f.TargetPort < 1 || f.TargetPort > 65535 {
-		return errors.New("监听端口必须为 1024–65535，目标端口必须为 1–65535")
+	if f.Port < 1024 || f.Port > 65535 {
+		return errors.New("监听端口必须为 1024–65535")
 	}
 	if f.Port == StatsAPIPort || f.Port == ConnectionsAPIPort {
 		return errors.New("转发端口被本机统计接口占用")
@@ -354,15 +369,41 @@ func ValidateForward(f ForwardRule) error {
 	if f.Listen != "" && net.ParseIP(f.Listen) == nil {
 		return errors.New("监听地址必须是 IP")
 	}
-	host := strings.TrimSpace(f.TargetHost)
-	if host == "" || len(host) > 253 {
-		return errors.New("目标地址必须是 IP 或域名")
+	if len(f.Targets) == 0 || len(f.Targets) > 16 {
+		return errors.New("转发需要 1–16 个目标")
 	}
-	if net.ParseIP(host) == nil && !validForwardHost(host) {
-		return errors.New("目标地址必须是 IP 或域名")
+	seen := map[string]bool{}
+	for _, t := range f.Targets {
+		if err := ValidateForwardTarget(t); err != nil {
+			return err
+		}
+		key := strings.ToLower(t.Host) + ":" + strconv.Itoa(t.Port)
+		if seen[key] {
+			return errors.New("转发目标重复: " + t.Host)
+		}
+		seen[key] = true
+	}
+	if f.HealthCheck != "" && f.HealthCheck != "tcp" && f.HealthCheck != "none" {
+		return errors.New("健康检查只能选择 TCP 或不主动探测")
+	}
+	if f.Balance != "" && f.Balance != "failover" && f.Balance != "round-robin" {
+		return errors.New("负载均衡模式只能是主备或轮询")
 	}
 	_, _, err := NormalizeFirewallAccess(f.FirewallPolicy, f.FirewallSources)
 	return err
+}
+
+func ValidateForwardTarget(t ForwardTarget) error {
+	if t.Port < 1 || t.Port > 65535 {
+		return errors.New("目标端口必须为 1–65535")
+	}
+	if t.Host == "" || len(t.Host) > 253 || t.Host != strings.TrimSpace(t.Host) {
+		return errors.New("目标地址必须是 IP 或域名")
+	}
+	if net.ParseIP(t.Host) == nil && !validForwardHost(t.Host) {
+		return errors.New("目标地址必须是 IP 或域名")
+	}
+	return nil
 }
 
 func validForwardHost(host string) bool {

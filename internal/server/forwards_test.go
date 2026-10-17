@@ -14,7 +14,7 @@ func TestForwardLifecycleAndPortConflicts(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("Agent: %d %v", code, out)
 	}
-	input := map[string]any{"serverId": serverID, "name": "relay", "network": "tcp", "listen": "0.0.0.0", "port": 51000, "targetHost": "example.com", "targetPort": 443, "firewallPolicy": "restricted", "firewallSources": "192.0.2.1", "enabled": true}
+	input := map[string]any{"serverId": serverID, "name": "relay", "network": "tcp", "listen": "0.0.0.0", "port": 51000, "targets": []map[string]any{{"host": "example.com", "port": 443}}, "firewallPolicy": "restricted", "firewallSources": "192.0.2.1", "enabled": true}
 	code, forward, _ := p.do("POST", "/api/forwards", input, nil)
 	if code != 201 {
 		t.Fatalf("create: %d %v", code, forward)
@@ -27,7 +27,7 @@ func TestForwardLifecycleAndPortConflicts(t *testing.T) {
 	if len(forwards) != 1 {
 		t.Fatalf("desired forwards: %v", forwards)
 	}
-	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": serverID, "name": "conflict", "protocol": "ss", "port": 51000, "method": "2022-blake3-aes-128-gcm"}, nil)
+	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": serverID, "name": "conflict", "protocol": "ss", "port": 51000, "method": "2022-blake3-aes-128-gcm"}, nil)
 	if code != 409 {
 		t.Fatalf("node accepted conflicting port: %d %v", code, node)
 	}
@@ -79,7 +79,7 @@ func TestForwardWaitsForCapableAgentWithoutBlockingUpgrade(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("old apply: %d %v", code, oldJob)
 	}
-	input := map[string]any{"serverId": serverID, "name": "relay", "network": "tcp", "port": 51000, "targetHost": "example.com", "targetPort": 443, "firewallPolicy": "all", "enabled": true}
+	input := map[string]any{"serverId": serverID, "name": "relay", "network": "tcp", "port": 51000, "targets": []map[string]any{{"host": "example.com", "port": 443}}, "firewallPolicy": "all", "enabled": true}
 	code, created, _ := p.do("POST", "/api/forwards", input, nil)
 	if code != 201 {
 		t.Fatalf("create pending forward: %d %v", code, created)

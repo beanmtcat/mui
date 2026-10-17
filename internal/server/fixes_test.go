@@ -22,7 +22,7 @@ import (
 func createTestNode(t *testing.T, p *testMui, serverID, name string, extra map[string]any) map[string]any {
 	t.Helper()
 	body := map[string]any{
-		"serverId": serverID, "name": name, "protocol": "ss", "port": 50000,
+		"serverId": serverID, "name": name, "protocol": "ss", "port": 50000, "direct": true,
 		"method": "2022-blake3-aes-128-gcm",
 	}
 	for k, v := range extra {
@@ -101,14 +101,14 @@ func TestForwardTargetResolvingToServerIsRejected(t *testing.T) {
 	serverID, _ := p.enroll("forward-server")
 	self := map[string]any{
 		"serverId": serverID, "name": "self", "network": "tcp",
-		"port": 18080, "targetHost": "203.0.113.10", "targetPort": 9999, "enabled": true,
+		"port": 18080, "targets": []map[string]any{{"host": "203.0.113.10", "port": 9999}}, "enabled": true,
 	}
 	if code, out, _ := p.do("POST", "/api/forwards", self, nil); code != 409 {
 		t.Fatalf("forward to the server's own address should be rejected: %d %v", code, out)
 	}
 	unresolvable := map[string]any{
 		"serverId": serverID, "name": "ghost", "network": "tcp",
-		"port": 18081, "targetHost": "nonexistent.invalid", "targetPort": 9999, "enabled": true,
+		"port": 18081, "targets": []map[string]any{{"host": "nonexistent.invalid", "port": 9999}}, "enabled": true,
 	}
 	// The panel's resolver is not the relay's (split-horizon names, a DDNS name
 	// that is briefly down); the agent resolves at run time and applies the
@@ -118,7 +118,7 @@ func TestForwardTargetResolvingToServerIsRejected(t *testing.T) {
 	}
 	loopback := map[string]any{
 		"serverId": serverID, "name": "loop", "network": "tcp",
-		"port": 18082, "targetHost": "127.0.0.1", "targetPort": 9999, "enabled": true,
+		"port": 18082, "targets": []map[string]any{{"host": "127.0.0.1", "port": 9999}}, "enabled": true,
 	}
 	if code, out, _ := p.do("POST", "/api/forwards", loopback, nil); code != 409 {
 		t.Fatalf("forward to loopback should be rejected: %d %v", code, out)
@@ -265,7 +265,7 @@ func TestWeakSecretRejected(t *testing.T) {
 func TestListPaginationEnvelope(t *testing.T) {
 	p := newTestMui(t)
 	for _, name := range []string{"page-a", "page-b", "page-c"} {
-		if code, _, _ := p.do("POST", "/api/servers", map[string]any{"name": name, "country": "SG", "ipv4": "203.0.113.10"}, nil); code != 201 {
+		if code, _, _ := p.do("POST", "/api/servers", map[string]any{"name": name, "roles": []string{"exit"}, "country": "SG", "ipv4": "203.0.113.10"}, nil); code != 201 {
 			t.Fatalf("server %s: %d", name, code)
 		}
 	}
@@ -467,7 +467,7 @@ func TestReportArrayLimit(t *testing.T) {
 // TestEnrollReturnsPanelPublicKey: enrollment returns the panel signing key.
 func TestEnrollReturnsPanelPublicKey(t *testing.T) {
 	p := newTestMui(t)
-	code, out, _ := p.do("POST", "/api/servers", map[string]any{"name": "key-server", "country": "SG", "ipv4": "203.0.113.10"}, nil)
+	code, out, _ := p.do("POST", "/api/servers", map[string]any{"name": "key-server", "roles": []string{"exit"}, "country": "SG", "ipv4": "203.0.113.10"}, nil)
 	if code != 201 {
 		t.Fatalf("server: %d %v", code, out)
 	}

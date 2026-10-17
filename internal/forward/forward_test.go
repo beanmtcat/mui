@@ -45,7 +45,7 @@ func TestTCPForwardCreatesNewConnection(t *testing.T) {
 		_, _ = io.Copy(conn, conn)
 	}()
 	port := freePort(t, "tcp")
-	rule := shared.ForwardRule{ID: "tcp", Name: "test", Network: "tcp", Listen: "127.0.0.1", Port: port, TargetHost: "127.0.0.1", TargetPort: target.Addr().(*net.TCPAddr).Port, Enabled: true}
+	rule := shared.ForwardRule{ID: "tcp", Name: "test", Network: "tcp", Listen: "127.0.0.1", Port: port, Targets: []shared.ForwardTarget{{Host: "127.0.0.1", Port: target.Addr().(*net.TCPAddr).Port}}, Enabled: true}
 	service, err := Start([]shared.ForwardRule{rule})
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +88,7 @@ func TestUDPForwardRepliesToOriginalClient(t *testing.T) {
 		}
 	}()
 	port := freePort(t, "udp")
-	rule := shared.ForwardRule{ID: "udp", Name: "test", Network: "udp", Listen: "127.0.0.1", Port: port, TargetHost: "127.0.0.1", TargetPort: target.LocalAddr().(*net.UDPAddr).Port, Enabled: true}
+	rule := shared.ForwardRule{ID: "udp", Name: "test", Network: "udp", Listen: "127.0.0.1", Port: port, Targets: []shared.ForwardTarget{{Host: "127.0.0.1", Port: target.LocalAddr().(*net.UDPAddr).Port}}, Enabled: true}
 	service, err := Start([]shared.ForwardRule{rule})
 	if err != nil {
 		t.Fatal(err)

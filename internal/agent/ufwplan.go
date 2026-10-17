@@ -19,7 +19,7 @@ func validFirewallPolicy(policy string) bool {
 	// Empty means "all": older states leave the policy unset and expect the
 	// port open, so an empty policy is the default, not an unknown value.
 	switch policy {
-	case "", "all", "restricted", "manual":
+	case "", "all", "restricted", "manual", "closed":
 		return true
 	}
 	return false
@@ -173,7 +173,7 @@ func ownedRules(state shared.DesiredState) []shared.FirewallRule {
 	}
 	for _, item := range state.Nodes {
 		n := item.Node
-		if !n.Enabled || n.FirewallPolicy == "manual" {
+		if !n.Enabled || n.FirewallPolicy == "manual" || n.FirewallPolicy == "closed" {
 			continue
 		}
 		if !validFirewallPolicy(n.FirewallPolicy) || !validRuleID.MatchString(n.ID) || !validPort(n.Port) {
@@ -206,7 +206,7 @@ func ownedRules(state shared.DesiredState) []shared.FirewallRule {
 		}
 	}
 	for _, forward := range state.Forwards {
-		if !forward.Enabled || forward.FirewallPolicy == "manual" {
+		if !forward.Enabled || forward.FirewallPolicy == "manual" || forward.FirewallPolicy == "closed" {
 			continue
 		}
 		if !validFirewallPolicy(forward.FirewallPolicy) || !validRuleID.MatchString(forward.ID) || !validPort(forward.Port) || !validNetwork(forward.Network) {
@@ -255,12 +255,12 @@ var defaultIncomingDeny = regexp.MustCompile(`(?im)^[ \t]*Default:\s*(?:deny|rej
 
 func restrictedNodesNeedDeny(state shared.DesiredState) bool {
 	for _, item := range state.Nodes {
-		if item.Node.Enabled && item.Node.FirewallPolicy == "restricted" {
+		if item.Node.Enabled && (item.Node.FirewallPolicy == "restricted" || item.Node.FirewallPolicy == "closed") {
 			return true
 		}
 	}
 	for _, forward := range state.Forwards {
-		if forward.Enabled && forward.FirewallPolicy == "restricted" {
+		if forward.Enabled && (forward.FirewallPolicy == "restricted" || forward.FirewallPolicy == "closed") {
 			return true
 		}
 	}

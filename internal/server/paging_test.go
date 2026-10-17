@@ -84,7 +84,7 @@ func TestLogsArePagedAndFiltered(t *testing.T) {
 	}
 
 	// Subscription downloads, filtered by customer.
-	_, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": idA, "name": "n", "protocol": "ss", "port": 50001}, nil)
+	_, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": idA, "name": "n", "protocol": "ss", "port": 50001}, nil)
 	_, customer, _ := p.do("POST", "/api/customers", map[string]string{"name": "Alice"}, nil)
 	_, mine, _ := p.do("POST", "/api/subscriptions", map[string]any{"name": "mine", "format": "sing-box", "nodeIds": []string{node["id"].(string)}, "customerId": customer["id"]}, nil)
 	_, other, _ := p.do("POST", "/api/subscriptions", map[string]any{"name": "other", "format": "sing-box", "nodeIds": []string{node["id"].(string)}}, nil)

@@ -24,6 +24,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -330,6 +331,10 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/forwards", a.require(a.forwards))
 	mux.HandleFunc("PATCH /api/forwards/{id}", a.require(a.forwardByID))
 	mux.HandleFunc("DELETE /api/forwards/{id}", a.require(a.forwardByID))
+	mux.HandleFunc("GET /api/routes", a.require(a.routes))
+	mux.HandleFunc("POST /api/routes", a.require(a.routes))
+	mux.HandleFunc("PATCH /api/routes/{id}", a.require(a.routeByID))
+	mux.HandleFunc("DELETE /api/routes/{id}", a.require(a.routeByID))
 	mux.HandleFunc("GET /api/subscriptions", a.require(a.subscriptions))
 	mux.HandleFunc("GET /api/customers", a.require(a.customers))
 	mux.HandleFunc("POST /api/customers", a.require(a.customers))
@@ -448,8 +453,11 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
-func (a *App) installCommand(serverID, token, purpose string) string {
-	if purpose != "relay" {
+// installCommand installs sing-box ("node") only on an exit server; the
+// others run forwards alone ("relay").
+func (a *App) installCommand(serverID, token string, server shared.Server) string {
+	purpose := "relay"
+	if shared.HasRole(server, shared.RoleExit) {
 		purpose = "node"
 	}
 	pipeline := "curl -fsSL " + shellQuote(a.PublicURL+"/download/install.sh") +
@@ -958,20 +966,21 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 	// Only administrator-supplied fields are copied. Agent-reported fields
 	// (AppliedRevision, AgentBuild, LastSeen, DetectedIPv4/IPv6, UFWRules,
 	// SSHPorts, ...) are never writable at creation.
-	purpose := in.Purpose
-	if purpose == "" {
-		purpose = "node"
-	}
-	if purpose != "node" && purpose != "relay" {
-		errorJSON(w, 400, "服务器用途无效")
+	roles, err := validRoles(in.Roles)
+	if err != nil {
+		errorJSON(w, 400, err.Error())
 		return
 	}
 	srv := shared.Server{
-		ID: ID(), Name: in.Name, Purpose: purpose,
+		ID: ID(), Name: in.Name, Roles: roles,
 		Country: strings.ToUpper(in.Country), Region: in.Region, City: in.City,
 		Provider: in.Provider, Tags: in.Tags, Notes: in.Notes,
-		IPv4: in.IPv4, IPv6: in.IPv6, Domain: in.Domain,
+		IPv4: in.IPv4, IPv6: in.IPv6, Domain: in.Domain, InternalAddress: strings.TrimSpace(in.InternalAddress),
 		Status: "pending", UFWStatus: "unknown",
+	}
+	if err = validInternalAddress(srv.InternalAddress); err != nil {
+		errorJSON(w, 400, err.Error())
+		return
 	}
 	if strings.TrimSpace(srv.Name) == "" || len(srv.Country) != 2 || (srv.IPv4 == "" && srv.IPv6 == "" && srv.Domain == "") {
 		errorJSON(w, 400, "需填写名称、国家代码和公网地址或域名")
@@ -982,13 +991,13 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := Token()
-	_, err := a.Store.DB.Exec(`INSERT INTO mui_servers(id,data,enroll_hash,enroll_expires) VALUES($1,$2,$3,$4)`, srv.ID, Marshal(srv), Hash(token), time.Now().Add(10*time.Minute).Unix())
+	_, err = a.Store.DB.Exec(`INSERT INTO mui_servers(id,data,enroll_hash,enroll_expires) VALUES($1,$2,$3,$4)`, srv.ID, Marshal(srv), Hash(token), time.Now().Add(10*time.Minute).Unix())
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
 	}
 	a.Store.Audit("server.create", srv.ID, srv.Name)
-	writeJSON(w, 201, map[string]any{"server": srv, "enrollToken": token, "installCommand": a.installCommand(srv.ID, token, srv.Purpose)})
+	writeJSON(w, 201, map[string]any{"server": srv, "enrollToken": token, "installCommand": a.installCommand(srv.ID, token, srv)})
 }
 
 // serverStatus derives what the stored status cannot express: a server that
@@ -1156,7 +1165,11 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 	// PATCH writes the whole server document, including fields supplied by
 	// heartbeats. Share their lock so neither writer restores an older snapshot.
 	unlock := a.lockServer(id)
-	defer unlock()
+	defer func() {
+		if unlock != nil {
+			unlock()
+		}
+	}()
 	old, err := a.Store.Server(id)
 	if err != nil {
 		errorJSON(w, 404, "服务器不存在")
@@ -1171,6 +1184,19 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		rules, _ := a.Store.Rules(id)
 		forwards, _ := a.Store.Forwards(id)
 		certs, _ := a.Store.Certificates(id)
+		routes, err := a.Store.Routes()
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		nodeMap := map[string]shared.Node{}
+		for _, n := range nodes {
+			nodeMap[n.ID] = n
+		}
+		if names := routesUsing(routes, nodeMap, id, ""); len(names) > 0 {
+			errorJSON(w, 409, "服务器被链路 "+strings.Join(names, "、")+" 使用，请先修改或删除这些链路")
+			return
+		}
 		if (len(nodes) > 0 || len(rules) > 0 || len(forwards) > 0 || len(certs) > 0) && r.URL.Query().Get("force") != "1" {
 			errorJSON(w, 409, "该服务器仍有节点、转发、规则或证书；离线服务器可强制删除")
 			return
@@ -1188,32 +1214,34 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	old.Name = in.Name
-	if in.Purpose == "" {
-		in.Purpose = "node"
-	}
-	if in.Purpose != "node" && in.Purpose != "relay" {
-		errorJSON(w, 400, "服务器用途无效")
+	roles, err := validRoles(in.Roles)
+	if err != nil {
+		errorJSON(w, 400, err.Error())
 		return
 	}
-	if old.Purpose == "" {
-		old.Purpose = "node"
-	}
-	if old.AgentVersion != "" && in.Purpose != old.Purpose {
-		errorJSON(w, 409, "已接入的服务器请通过 sing-box 安装操作转换用途")
+	in.InternalAddress = strings.TrimSpace(in.InternalAddress)
+	if err = validInternalAddress(in.InternalAddress); err != nil {
+		errorJSON(w, 400, err.Error())
 		return
 	}
-	if in.Purpose == "relay" && old.Purpose != "relay" {
+	hadExit, wantExit := shared.HasRole(old, shared.RoleExit), slices.Contains(roles, shared.RoleExit)
+	if wantExit && !hadExit && old.AgentVersion != "" && old.CoreBuild == "" {
+		errorJSON(w, 409, "该服务器没有 sing-box；请在服务器列表安装 sing-box，安装成功后自动成为落地")
+		return
+	}
+	if hadExit && !wantExit {
 		nodes, err := a.Store.Nodes(id)
 		if err != nil {
 			errorJSON(w, 500, err.Error())
 			return
 		}
 		if len(nodes) > 0 {
-			errorJSON(w, 409, "该服务器仍有节点，请先删除节点再切换为仅转发")
+			errorJSON(w, 409, "该服务器仍有节点，请先删除节点再取消落地类型")
 			return
 		}
 	}
-	old.Purpose = in.Purpose
+	old.Roles = roles
+	old.InternalAddress = in.InternalAddress
 	old.Country = strings.ToUpper(in.Country)
 	old.Region = in.Region
 	old.City = in.City
@@ -1231,7 +1259,29 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "IP 格式无效")
 		return
 	}
+	world, err := a.loadRouteWorld()
+	if err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
+	world.servers[id] = old
+	for _, rt := range world.routes {
+		if slices.Contains(routeServers(rt), id) || world.nodes[rt.NodeID].ServerID == id {
+			if err := world.checkRouteShape(rt); err != nil {
+				errorJSON(w, 409, "链路“"+rt.Name+"”将失效："+err.Error())
+				return
+			}
+		}
+	}
 	if err = a.Store.PutServer(old); err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
+	// syncRoutes may queue this server's own forwards and takes its lock.
+	// The document write is complete; release before reconciling routes.
+	unlock()
+	unlock = nil
+	if err = a.syncRoutes(); err != nil {
 		errorJSON(w, 500, err.Error())
 		return
 	}
@@ -1251,7 +1301,7 @@ func (a *App) enrollment(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]string{"enrollToken": token, "installCommand": a.installCommand(id, token, server.Purpose)})
+	writeJSON(w, 200, map[string]string{"enrollToken": token, "installCommand": a.installCommand(id, token, server)})
 }
 
 func normalizeNodeTemplate(t *shared.NodeTemplate) {
@@ -1457,6 +1507,7 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 	n := in.Node
 	n.ShadowTLSHost = strings.TrimSpace(n.ShadowTLSHost)
 	n.ID = ID()
+	n.RouteSources = "" // No route ends here yet.
 	n.CreatedAt = time.Now()
 	n.Status = "pending"
 	n.Deleting = false
@@ -1470,7 +1521,7 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 	if n.Method == "" {
 		n.Method = "2022-blake3-aes-128-gcm"
 	}
-	policy, sources, accessErr := shared.NormalizeFirewallAccess(n.FirewallPolicy, n.FirewallSources)
+	policy, sources, accessErr := shared.NormalizeAdminFirewallAccess(n.FirewallPolicy, n.FirewallSources)
 	if accessErr != nil {
 		errorJSON(w, 400, accessErr.Error())
 		return
@@ -1488,8 +1539,8 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "服务器不存在")
 		return
 	}
-	if server.Purpose == "relay" {
-		errorJSON(w, 409, "该服务器为仅转发模式；请先在服务器列表安装 sing-box")
+	if !shared.HasRole(server, shared.RoleExit) {
+		errorJSON(w, 409, "只有落地服务器可以建节点；请先在服务器列表把它设为落地（未装 sing-box 的需先安装）")
 		return
 	}
 	var cert *shared.Certificate
@@ -1651,6 +1702,15 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "DELETE" {
+		routes, err := a.Store.Routes()
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		if names := routesUsing(routes, nil, "", id); len(names) > 0 {
+			errorJSON(w, 409, "节点被链路 "+strings.Join(names, "、")+" 使用，请先修改或删除这些链路")
+			return
+		}
 		old.Deleting = true
 		old.Error = ""
 		password, _ := a.Store.NodeSecret(id)
@@ -1682,6 +1742,7 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 	n.ShadowTLSHost = strings.TrimSpace(n.ShadowTLSHost)
 	n.ID = old.ID
 	n.ServerID = old.ServerID
+	n.RouteSources = old.RouteSources
 	n.CreatedAt = old.CreatedAt
 	n.Status = "pending"
 	n.Deleting = false
@@ -1694,7 +1755,7 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 	if n.SnellVersion == 0 && n.Protocol == "snell" {
 		n.SnellVersion = 5
 	}
-	policy, sources, accessErr := shared.NormalizeFirewallAccess(n.FirewallPolicy, n.FirewallSources)
+	policy, sources, accessErr := shared.NormalizeAdminFirewallAccess(n.FirewallPolicy, n.FirewallSources)
 	if accessErr != nil {
 		errorJSON(w, 400, accessErr.Error())
 		return
@@ -1721,13 +1782,21 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
+	routes, err := a.Store.Routes()
+	if err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
 	for _, sub := range subs {
-		for _, nodeID := range sub.NodeIDs {
-			if nodeID == n.ID {
-				if err := validateSubscriptionNode(sub.Format, n); err != nil {
-					errorJSON(w, 400, "节点被订阅“"+sub.Name+"”使用："+err.Error())
-					return
-				}
+		direct := slices.Contains(sub.NodeIDs, n.ID)
+		if direct && !n.Direct {
+			errorJSON(w, 409, "节点被订阅“"+sub.Name+"”直连使用，不能关闭直连")
+			return
+		}
+		if direct || slices.Contains(subscriptionNodeIDs(sub, routes), n.ID) {
+			if err := validateSubscriptionNode(sub.Format, n); err != nil {
+				errorJSON(w, 400, "节点被订阅“"+sub.Name+"”使用："+err.Error())
+				return
 			}
 		}
 	}
@@ -1750,6 +1819,10 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := a.checkNodeForwardPort(n); err != nil {
+		errorJSON(w, 409, err.Error())
+		return
+	}
+	if err := a.checkNodeRoutes(n); err != nil {
 		errorJSON(w, 409, err.Error())
 		return
 	}
@@ -1789,6 +1862,11 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err = a.queueApply(n.ServerID, "nodes.apply"); err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
+	// A new port or protocol changes the last hop of the routes ending here.
+	if err = a.syncRoutes(); err != nil {
 		errorJSON(w, 500, err.Error())
 		return
 	}
@@ -2065,12 +2143,27 @@ func (a *App) subscriptions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		linkRows.Close()
+		var world *routeWorld
+		if slices.ContainsFunc(list, func(s shared.Subscription) bool { return len(s.RouteIDs) > 0 }) {
+			loaded, err := a.loadRouteWorld()
+			if err != nil {
+				errorJSON(w, 500, err.Error())
+				return
+			}
+			world = &loaded
+		}
 		for i := range list {
 			list[i].Uplink, list[i].Downlink = totals[list[i].ID][0], totals[list[i].ID][1]
 			list[i].LinkAvailable = hasLink[list[i].ID]
 			if list[i].Enabled && (list[i].ExpiresAt == nil || time.Now().Before(*list[i].ExpiresAt)) {
-				if _, _, pending, err := a.subscriptionItems(list[i]); err == nil {
-					list[i].PendingNodeIDs = pending
+				if _, _, pending, err := a.subscriptionItems(list[i], world); err == nil {
+					for _, id := range pending {
+						if slices.Contains(list[i].RouteIDs, id) {
+							list[i].PendingRouteIDs = append(list[i].PendingRouteIDs, id)
+						} else {
+							list[i].PendingNodeIDs = append(list[i].PendingNodeIDs, id)
+						}
+					}
 				}
 			}
 		}
@@ -2095,16 +2188,9 @@ func (a *App) subscriptions(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "客户不存在")
 		return
 	}
-	for _, id := range in.NodeIDs {
-		n, err := a.Store.Node(id)
-		if err != nil {
-			errorJSON(w, 400, "节点不存在: "+id)
-			return
-		}
-		if err := validateSubscriptionNode(in.Format, n); err != nil {
-			errorJSON(w, 400, err.Error())
-			return
-		}
+	if err := a.checkSubscriptionMembers(in); err != nil {
+		errorJSON(w, 400, err.Error())
+		return
 	}
 	in.ID = ID()
 	in.Enabled = true
@@ -2117,13 +2203,13 @@ func (a *App) subscriptions(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	in.Uplink, in.Downlink, in.URL, in.PendingNodeIDs, in.LinkAvailable = 0, 0, "", nil, false
+	in.Uplink, in.Downlink, in.URL, in.PendingNodeIDs, in.PendingRouteIDs, in.LinkAvailable = 0, 0, "", nil, nil, false
 	_, err = a.Store.DB.Exec(`INSERT INTO mui_subscriptions(id,data,token_hash,token_enc) VALUES($1,$2,$3,$4)`, in.ID, Marshal(in), Hash(token), sealed)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	if err = a.queueSubscriptionApply(in.NodeIDs); err != nil {
+	if err = a.queueSubscriptionsApply(in); err != nil {
 		errorJSON(w, 500, err.Error())
 		return
 	}
@@ -2203,7 +2289,7 @@ func (a *App) subscriptionByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = a.Store.DB.Exec(`DELETE FROM mui_subscription_expiry_applied WHERE subscription_id=$1`, id)
-		if err = a.queueSubscriptionApply(old.NodeIDs); err != nil {
+		if err = a.queueSubscriptionsApply(*old); err != nil {
 			errorJSON(w, 500, err.Error())
 			return
 		}
@@ -2223,22 +2309,16 @@ func (a *App) subscriptionByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "客户不存在")
 		return
 	}
-	for _, nodeID := range in.NodeIDs {
-		n, err := a.Store.Node(nodeID)
-		if err != nil {
-			errorJSON(w, 400, "节点不存在: "+nodeID)
-			return
-		}
-		if err := validateSubscriptionNode(in.Format, n); err != nil {
-			errorJSON(w, 400, err.Error())
-			return
-		}
+	if err := a.checkSubscriptionMembers(in); err != nil {
+		errorJSON(w, 400, err.Error())
+		return
 	}
-	previousNodeIDs := append([]string(nil), old.NodeIDs...)
+	previous := *old
 	old.Name = in.Name
 	old.CustomerID = in.CustomerID
 	old.Format = in.Format
 	old.NodeIDs = in.NodeIDs
+	old.RouteIDs = in.RouteIDs
 	old.Enabled = in.Enabled
 	old.ExpiresAt = in.ExpiresAt
 	_, err := a.Store.DB.Exec(`UPDATE mui_subscriptions SET data=$1 WHERE id=$2`, Marshal(old), id)
@@ -2247,12 +2327,60 @@ func (a *App) subscriptionByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = a.Store.DB.Exec(`DELETE FROM mui_subscription_expiry_applied WHERE subscription_id=$1`, id)
-	if err = a.queueSubscriptionApply(append(previousNodeIDs, old.NodeIDs...)); err != nil {
+	if err = a.queueSubscriptionsApply(previous, *old); err != nil {
 		errorJSON(w, 500, err.Error())
 		return
 	}
 	a.Store.Audit("subscription.update", id, old.Name)
 	writeJSON(w, 200, old)
+}
+
+// checkSubscriptionMembers validates a subscription's direct nodes and routes.
+func (a *App) checkSubscriptionMembers(sub shared.Subscription) error {
+	for _, id := range sub.NodeIDs {
+		n, err := a.Store.Node(id)
+		if err != nil {
+			return errors.New("节点不存在: " + id)
+		}
+		if !n.Direct {
+			return errors.New("节点“" + n.Name + "”未开启直连，只能通过链路订阅")
+		}
+		if err := validateSubscriptionNode(sub.Format, n); err != nil {
+			return err
+		}
+	}
+	routes, err := a.Store.Routes()
+	if err != nil {
+		return err
+	}
+	for _, id := range sub.RouteIDs {
+		i := slices.IndexFunc(routes, func(rt shared.Route) bool { return rt.ID == id })
+		if i < 0 {
+			return errors.New("链路不存在: " + id)
+		}
+		n, err := a.Store.Node(routes[i].NodeID)
+		if err != nil {
+			return errors.New("链路“" + routes[i].Name + "”的落地节点不存在")
+		}
+		if err := validateSubscriptionNode(sub.Format, n); err != nil {
+			return errors.New("链路“" + routes[i].Name + "”：" + err.Error())
+		}
+	}
+	return nil
+}
+
+// queueSubscriptionsApply queues the servers of every node the given
+// subscriptions need a login on.
+func (a *App) queueSubscriptionsApply(subs ...shared.Subscription) error {
+	routes, err := a.Store.Routes()
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for _, sub := range subs {
+		ids = append(ids, subscriptionNodeIDs(sub, routes)...)
+	}
+	return a.queueSubscriptionApply(ids)
 }
 
 func validateSubscriptionNode(format string, n shared.Node) error {
@@ -2316,7 +2444,7 @@ func (a *App) syncExpiredSubscriptions() error {
 		if done == at {
 			continue
 		}
-		if err = a.queueSubscriptionApply(sub.NodeIDs); err != nil {
+		if err = a.queueSubscriptionsApply(sub); err != nil {
 			return err
 		}
 		if _, err = a.Store.DB.Exec(`INSERT INTO mui_subscription_expiry_applied(subscription_id,expires_at) VALUES($1,$2) ON CONFLICT(subscription_id) DO UPDATE SET expires_at=excluded.expires_at`, sub.ID, at); err != nil {
@@ -2383,7 +2511,7 @@ func (a *App) subscriptionDownload(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "订阅无效")
 		return
 	}
-	items, skipped, pending, err := a.subscriptionItems(sub)
+	items, skipped, pending, err := a.subscriptionItems(sub, nil)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
@@ -2438,7 +2566,7 @@ func (a *App) previewSubscription(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "订阅不存在")
 		return
 	}
-	items, skipped, _, err := a.subscriptionItems(*selected)
+	items, skipped, _, err := a.subscriptionItems(*selected, nil)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
@@ -2695,10 +2823,19 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 	if err != nil {
 		return state, err
 	}
+	routes, err := a.Store.Routes()
+	if err != nil {
+		return state, err
+	}
+	subNodes := make([][]string, len(subscriptions))
+	for i, sub := range subscriptions {
+		subNodes[i] = subscriptionNodeIDs(sub, routes)
+	}
 	for _, n := range nodes {
 		if n.Deleting {
 			continue
 		}
+		n.FirewallPolicy, n.FirewallSources = effectiveNodeAccess(n)
 		password, err := a.Store.NodeSecret(n.ID)
 		if err != nil {
 			return state, err
@@ -2711,15 +2848,12 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 		if n.Protocol == "ss" && shared.SSMultiUser(n.Method) {
 			item.Users = append(item.Users, a.Store.SubscriptionUser(n, "direct"))
 		}
-		for _, sub := range subscriptions {
+		for i, sub := range subscriptions {
 			if !sub.Enabled || sub.ExpiresAt != nil && time.Now().After(*sub.ExpiresAt) || n.Protocol == "ss" && !shared.SSMultiUser(n.Method) {
 				continue
 			}
-			for _, id := range sub.NodeIDs {
-				if id == n.ID {
-					item.Users = append(item.Users, a.Store.SubscriptionUser(n, sub.ID))
-					break
-				}
+			if slices.Contains(subNodes[i], n.ID) {
+				item.Users = append(item.Users, a.Store.SubscriptionUser(n, sub.ID))
 			}
 		}
 		if n.CertificateID != "" {
@@ -2858,7 +2992,7 @@ func (a *App) deployment(server shared.Server, state shared.DesiredState) map[st
 		for _, user := range item.Users {
 			subs = append(subs, user.SubscriptionID)
 		}
-		out[item.Node.ID] = shared.NodeDeployment{Fingerprint: a.nodeFingerprint(server, item.Node, item.Password, item.ShadowTLSPassword), Subscriptions: subs}
+		out[item.Node.ID] = shared.NodeDeployment{Fingerprint: a.nodeFingerprint(server, item.Node, item.Password, item.ShadowTLSPassword), Subscriptions: subs, FirewallPolicy: item.Node.FirewallPolicy, FirewallSources: item.Node.FirewallSources}
 	}
 	return out
 }
@@ -2912,7 +3046,9 @@ func (a *App) nodeLive(n shared.Node, server shared.Server, subscriptionID strin
 // subscriptionItems resolves a subscription to the nodes that can be handed
 // out right now. Nodes that cannot are named in skipped, with the reason, and
 // pending lists those that are merely waiting for their server to apply.
-func (a *App) subscriptionItems(sub shared.Subscription) (items []shared.SubscriptionItem, skipped []string, pending []string, err error) {
+// world may be nil; it is then loaded when the subscription has routes. A
+// caller resolving many subscriptions loads it once and passes it in.
+func (a *App) subscriptionItems(sub shared.Subscription, world *routeWorld) (items []shared.SubscriptionItem, skipped []string, pending []string, err error) {
 	items, skipped, pending = []shared.SubscriptionItem{}, []string{}, []string{}
 	for _, id := range sub.NodeIDs {
 		n, e := a.Store.Node(id)
@@ -2947,6 +3083,53 @@ func (a *App) subscriptionItems(sub shared.Subscription) (items []shared.Subscri
 		}
 		// Liveness was just established from what the server runs; the stored
 		// status only says whether the latest edit has been confirmed.
+		item.Node.Status = "active"
+		items = append(items, item)
+	}
+	if len(sub.RouteIDs) == 0 {
+		return items, skipped, pending, nil
+	}
+	if world == nil {
+		loaded, err := a.loadRouteWorld()
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		world = &loaded
+	}
+	for _, rt := range world.routes {
+		if !slices.Contains(sub.RouteIDs, rt.ID) {
+			continue
+		}
+		n, ok := world.nodes[rt.NodeID]
+		if !ok {
+			continue
+		}
+		if !rt.Enabled || !n.Enabled || n.Deleting {
+			skipped = append(skipped, rt.Name+": 链路或落地节点已停用")
+			continue
+		}
+		if e := validateSubscriptionNode(sub.Format, n); e != nil {
+			skipped = append(skipped, rt.Name+": "+e.Error())
+			continue
+		}
+		live, e := a.routeLive(rt, *world, sub.ID)
+		if e != nil {
+			return nil, nil, nil, e
+		}
+		if !live {
+			skipped = append(skipped, rt.Name+": 链路配置尚未全部生效")
+			pending = append(pending, rt.ID)
+			continue
+		}
+		item, e := a.subscriptionItem(sub, n, world.servers[n.ServerID])
+		if e != nil {
+			skipped = append(skipped, rt.Name+": "+e.Error())
+			continue
+		}
+		// Clients dial the entry on the route's port; protocol, logins and
+		// TLS names stay the exit node's, carried through by the forwards.
+		item.Node.ID, item.Node.Name, item.Node.Port = rt.ID, rt.Name, rt.Port
+		item.Node.PublishAddress = clientAddress(world.servers[rt.EntryServerID])
 		item.Node.Status = "active"
 		items = append(items, item)
 	}
@@ -3132,12 +3315,21 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 	}
 	// Detected addresses are kept next to the ones the administrator entered and
 	// only fill them in when nothing was entered; they never overwrite them.
-	server.DetectedIPv4, server.DetectedIPv6 = in.IPv4, in.IPv6
-	if in.IPv4 != "" && server.IPv4 == "" {
-		server.IPv4 = in.IPv4
-	}
-	if in.IPv6 != "" && server.IPv6 == "" {
-		server.IPv6 = in.IPv6
+	// Only full reports carry them: a job result without addresses must not
+	// blank them out.
+	if in.HostReported {
+		if server.DetectedIPv4 != in.IPv4 || server.DetectedIPv6 != in.IPv6 || in.IPv4 != "" && server.IPv4 == "" || in.IPv6 != "" && server.IPv6 == "" {
+			// Route firewalls admit hops by these addresses. The sync takes
+			// the server locks itself, so it runs after this report is done.
+			defer func() { go a.syncRoutesInBackground() }()
+		}
+		server.DetectedIPv4, server.DetectedIPv6 = in.IPv4, in.IPv6
+		if in.IPv4 != "" && server.IPv4 == "" {
+			server.IPv4 = in.IPv4
+		}
+		if in.IPv6 != "" && server.IPv6 == "" {
+			server.IPv6 = in.IPv6
+		}
 	}
 	if in.AgentTime != nil {
 		server.ClockSkewSeconds = int64(in.AgentTime.Sub(now).Seconds())
@@ -3197,8 +3389,9 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
-		if op.Kind == "core.upgrade" && in.JobStatus == "success" && server.Purpose == "relay" {
-			server.Purpose = "node"
+		if op.Kind == "core.upgrade" && in.JobStatus == "success" && !shared.HasRole(server, shared.RoleExit) {
+			// Installing sing-box is what makes a server an exit.
+			server.Roles, _ = validRoles(append(server.Roles, shared.RoleExit))
 			if err = a.Store.PutServer(server); err != nil {
 				errorJSON(w, 500, err.Error())
 				return

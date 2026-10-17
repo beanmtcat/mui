@@ -33,6 +33,7 @@ func (a *App) forwards(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = ID()
+	in.RouteID = ""
 	in.Deleting = false
 	in.Status = "pending"
 	if err := normalizeForward(&in); err != nil {
@@ -59,6 +60,10 @@ func (a *App) forwardByID(w http.ResponseWriter, r *http.Request) {
 	old, err := a.Store.Forward(r.PathValue("id"))
 	if err != nil {
 		errorJSON(w, 404, "转发不存在")
+		return
+	}
+	if old.RouteID != "" {
+		errorJSON(w, 409, "该转发由链路生成，请在链路中修改或删除")
 		return
 	}
 	if r.Method == http.MethodDelete {
@@ -89,7 +94,7 @@ func (a *App) forwardByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "服务器不存在")
 		return
 	}
-	in.ID, in.ServerID = old.ID, old.ServerID
+	in.ID, in.ServerID, in.RouteID = old.ID, old.ServerID, ""
 	in.Deleting, in.Status, in.Error = false, "pending", ""
 	if err := normalizeForward(&in); err != nil {
 		errorJSON(w, 400, err.Error())
@@ -113,12 +118,17 @@ func (a *App) forwardByID(w http.ResponseWriter, r *http.Request) {
 
 func normalizeForward(f *shared.ForwardRule) error {
 	f.Name = strings.TrimSpace(f.Name)
-	f.TargetHost = strings.TrimSpace(f.TargetHost)
+	for i := range f.Targets {
+		f.Targets[i].Host = strings.TrimSpace(f.Targets[i].Host)
+	}
+	if f.Balance == "" {
+		f.Balance = "failover"
+	}
 	f.Uplink, f.Downlink = 0, 0
 	if f.Listen == "" {
 		f.Listen = "0.0.0.0"
 	}
-	policy, sources, err := shared.NormalizeFirewallAccess(f.FirewallPolicy, f.FirewallSources)
+	policy, sources, err := shared.NormalizeAdminFirewallAccess(f.FirewallPolicy, f.FirewallSources)
 	if err != nil {
 		return err
 	}
@@ -136,11 +146,13 @@ func (a *App) checkForward(f shared.ForwardRule, server shared.Server) error {
 			return err
 		}
 	}
-	if sameLocalTarget(f) || f.TargetPort == f.Port && (strings.EqualFold(f.TargetHost, server.Domain) && server.Domain != "" || f.TargetHost == server.IPv4 && server.IPv4 != "" || f.TargetHost == server.IPv6 && server.IPv6 != "") {
-		return errors.New("目标地址不能指向转发自身")
-	}
-	if err := a.checkForwardTargetNotLocal(f, server); err != nil {
-		return err
+	for _, t := range f.Targets {
+		if sameLocalTarget(f, t) || t.Port == f.Port && (strings.EqualFold(t.Host, server.Domain) && server.Domain != "" || t.Host == server.IPv4 && server.IPv4 != "" || t.Host == server.IPv6 && server.IPv6 != "") {
+			return errors.New("目标地址不能指向转发自身")
+		}
+		if err := checkForwardTargetNotLocal(t, server); err != nil {
+			return err
+		}
 	}
 	forwards, err := a.Store.Forwards(f.ServerID)
 	if err != nil {
@@ -175,10 +187,10 @@ func (a *App) checkForward(f shared.ForwardRule, server shared.Server) error {
 // points at the server, or by 127.0.0.1/::1 spellings. Resolution failure
 // rejects the rule (fail-closed) rather than letting an unchecked target
 // through.
-func (a *App) checkForwardTargetNotLocal(f shared.ForwardRule, server shared.Server) error {
+func checkForwardTargetNotLocal(t shared.ForwardTarget, server shared.Server) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	targetIPs, err := (&net.Resolver{}).LookupIP(ctx, "ip", f.TargetHost)
+	targetIPs, err := (&net.Resolver{}).LookupIP(ctx, "ip", t.Host)
 	if err != nil || len(targetIPs) == 0 {
 		// The panel's resolver is not the relay's: a split-horizon name or a
 		// DDNS name that is briefly down resolves there later. The agent
@@ -219,13 +231,13 @@ func listenOverlap(a, b string) bool {
 	return a == b || a == "" || b == "" || a == "0.0.0.0" || b == "0.0.0.0" || a == "::" || b == "::"
 }
 
-func sameLocalTarget(f shared.ForwardRule) bool {
-	if f.TargetPort != f.Port {
+func sameLocalTarget(f shared.ForwardRule, t shared.ForwardTarget) bool {
+	if t.Port != f.Port {
 		return false
 	}
-	target := net.ParseIP(f.TargetHost)
+	target := net.ParseIP(t.Host)
 	if target == nil {
-		if !strings.EqualFold(f.TargetHost, "localhost") {
+		if !strings.EqualFold(t.Host, "localhost") {
 			return false
 		}
 		listen := net.ParseIP(f.Listen)

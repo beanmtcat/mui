@@ -113,7 +113,7 @@ func TestRelayInstallsCoreOnlyWhenRequested(t *testing.T) {
 		t.Fatal(err)
 	}
 	p := newTestMui(t)
-	code, created, _ := p.do("POST", "/api/servers", map[string]any{"name": "relay", "purpose": "relay", "country": "SG", "ipv4": "203.0.113.11"}, nil)
+	code, created, _ := p.do("POST", "/api/servers", map[string]any{"name": "relay", "roles": []string{"transit"}, "country": "SG", "ipv4": "203.0.113.11"}, nil)
 	if code != 201 || !strings.Contains(created["installCommand"].(string), "relay") {
 		t.Fatalf("relay creation: %d %v", code, created)
 	}
@@ -126,7 +126,7 @@ func TestRelayInstallsCoreOnlyWhenRequested(t *testing.T) {
 	if code, out, _ := p.do("POST", "/agent/report", map[string]any{"agentVersion": "0.6.0", "coreSelfUpdate": true, "forwardSupport": true, "arch": "amd64"}, agent); code != 200 {
 		t.Fatalf("Agent report: %d %v", code, out)
 	}
-	if code, _, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": id, "name": "ss", "protocol": "ss", "port": 51000}, nil); code != 409 {
+	if code, _, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": id, "name": "ss", "protocol": "ss", "port": 51000}, nil); code != 409 {
 		t.Fatalf("relay accepted node: %d", code)
 	}
 	if code, out, _ := p.do("POST", "/api/servers/"+id+"/core/upgrade", nil, nil); code != 202 || out["targetBuild"] != want {
@@ -140,7 +140,7 @@ func TestRelayInstallsCoreOnlyWhenRequested(t *testing.T) {
 		t.Fatalf("core install report: %d %v", code, out)
 	}
 	server, err := p.store.Server(id)
-	if err != nil || server.Purpose != "node" || server.CoreBuild != want {
+	if err != nil || !shared.HasRole(server, shared.RoleExit) || server.CoreBuild != want {
 		t.Fatalf("relay not converted after install: %+v %v", server, err)
 	}
 }
@@ -278,7 +278,7 @@ func TestUnsignedReleaseIsRefusedWhenAReleaseKeyIsConfigured(t *testing.T) {
 		t.Fatalf("signed release: %q %v", hash, err)
 	}
 	// The install command hands the public key to the agent for pinning.
-	code, out, _ := p.do("POST", "/api/servers", map[string]any{"name": "s", "country": "SG", "ipv4": "203.0.113.10"}, nil)
+	code, out, _ := p.do("POST", "/api/servers", map[string]any{"name": "s", "roles": []string{"exit"}, "country": "SG", "ipv4": "203.0.113.10"}, nil)
 	if code != 201 || !strings.Contains(out["installCommand"].(string), base64.StdEncoding.EncodeToString(public)) {
 		t.Fatalf("install command without the release key: %d %v", code, out)
 	}

@@ -14,7 +14,7 @@ import (
 func TestOldAgentApplyDoesNotPublishUninstalledSubscriptionCredential(t *testing.T) {
 	p := newTestMui(t)
 	serverID, agent := p.enroll("old-agent")
-	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": serverID, "name": "SS", "protocol": "ss", "port": 50011, "method": "2022-blake3-aes-128-gcm"}, nil)
+	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": serverID, "name": "SS", "protocol": "ss", "port": 50011, "method": "2022-blake3-aes-128-gcm"}, nil)
 	if code != 201 {
 		t.Fatalf("node: %d %v", code, node)
 	}
@@ -42,7 +42,7 @@ func TestSubscriptionUsersAndTraffic(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("capability: %d %v", code, out)
 	}
-	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": serverID, "name": "SS", "protocol": "ss", "port": 50001, "method": "2022-blake3-aes-128-gcm"}, nil)
+	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": serverID, "name": "SS", "protocol": "ss", "port": 50001, "method": "2022-blake3-aes-128-gcm"}, nil)
 	if code != 201 {
 		t.Fatalf("node: %d %v", code, node)
 	}
@@ -153,7 +153,7 @@ func TestSurgeSubscriptionProtocolSupport(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("capability: %d %v", code, out)
 	}
-	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": serverID, "name": "Snell", "protocol": "snell", "port": 50002, "shadowTlsHost": "example.com"}, nil)
+	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": serverID, "name": "Snell", "protocol": "snell", "port": 50002, "shadowTlsHost": "example.com"}, nil)
 	if code != 201 {
 		t.Fatalf("node: %d %v", code, node)
 	}
@@ -194,7 +194,7 @@ func TestSubscriptionAlwaysUsesIndependentCredential(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("Agent: %d %v", code, out)
 	}
-	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": serverID, "name": "SS", "protocol": "ss", "port": 50004, "method": "2022-blake3-aes-128-gcm"}, nil)
+	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": serverID, "name": "SS", "protocol": "ss", "port": 50004, "method": "2022-blake3-aes-128-gcm"}, nil)
 	if code != 201 {
 		t.Fatalf("node: %d %v", code, node)
 	}
@@ -227,7 +227,7 @@ func TestSubscriptionExpiryRemovesNodeUser(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("Agent: %d %v", code, out)
 	}
-	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": serverID, "name": "SS", "protocol": "ss", "port": 50005, "method": "2022-blake3-aes-128-gcm"}, nil)
+	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": serverID, "name": "SS", "protocol": "ss", "port": 50005, "method": "2022-blake3-aes-128-gcm"}, nil)
 	if code != 201 {
 		t.Fatalf("node: %d %v", code, node)
 	}
