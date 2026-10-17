@@ -66,32 +66,55 @@ CREATE DATABASE mui WITH OWNER mui ENCODING 'UTF8';
 
 ## 生产部署
 
-前后端分别构建、分别运行：`mui-web` 使用 Nginx 托管 React 静态文件，`mui-service` 运行 Go 接口服务，容器名分别固定为 `mui-web` 和 `mui-service`。PostgreSQL 使用已有实例，生产 Compose 不创建数据库或备份容器。请求链路为 **已有外层 Nginx（HTTPS）→ `127.0.0.1:8080` 的内层 Nginx（HTTP）→ Go 后端**。浏览器、订阅客户端及 Agent 统一访问外层 Nginx 的公开域名；两层代理保留完整路径。MUI 不占用宿主机 80/443，后端默认不发布宿主机端口。前端无需填写数据库或管理员密钥，也不需要配置 CORS。
+前后端分别构建、分别运行：`mui-web` 使用 Nginx 托管 React 静态文件，`mui-service` 运行 Go 接口服务，容器名分别固定为 `mui-web` 和 `mui-service`。PostgreSQL 使用已有实例，生产 Compose 不创建数据库或备份容器。请求链路为 **已有外层 Nginx（HTTPS）→ `127.0.0.1:8086` 的内层 Nginx（HTTP）→ Go 后端**。浏览器、订阅客户端及 Agent 统一访问外层 Nginx 的公开域名；两层代理保留完整路径。MUI 不占用宿主机 80/443，后端默认映射到 `127.0.0.1:8087`，前后端容器内分别监听 8086、8087。前端无需填写数据库或管理员密钥，也不需要配置 CORS。
 
 **目标服务器上的 Agent 使用宿主机二进制 + systemd 部署，无需安装 Docker。** 下文的生产 Compose 用于面板侧的前端和后端。`deploy/Agent.Dockerfile` 是构建工具：只在构建机编译并导出 `mui-agent`、`sing-box` 到 `bin/<架构>/`，安装脚本随后在目标机下载二进制并安装 systemd 服务。
 
 1. 复制 `deploy/.env.example` 为 `deploy/.env`，填写 `MUI_PUBLIC_URL`（对外的 `https://` 地址），以及已有数据库的 `MUI_DB_HOST`、`MUI_DB_PORT`、`MUI_DB_NAME`、`MUI_DB_USER`、`MUI_DB_PASSWORD` 和 `MUI_DB_SSLMODE`。在数据库中提前创建库和用户（见上文 SQL）；独立生成 `MUI_SECRET` 和管理员密码。`MUI_SECRET` 必须稳定保存，丢失后数据库中的节点密钥与证书私钥无法解密。
    数据库地址必须从容器内可访问：宿主机 PostgreSQL 可填 `host.docker.internal`（Compose 已配置 Linux 宿主机映射），其他服务器填其内网 IP 或域名。`127.0.0.1` 在容器内指后端容器自身。PostgreSQL 需监听对应网卡并允许该客户端连接；不使用数据库 TLS 的可信内网实例可将 `MUI_DB_SSLMODE` 设为 `disable`。
-2. 保持 `MUI_BIND=127.0.0.1:8080`。在已有外层 Nginx 的面板域名 HTTPS `server` 块中加入 `deploy/nginx/mui-edge.location.conf` 的转发配置（已有 `location /` 时替换该块），检查 `nginx -t` 后重载外层 Nginx。证书及 HTTPS 跳转继续由外层管理；内层不配置证书。远程 Agent 访问外部 HTTPS 地址。外层默认与前端容器在同一台主机；若在另一台主机或容器，调整上游地址和 `MUI_BIND`，并将内层入口限制为仅外层可访问。
+2. 保持 `MUI_BIND=127.0.0.1:8086`。在已有外层 Nginx 的面板域名 HTTPS `server` 块中加入 `deploy/nginx/mui-edge.location.conf` 的转发配置（已有 `location /` 时替换该块），检查 `nginx -t` 后重载外层 Nginx。证书及 HTTPS 跳转继续由外层管理；内层不配置证书。远程 Agent 访问外部 HTTPS 地址。外层默认与前端容器在同一台主机；若在另一台主机或容器，调整上游地址和 `MUI_BIND`，并将内层入口限制为仅外层可访问。
 3. 在有 Docker Buildx 的构建机运行 `deploy/build-agent.sh amd64` 和/或 `deploy/build-agent.sh arm64`。脚本默认构建 sing-box v1.14.2；指定经测试的新版本时，把 `vX.Y.Z` 版本标签作为第二个参数。脚本构建带 `with_v2ray_api`、`with_clash_api` 的核心，同时构建 Agent，并生成 `SHA256SUMS`。把所需架构的整个 `bin/<架构>/` 目录放到**面板服务器**的仓库 `bin/` 下，无需复制到每台目标服务器。
-4. 在 `deploy` 目录运行 `docker compose --env-file .env -f compose.yaml up -d --build`。内层 Nginx 提供页面及接口代理，Go 容器只读挂载 `../bin`，通过 Nginx 的 `/download/` 路径提供安装脚本和构建产物。`MUI_PROXY_SUBNET` 默认为 `172.30.17.0/24`，用于前后端通信；Go 自动信任该网段的 Nginx 转发头。若与现有网络重叠，在 `.env` 中更换网段，并同步修改 `MUI_EDGE_PROXY_CIDR`。
+4. 在 `deploy` 目录运行 `docker compose --env-file .env -f compose.yaml up -d --build`。内层 Nginx 提供页面及接口代理，Go 容器只读挂载 `../bin`，通过 Nginx 的 `/download/` 路径提供安装脚本和构建产物。当前 Compose 使用已有的外部网络 `docker_default`，启动前需确认网络存在。用 `docker network inspect docker_default --format '{{json .IPAM.Config}}'` 查看真实网段和网关；`MUI_PROXY_SUBNET` 仅作为 Go 的默认可信代理范围，填写实际网段或单独设置 `MUI_TRUSTED_PROXIES`，修改它不会创建或更改外部网络。`MUI_EDGE_PROXY_CIDR` 则填写外层 Nginx 的实际来源地址。
 5. 目标机需要 Ubuntu 22.04/24.04 或 Debian 12/13、systemd、UFW、OpenSSH，以及 `curl`、`sha256sum`。首次使用前安装 UFW（`apt-get install ufw`），确认 `sshd -T` 能显示管理端口。面板新建服务器时选择类型：带落地类型的下载并安装 Agent 与 sing-box；只做入口、线路、中转的只下载 Agent，不创建 sing-box 账户或服务。在目标机执行显示的一次性接入命令；命令通过位置参数传递接入信息，不需要手动设置环境变量。它从面板下载适配架构的文件，按 `SHA256SUMS` 校验后安装。令牌 10 分钟有效；超时可重新生成。面板的 `MUI_PUBLIC_URL` 在面板服务器的 `.env` 中配置，必须是目标机可访问的 HTTPS 地址。
 6. Agent 上线后，在面板执行“初始化 UFW”。启用 UFW 会按默认策略拒绝 SSH 以外的入站连接；机器上若有别的对外服务，初始化后立即在防火墙页为它们添加允许规则。若机器上 firewalld、nftables、netfilter-persistent 或 shorewall 正在运行，Agent 会拒绝写入 UFW 并在面板提示冲突。AnyTLS 先上传对应域名的 PEM 证书链和私钥。端口从云安全组放行后才能从公网访问。
 
-`MUI_EDGE_PROXY_CIDR` 填外层 Nginx 连接内层容器时的实际来源，Linux 宿主机 Nginx 默认对应 Docker 网关 `172.30.17.1/32`；其他网络或 Docker Desktop 需按实际来源调整。内层只信任该来源的客户端 IP 和 HTTP/HTTPS 转发头，再将确认后的信息传给 Go。`MUI_PUBLIC_URL` 始终填写外部 HTTPS 地址，以生成正确的订阅链接、安装命令和登录 Cookie。仅本机 HTTP 预览时才改为 `http://127.0.0.1:8080`。
+`MUI_EDGE_PROXY_CIDR` 填外层 Nginx 连接内层容器时的实际来源；Linux 宿主机 Nginx 通常对应 Docker 网桥网关，不能直接沿用示例地址。外层 Nginx 在其他容器、其他主机或 Docker Desktop 时同样需按实际来源调整。内层只信任该来源的客户端 IP 和 HTTP/HTTPS 转发头，再将确认后的信息传给 Go。`MUI_PUBLIC_URL` 始终填写外部 HTTPS 地址，以生成正确的订阅链接、安装命令和登录 Cookie。仅本机 HTTP 预览时才改为 `http://127.0.0.1:8086`。
 
 前端更新可以单独执行 `docker compose --env-file .env -f compose.yaml up -d --build --no-deps mui-web`；后端更新将最后的服务名改为 `mui-service`。更新其中一个镜像不需要重新构建另一个。
 
+### 从本机远程发布
+
+使用 `deploy/publish.sh` 通过 SSH 上传源码，在目标 Linux 主机构建镜像并更新容器。本机需要 Bash、SSH 和 tar；目标机需要 Bash、Docker、支持 `up --wait-timeout` 的 Compose v2、tar 和 flock，SSH 用户需有目录写权限及 Docker 权限。使用 SSH 密钥或 ssh-agent；首次连接先用 SSH 确认目标机指纹。
+
+```bash
+cp deploy/publish.env.example deploy/publish.env
+# 编辑 publish.env：SSH_HOST、SSH_PORT、可选 SSH_KEY、REMOTE_DIR（远程绝对路径，如 /root/docker/mui，不使用 ~ 或 $HOME）
+# 编辑 deploy/.env，填写生产数据库、MUI_SECRET、管理员密码和公网 HTTPS 地址
+./deploy/publish.sh --init-env deploy/.env  # 首次：远程已有 .env 时拒绝覆盖
+./deploy/publish.sh                       # 后续：保留远程配置
+./deploy/publish.sh --service frontend    # 只构建和更新前端
+./deploy/publish.sh --service backend     # 只构建和更新后端
+./deploy/publish.sh --with-agent          # 额外发布本地已构建的 Agent/sing-box 下载文件
+```
+
+默认读取 `deploy/publish.env`，也可用 `--config /path/to/publish.env` 指定不同目标的配置。该文件按 Bash 配置读取，不需要手动 `export`。业务配置始终保存在远程 `<REMOTE_DIR>/deploy/.env`，每次发布的源码保存在 `releases/`；成功后 `current` 指向本次版本。源码包不包含本地 `.env`、Git、证书目录或构建缓存。Agent 下载文件保存在远程 `bin/`，只有 `--with-agent` 才更新；它不会自动升级已接入服务器上的 Agent。启用发布签名时，先用相应私钥构建带签名的下载文件。
+
+发布先校验 Compose、构建全部选定镜像，再更新容器并等待健康检查。含前端时还检查通过内层 Nginx 访问后端 `/healthz`。失败返回非零状态，保留诊断目录；已发生的容器更新及数据库迁移不会自动回退。脚本不创建 PostgreSQL、不修改外层 Nginx，也不创建外部 Docker 网络。当前 `compose.yaml` 使用已有的 `docker_default` 网络，请确保它存在，并将 `.env` 的可信代理地址配置为实际网络来源。
+
+如果发布到已有 Compose 项目，`COMPOSE_PROJECT` 需填写原项目名；固定容器名属于其他项目时 Docker 会拒绝创建同名容器。前后端分机部署时，分别准备发布配置：前端设 `COMPOSE_FILES="compose.web.yaml"` 并传 `--service frontend`；后端需要发布内网端口时，设 `COMPOSE_FILES="compose.yaml compose.backend.yaml"` 并传 `--service backend`。
+
+脚本离线测试：`python3 deploy/test-publish.py`（模拟 SSH/Docker，不连接真实服务器）。
+
 ### 前后端部署到不同服务器
 
-后端服务器：使用 `deploy/.env.example` 配置数据库和密钥，设置 `MUI_BACKEND_BIND=10.0.0.10:8080`（替换成后端内网 IP）、`MUI_TRUSTED_PROXIES=10.0.0.20/32`（替换成 Nginx 实际来源 IP），`MUI_PUBLIC_URL` 仍填写前端 HTTPS 域名。启动：
+后端服务器：使用 `deploy/.env.example` 配置数据库和密钥，设置 `MUI_BACKEND_BIND=10.0.0.10:8087`（替换成后端内网 IP）、`MUI_TRUSTED_PROXIES=10.0.0.20/32`（替换成 Nginx 实际来源 IP），`MUI_PUBLIC_URL` 仍填写前端 HTTPS 域名。启动：
 
 ```bash
 cd deploy
 docker compose --env-file .env -f compose.yaml -f compose.backend.yaml up -d --build mui-service
 ```
 
-前端服务器：复制 `deploy/web.env.example` 为 `deploy/.env`，填写 `MUI_BACKEND_URL=http://10.0.0.10:8080`，让已有外层 Nginx 转发到该主机的 `127.0.0.1:8080`，然后启动：
+前端服务器：复制 `deploy/web.env.example` 为 `deploy/.env`，填写 `MUI_BACKEND_URL=http://10.0.0.10:8087`，让已有外层 Nginx 转发到该主机的 `127.0.0.1:8086`，然后启动：
 
 ```bash
 cd deploy
@@ -102,7 +125,7 @@ docker compose --env-file .env -f compose.web.yaml up -d --build
 
 ### 使用宿主机 Nginx
 
-Go 后端可直接通过 `go run ./cmd/server` 或编译后的二进制运行。前端在 `web/` 执行 `npm ci && npm run build` 后，将 `web/dist/` 内容复制到 `/var/www/mui/`。将 `deploy/nginx/routes.conf` 放到 `/etc/nginx/mui/routes.conf`，将 `deploy/nginx/mui-host.conf` 放到 `/etc/nginx/conf.d/mui.conf`，内层默认只监听 `127.0.0.1:8082`，修改 Go 后端地址；外层转发示例的目标端口相应改为 `8082`。内层只信任同机外层 Nginx，外层在别处时需调整监听地址和可信代理 IP。后端 `.env` 的 `MUI_PUBLIC_URL` 填公开 HTTPS 地址，`MUI_TRUSTED_PROXIES` 填 Nginx 的来源 IP（同机为 `127.0.0.1/32`）。执行 `nginx -t` 后重载 Nginx。
+Go 后端可直接通过 `go run ./cmd/server` 或编译后的二进制运行，生产 `.env` 设置 `MUI_LISTEN=127.0.0.1:8087`。前端在 `web/` 执行 `npm ci && npm run build` 后，将 `web/dist/` 内容复制到 `/var/www/mui/`。将 `deploy/nginx/routes.conf` 放到 `/etc/nginx/mui/routes.conf`，将 `deploy/nginx/mui-host.conf` 放到 `/etc/nginx/conf.d/mui.conf`，内层默认只监听 `127.0.0.1:8086`，修改 Go 后端地址，外层转发到该端口。内层只信任同机外层 Nginx，外层在别处时需调整监听地址和可信代理 IP。后端 `.env` 的 `MUI_PUBLIC_URL` 填公开 HTTPS 地址，`MUI_TRUSTED_PROXIES` 填 Nginx 的来源 IP（同机为 `127.0.0.1/32`）。执行 `nginx -t` 后重载 Nginx。
 
 Agent 独立安装并运行 `mui-agent-helper.service`（root，仅接受本机 Agent 的白名单操作）和 `mui-agent.service`（账户 `mui-agent`），无需 sing-box 或转发进程。添加第一条启用的转发规则后，Agent 才创建并启动 `mui-forward.service`（账户 `mui-forward`）；最后一条规则停用或删除后，服务会停止并禁用。落地服务器另安装 `mui-sing-box.service`（账户 `mui-core`）；其他类型无需该服务和二进制。排查时可用 `journalctl -u mui-agent -u mui-agent-helper -f`，有转发时再加 `-u mui-forward`，落地服务器再加 `-u mui-sing-box`。Agent 配置在 `/etc/mui-agent`，核心配置与证书在 `/etc/mui-core`，转发配置在 `/etc/mui-forward`，统计缓存在 `/var/lib/mui-agent`。已有 PostgreSQL 的备份与恢复见下文“备份与恢复”。
 
@@ -126,10 +149,10 @@ Agent 独立安装并运行 `mui-agent-helper.service`（root，仅接受本机 
 | `MUI_DB_URL` | 可选完整连接 URL，优先于上述分项配置；未配置任何 PostgreSQL 参数时使用 SQLite `data/mui.db` |
 | `MUI_PUBLIC_URL` | 对外 HTTPS 地址，用于 Agent 接入命令、安装文件下载与订阅链接 |
 | `MUI_AGENT_BIN_DIR` | 安装文件目录，默认 `bin`；按 `amd64`、`arm64` 子目录存放三个构建产物 |
-| `MUI_LISTEN` | Go 后端监听地址，默认 `:8080`；本地开发使用 `127.0.0.1:8080` |
-| `MUI_BIND` | Nginx 前端 HTTP 的宿主机端口映射，默认 `127.0.0.1:8080` → Nginx 容器 `:8080`，供已有外层 Nginx 转发 |
-| `MUI_BACKEND_URL` | Nginx 的 Go 上游地址，默认 `http://mui-service:8080`；可指向另一台服务器，不加末尾斜线 |
-| `MUI_BACKEND_BIND` | 使用 `compose.backend.yaml` 时发布 Go 后端的地址，默认 `127.0.0.1:8081` |
+| `MUI_LISTEN` | Go 后端监听地址，生产容器为 `:8087`；本地开发使用 `127.0.0.1:8080` |
+| `MUI_BIND` | Nginx 前端 HTTP 的宿主机端口映射，默认 `127.0.0.1:8086` → Nginx 容器 `:8086`，供已有外层 Nginx 转发 |
+| `MUI_BACKEND_URL` | Nginx 的 Go 上游地址，默认 `http://mui-service:8087`；可指向另一台服务器，不加末尾斜线 |
+| `MUI_BACKEND_BIND` | Go 后端宿主机端口映射，默认 `127.0.0.1:8087` |
 | `MUI_PROXY_SUBNET` | Compose 前后端网络，默认 `172.30.17.0/24`；已有 PostgreSQL 不由生产 Compose 管理 |
 | `MUI_DNS_RESOLVER` | Nginx 用于重新解析后端域名的 DNS，Docker 默认 `127.0.0.11` |
 | `MUI_EDGE_PROXY_CIDR` | 内层 Nginx 只采信该来源的客户端 IP 和协议头；Compose 默认 `172.30.17.1/32`（Linux 宿主机外层 Nginx） |

@@ -474,10 +474,18 @@ main > .filters {
 /* Command and link output */
 .commandBox {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   justify-items: start;
   padding: 12px 16px;
   border-top: 1px solid var(--line);
+}
+.commandBox > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.commandBox > div {
+  width: 100%;
 }
 .commandBox > div span {
   margin-left: 10px;
@@ -610,6 +618,9 @@ input[type="checkbox"] {
 .installModal .commandBox {
   padding: 20px;
   border-top: 0;
+}
+.installModal .commandBox pre {
+  white-space: pre-wrap;
 }
 .installModal .hint {
   margin: 0;

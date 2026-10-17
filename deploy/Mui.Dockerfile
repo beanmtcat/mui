@@ -15,5 +15,6 @@ WORKDIR /app
 COPY --from=go-builder /out/mui-server ./mui-server
 RUN mkdir /app/data && chown mui:mui /app/data
 USER mui
-EXPOSE 8080
+ENV MUI_LISTEN=:8087
+EXPOSE 8087
 CMD ["./mui-server"]

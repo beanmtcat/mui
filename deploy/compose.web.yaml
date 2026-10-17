@@ -11,11 +11,11 @@ services:
       MUI_DNS_RESOLVER: ${MUI_DNS_RESOLVER:-127.0.0.11}
       MUI_EDGE_PROXY_CIDR: ${MUI_EDGE_PROXY_CIDR:-172.30.17.1/32}
     ports:
-      - ${MUI_BIND:-127.0.0.1:8080}:8080
+      - ${MUI_BIND:-127.0.0.1:8086}:8086
     networks:
       - proxy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/nginx-health"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8086/nginx-health"]
       interval: 10s
       timeout: 3s
       retries: 5

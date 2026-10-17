@@ -16,7 +16,7 @@
 ```mermaid
 flowchart LR
     UI[React Web 面板] --> EDGE[已有外层 Nginx：HTTPS]
-    EDGE --> WEB[内层 Nginx：HTTP 8080 / 静态文件 / 接口转发]
+    EDGE --> WEB[内层 Nginx：HTTP 8086 / 静态文件 / 接口转发]
     WEB --> API[Go 中心服务：API / 任务 / 订阅]
     API --> DB[(PostgreSQL)]
     EDGE <-->|出站 HTTPS 轮询 + Agent 令牌| A1[服务器 Agent A]
@@ -36,7 +36,7 @@ flowchart LR
 - **链路**：首跳（入口或线路）→ 零到八跳中间跳（中转或线路，每跳可多台组成负载均衡组）→ 落地节点。面板据此在每一跳生成转发规则，整条链路同一端口；中间跳与落地节点只放行上一跳的地址。转发规则支持多个目标，链路转发使用双栈监听和同端口 TCP 健康检查，并按主备或轮询选择。手动纯 UDP 规则默认按套接字错误被动切换及定时重试，只有显式指定 TCP 探测时才检查 TCP。来源未知时禁止公开放行；无链路节点使用 closed 状态移除自动允许规则。
 - **代理核心**：每台服务器运行一个受管的 sing-box 实例，配置多个入站来承载 SS、Snell、AnyTLS。固定经过验证的 sing-box 版本；升级前在测试机验证协议兼容性和统计能力。
 - **端口转发**：同一个 Agent 二进制以独立 `mui-forward` 账户运行转发服务。中心服务保存规则并随期望配置下发，Agent 管理 systemd、UFW、回滚及累计字节上报。TCP 在转发服务器上建立到目标的新连接；UDP 使用按客户端地址分开的会话。
-- **入口与 TLS**：已有外层 Nginx 终止 TLS，并转发到内层前端 Nginx 的 HTTP 入口，Compose 默认只发布 `127.0.0.1:8080`，容器内同样监听 8080，不占用宿主机 80/443；宿主机内层 Nginx 示例监听 8082，避开本机 Go 的 8080。Go 默认只在容器网络提供服务，PostgreSQL 使用容器可访问的已有实例，生产 Compose 只部署 `mui-web` 和 `mui-service`。Go 通过 `MUI_TRUSTED_PROXIES` 信任内层 Nginx；内层仅采信 `MUI_EDGE_PROXY_CIDR` 指定的外层来源所提供的客户端 IP 和协议，外层覆盖客户端提供的转发头。支持容器 Nginx 和宿主机 Nginx，配置文件位于 `deploy/nginx/`。
+- **入口与 TLS**：已有外层 Nginx 终止 TLS，并转发到内层前端 Nginx 的 HTTP 入口，Compose 前端默认发布 `127.0.0.1:8086`，后端发布 `127.0.0.1:8087`，容器内分别监听 8086、8087，不占用宿主机 80/443；宿主机内层 Nginx 示例同样监听 8086，Go 生产监听 8087，PostgreSQL 使用容器可访问的已有实例，生产 Compose 只部署 `mui-web` 和 `mui-service`。Go 通过 `MUI_TRUSTED_PROXIES` 信任内层 Nginx；内层仅采信 `MUI_EDGE_PROXY_CIDR` 指定的外层来源所提供的客户端 IP 和协议，外层覆盖客户端提供的转发头。支持容器 Nginx 和宿主机 Nginx，配置文件位于 `deploy/nginx/`。
 - **首次接入**：面板生成一次性安装令牌；管理员在目标机执行安装命令，从面板服务器下载安装脚本及对应架构的 Agent、sing-box 和校验文件。校验通过后登记 Agent 身份，随后由 Agent 主动连接中心服务，目标服务器无需对公网开放控制 API。
 
 ## 3. 核心数据模型

@@ -4,6 +4,7 @@ services:
     build:
       context: ..
       dockerfile: deploy/Mui.Dockerfile
+      network: host
     restart: unless-stopped
     environment:
       MUI_DB_HOST: ${MUI_DB_HOST:?set MUI_DB_HOST}
@@ -26,12 +27,12 @@ services:
       MUI_TRUSTED_PROXIES: ${MUI_TRUSTED_PROXIES:-${MUI_PROXY_SUBNET:-172.30.17.0/24}}
       MUI_RELEASE_PUBLIC_KEY: ${MUI_RELEASE_PUBLIC_KEY:-}
       MUI_TRAFFIC_RETENTION_DAYS: ${MUI_TRAFFIC_RETENTION_DAYS:-90}
-      MUI_LISTEN: :8080
+      MUI_LISTEN: :8087
     # Allow Linux containers to reach a PostgreSQL instance on the host.
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    expose:
-      - "8080"
+    ports:
+      - ${MUI_BACKEND_BIND:-127.0.0.1:8087}:8087
     volumes:
       # Built by deploy/build-agent.sh; the panel serves these files to new servers.
       - ../bin:/app/bin:ro
@@ -39,7 +40,7 @@ services:
       - default
     healthcheck:
       # The backend image includes bash, so no extra HTTP client is required.
-      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/8080'"]
+      test: ["CMD-SHELL", "bash -c 'cat < /dev/null > /dev/tcp/127.0.0.1/8087'"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -61,20 +62,21 @@ services:
     build:
       context: ..
       dockerfile: deploy/Web.Dockerfile
+      network: host
     restart: unless-stopped
     environment:
-      MUI_BACKEND_URL: ${MUI_BACKEND_URL:-http://mui-service:8080}
+      MUI_BACKEND_URL: ${MUI_BACKEND_URL:-http://mui-service:8087}
       MUI_DNS_RESOLVER: ${MUI_DNS_RESOLVER:-127.0.0.11}
       MUI_EDGE_PROXY_CIDR: ${MUI_EDGE_PROXY_CIDR:-172.30.17.1/32}
     ports:
-      - ${MUI_BIND:-127.0.0.1:8080}:8080
+      - ${MUI_BIND:-127.0.0.1:8086}:8086
     networks:
       - default
     depends_on:
       mui-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/nginx-health"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8086/nginx-health"]
       interval: 10s
       timeout: 3s
       retries: 5

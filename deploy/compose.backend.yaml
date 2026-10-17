@@ -3,4 +3,4 @@
 services:
   mui-service:
     ports:
-      - ${MUI_BACKEND_BIND:-127.0.0.1:8081}:8080
+      - ${MUI_BACKEND_BIND:-127.0.0.1:8087}:8087

@@ -10,8 +10,8 @@ map "$mui_edge_proxy:$http_x_forwarded_proto" $mui_forwarded_proto {
 }
 
 server {
-    listen 8080;
-    listen [::]:8080;
+    listen 8086;
+    listen [::]:8086;
     server_name _;
     root /usr/share/nginx/html;
 
