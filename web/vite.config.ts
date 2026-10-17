@@ -13,7 +13,10 @@ export default defineConfig({
   server: {
     proxy: {
       "/api/": backend,
+      "/agent/": backend,
+      "/download/": backend,
       "^/s/": backend,
+      "/healthz": backend,
     },
   },
   build: {

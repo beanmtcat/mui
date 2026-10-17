@@ -1,3 +1,5 @@
+# Build-only recipe: build-agent.sh exports Linux binaries with --output.
+# Agents are installed on target hosts as systemd services, not containers.
 FROM golang:1.25.1-bookworm AS agent-builder
 WORKDIR /src
 COPY go.mod go.sum ./

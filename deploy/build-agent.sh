@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Run on the build machine. Docker compiles and exports standalone Linux
+# binaries; target servers download them and run systemd services directly.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 arch="${1:-amd64}"

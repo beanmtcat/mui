@@ -1,0 +1,6 @@
+# Publish only the Go backend when Nginx runs on another host or on the host OS.
+# Bind to a private IP and set MUI_TRUSTED_PROXIES to the Nginx source IP/CIDR.
+services:
+  mui-service:
+    ports:
+      - ${MUI_BACKEND_BIND:-127.0.0.1:8081}:8080

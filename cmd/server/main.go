@@ -5,9 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"time"
 
 	"mui/internal/server"
@@ -38,24 +36,6 @@ func main() {
 		log.Fatal(err)
 	}
 	api := app.Handler()
-	root := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/agent/") || strings.HasPrefix(r.URL.Path, "/download/") || strings.HasPrefix(r.URL.Path, "/s/") || r.URL.Path == "/healthz" {
-			api.ServeHTTP(w, r)
-			return
-		}
-		path := filepath.Join("web/dist", filepath.Clean("/"+r.URL.Path))
-		// Files only: ServeFile would answer a directory with a listing.
-		if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
-			http.ServeFile(w, r, path)
-			return
-		}
-		if filepath.Ext(r.URL.Path) != "" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Cache-Control", "no-store")
-		http.ServeFile(w, r, "web/dist/index.html")
-	})
 	address := os.Getenv("MUI_LISTEN")
 	if address == "" {
 		address = ":8080"
@@ -100,7 +80,7 @@ func main() {
 			time.Sleep(6 * time.Hour)
 		}
 	}()
-	serverHTTP := &http.Server{Addr: address, Handler: app.SecurityHeaders(root), ReadHeaderTimeout: 10 * time.Second,
+	serverHTTP := &http.Server{Addr: address, Handler: api, ReadHeaderTimeout: 10 * time.Second,
 		// Request bodies are small JSON documents. There is deliberately no write
 		// timeout: agents download a 100 MB core over whatever link they have.
 		ReadTimeout: time.Minute, IdleTimeout: 2 * time.Minute}

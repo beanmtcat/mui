@@ -1,0 +1,36 @@
+# Standalone frontend for a separate host. Configure MUI_BACKEND_URL in .env.
+services:
+  mui-web:
+    container_name: mui-web
+    build:
+      context: ..
+      dockerfile: deploy/Web.Dockerfile
+    restart: unless-stopped
+    environment:
+      MUI_BACKEND_URL: ${MUI_BACKEND_URL:?set MUI_BACKEND_URL to the Go backend origin}
+      MUI_DNS_RESOLVER: ${MUI_DNS_RESOLVER:-127.0.0.11}
+      MUI_EDGE_PROXY_CIDR: ${MUI_EDGE_PROXY_CIDR:-172.30.17.1/32}
+    ports:
+      - ${MUI_BIND:-127.0.0.1:8080}:8080
+    networks:
+      - proxy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/nginx-health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+networks:
+  proxy:
+    ipam:
+      config:
+        - subnet: ${MUI_PROXY_SUBNET:-172.30.17.0/24}
