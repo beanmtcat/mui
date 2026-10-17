@@ -77,6 +77,13 @@ const tabs: { id: Exclude<Tab, SubPage>; label: string; icon: IconName; children
   },
   { id: "settings", label: "设置", icon: "settings" },
 ];
+// The page lives in the URL hash (#servers, #routes, ...) so that a reload
+// stays on it and the browser's back and forward buttons move between pages.
+const tabIds = new Set<string>(tabs.flatMap((t) => [t.id, ...(t.children || []).map((c) => c.id)]));
+function tabFromHash(): Tab {
+  const id = decodeURIComponent(location.hash.slice(1));
+  return tabIds.has(id) ? (id as Tab) : "dashboard";
+}
 const emptyServer: Partial<Server> = {
   name: "",
   roles: ["exit"],
@@ -247,7 +254,7 @@ function App() {
   });
   const [authed, setAuthed] = useState<boolean | null>(null),
     [totpEnabled, setTotpEnabled] = useState(false),
-    [tab, setTab] = useState<Tab>("dashboard");
+    [tab, setTab] = useState<Tab>(tabFromHash);
   const [opServer, setOpServer] = useState(""),
     [auditQuery, setAuditQuery] = useState(""),
     [auditInput, setAuditInput] = useState(""),
@@ -404,6 +411,18 @@ function App() {
       refreshInFlight.current = false;
     }
   }, [loadAll, opLog, auditLog, accessLog, connectionLog]);
+  useEffect(() => {
+    if (tabFromHash() !== tab) history.pushState(null, "", "#" + tab);
+  }, [tab]);
+  useEffect(() => {
+    const follow = () => setTab(tabFromHash());
+    window.addEventListener("popstate", follow);
+    window.addEventListener("hashchange", follow);
+    return () => {
+      window.removeEventListener("popstate", follow);
+      window.removeEventListener("hashchange", follow);
+    };
+  }, []);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("mui-theme", theme);
