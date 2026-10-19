@@ -27,6 +27,8 @@ type offlineInstallGuide struct {
 	ExampleConfig string            `json:"exampleConfig,omitempty"`
 }
 
+const manualInstallDirectory = "mui-install"
+
 // The same release files serve online and manual installs. Only the latter's
 // small enrollment request needs to run over the target machine's connection.
 func (a *App) offlineInstall(serverID, token string, server shared.Server) offlineInstallGuide {
@@ -83,11 +85,11 @@ func installDownloads(publicURL string, files []string) []installDownload {
 	for _, arch := range []string{"amd64", "arm64"} {
 		download := installDownload{Arch: arch, Files: []installFile{}}
 		var cmd strings.Builder
-		cmd.WriteString("(\nset -eu\nmkdir -p " + shellQuote("mui-install-"+arch) + "\n")
+		cmd.WriteString("(\nset -eu\nmkdir -p \"$HOME/" + manualInstallDirectory + "\"\n")
 		for _, name := range files {
 			url := publicURL + "/download/" + arch + "/" + name
 			download.Files = append(download.Files, installFile{Name: name, URL: url})
-			cmd.WriteString("curl -fL --retry 3 --connect-timeout 15 " + shellQuote(url) + " -o " + shellQuote("mui-install-"+arch+"/"+name) + "\n")
+			cmd.WriteString("curl -fL --retry 3 --connect-timeout 15 " + shellQuote(url) + " -o \"$HOME/" + manualInstallDirectory + "/" + name + "\"\n")
 		}
 		cmd.WriteString(")")
 		download.Command = cmd.String()
@@ -98,7 +100,7 @@ func installDownloads(publicURL string, files []string) []installDownload {
 
 func localInstallPrelude(files, binaries []string) string {
 	var cmd strings.Builder
-	cmd.WriteString("(\nset -eu\numask 077\ncd \"$HOME/mui-install\"\n")
+	cmd.WriteString("(\nset -eu\numask 077\ncd \"$HOME/" + manualInstallDirectory + "\"\n")
 	// Some browsers save text downloads with an extra .txt suffix. Normalize
 	// only when the canonical filename is absent; never replace an existing
 	// manifest or skip its checksum/signature checks.
@@ -108,7 +110,7 @@ func localInstallPrelude(files, binaries []string) string {
 	// Verify the executable before running it. Never use --ignore-missing:
 	// missing binaries or missing/duplicate manifest entries must fail closed.
 	for _, name := range files {
-		cmd.WriteString("test -f " + shellQuote(name) + " || { printf '%s\\n' " + shellQuote("缺少 "+name+"，请将同一发布版本的全部文件上传到 ~/mui-install/。") + " >&2; exit 1; }\n")
+		cmd.WriteString("test -f " + shellQuote(name) + " || { printf '%s\\n' " + shellQuote("缺少 "+name+"，请将同一发布版本的全部文件上传到 ~/"+manualInstallDirectory+"/。") + " >&2; exit 1; }\n")
 	}
 	for _, name := range binaries {
 		cmd.WriteString("test \"$(grep -Ec " + shellQuote(" \\*?"+name+"$") + " SHA256SUMS)\" -eq 1 || { printf '%s\\n' " + shellQuote("SHA256SUMS 中的 "+name+" 条目缺失或重复，请重新下载同一版本文件。") + " >&2; exit 1; }\n")

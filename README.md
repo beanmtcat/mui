@@ -103,7 +103,7 @@ MUI_PUBLIC_URL=https://mui.example.com,https://mui-alt.example.com
 在服务器列表点击 **首次接入 / 手动修复 → 手工安装**，也可在新建服务器后的接入弹窗中选择。文件在本机下载、再上传到目标机；目标机安装时只发送接入请求，不下载二进制。安装后仍需能访问面板，以便上报、接收任务和在线升级。
 
 1. 在目标机运行 `uname -m`：`x86_64` 选择 **amd64**，`aarch64` 选择 **arm64**。选择的是目标服务器架构，不是下载用的电脑架构。
-2. 在弹窗中下载全部文件，或复制“本机下载命令”在 macOS / Linux 电脑执行。该命令会创建 `mui-install-amd64/` 或 `mui-install-arm64/`。所需文件：
+2. 在弹窗中下载全部文件，或复制“本机下载命令”在 macOS / Linux 电脑执行。两种架构均统一下载到本机 `~/mui-install/`，所选架构决定下载内容。所需文件：
 
    | 文件 | 用途 |
    |---|---|
@@ -119,10 +119,10 @@ MUI_PUBLIC_URL=https://mui.example.com,https://mui-alt.example.com
    mkdir -p ~/mui-install
    ```
 
-   使用 SFTP 或 SCP，把第 2 步的**文件**全部上传到此目录，保留原文件名，不要再嵌套一层 `mui-install-amd64` 目录。例如在本机执行（替换 SSH 端口、用户名和目标地址；ARM 机把本地目录改为 `mui-install-arm64`）：
+   使用 SFTP 或 SCP，把第 2 步的**文件**全部上传到此目录，保留原文件名，不要再嵌套一层目录。例如在本机执行（替换 SSH 端口、用户名和目标地址）：
 
    ```bash
-   scp -P 22 mui-install-amd64/* root@目标服务器:~/mui-install/
+   scp -P 22 ~/mui-install/* root@目标服务器:~/mui-install/
    ```
 
 4. 复制弹窗中的“手工安装命令”，在目标机用上传文件的同一用户执行。命令已包含服务器 ID、发布公钥和本次接入令牌，不需要设置环境变量；先检查文件和摘要，再调用本地 `mui-agent install` 验证签名、接入并安装 systemd 服务。root 不需要 sudo，普通用户自动使用 sudo。

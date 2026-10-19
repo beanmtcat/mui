@@ -2888,6 +2888,7 @@ function App() {
                   {localInstallGuide?.downloads.find((d) => d.arch === installArch)?.files.map((file) => <a key={file.name} href={file.url} download={file.name}>{file.name}</a>)}
                 </div>
                 <button className="ghost" type="button" onClick={() => copy(localInstallGuide!.downloads.find((d) => d.arch === installArch)!.command)}>复制本机下载命令（macOS / Linux）</button>
+                <p className="hint">本机下载命令统一保存到 <code>~/mui-install/</code>。</p>
               </section>
               <section className="installStep">
                 <h3>2. 上传到目标服务器{installMethod === "standalone" ? "并配置转发" : ""}</h3>
