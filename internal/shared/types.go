@@ -11,8 +11,8 @@ type Server struct {
 	OfflineExportedAt       *time.Time `json:"offlineExportedAt,omitempty"`
 	ID                      string     `json:"id"`
 	Name                    string     `json:"name"`
-	// Roles is any combination of entry, line, transit and exit. Only an exit
-	// server runs sing-box and carries nodes; the others run forwards.
+	// Roles is any combination of entry, line, transit and exit. Online
+	// transit and exit servers may run sing-box and carry nodes.
 	Roles    []string `json:"roles"`
 	Country  string   `json:"country"`
 	Region   string   `json:"region"`
@@ -209,8 +209,8 @@ type Subscription struct {
 const (
 	RoleEntry   = "entry"   // first hop of a route; subscribable
 	RoleLine    = "line"    // first or middle hop of a route; subscribable
-	RoleTransit = "transit" // middle hop of a route
-	RoleExit    = "exit"    // runs sing-box; its nodes end routes
+	RoleTransit = "transit" // middle hop; may also host nodes
+	RoleExit    = "exit"    // hosts nodes and installs sing-box on enrollment
 )
 
 func HasRole(s Server, role string) bool {
@@ -222,8 +222,21 @@ func HasRole(s Server, role string) bool {
 	return false
 }
 
+// CanHostNodes separates node placement from route hop roles. Offline-managed
+// transit servers only run the standalone forwarder and cannot host nodes.
+func CanHostNodes(s Server) bool {
+	return !OfflineManaged(s) && (HasRole(s, RoleExit) || HasRole(s, RoleTransit))
+}
+
+// InstallsCore says whether the enrollment installer includes sing-box: an
+// exit always does, and a transit keeps the core it already installed so a
+// repair reinstall does not strand its nodes.
+func InstallsCore(s Server) bool {
+	return HasRole(s, RoleExit) || CanHostNodes(s) && s.CoreBuild != ""
+}
+
 // Route carries clients from a first-hop server through zero or more middle
-// hops to a node on an exit server. Every hop listens on the same Port; the
+// hops to a node on an exit or transit server. Every hop listens on the same Port; the
 // panel generates the forwards.
 type Route struct {
 	ID            string     `json:"id"`

@@ -143,13 +143,32 @@ func (p *testMui) enroll(name string) (string, map[string]string) {
 	if code != 200 {
 		p.t.Fatalf("enroll: %d %v", code, agent)
 	}
+	// The default fixture is an exit host, whose installer includes sing-box.
+	server, err := p.store.Server(id)
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	server.CoreBuild = strings.Repeat("a", 64)
+	if err = p.store.PutServer(server); err != nil {
+		p.t.Fatal(err)
+	}
 	return id, map[string]string{"X-Server-ID": id, "Authorization": "Bearer " + agent["agentToken"].(string)}
 }
 
 // newAgent reports the capabilities of a current agent.
 func (p *testMui) newAgent(agent map[string]string) {
 	p.t.Helper()
-	if code, out, _ := p.do("POST", "/agent/report", map[string]any{"agentVersion": "0.6.7", "forwardTcpUdp": true, "manualFirewallSupport": true, "multiUserStats": true, "nodeFirewallPolicies": true, "forwardSupport": true, "shadowTlsAuth": true, "snellFixedPort": true, "snellV6": true, "ufwStatus": "active"}, agent); code != 200 {
+	report := map[string]any{"agentVersion": "0.6.11", "forwardTcpUdp": true, "manualFirewallSupport": true, "multiUserStats": true, "nodeFirewallPolicies": true, "forwardSupport": true, "shadowTlsAuth": true, "snellFixedPort": true, "snellV6": true, "ufwStatus": "active"}
+	// Exit enrollment installs the core. Relay-only test hosts still report no
+	// core until their explicit core installation task succeeds.
+	server, err := p.store.Server(agent["X-Server-ID"])
+	if err != nil {
+		p.t.Fatal(err)
+	}
+	if shared.HasRole(server, shared.RoleExit) && server.CoreBuild == "" {
+		report["coreBuild"] = strings.Repeat("a", 64)
+	}
+	if code, out, _ := p.do("POST", "/agent/report", report, agent); code != 200 {
 		p.t.Fatalf("capabilities: %d %v", code, out)
 	}
 }
@@ -339,7 +358,7 @@ func TestNodeTemplateLifecycle(t *testing.T) {
 		t.Fatalf("update template: %d", code)
 	}
 	stored, err := p.store.NodeTemplate(id)
-	if err != nil || stored.Protocol != "snell" || stored.SnellVersion != 6 || stored.Obfs != "http" || stored.Method != "" {
+	if err != nil || stored.Protocol != "snell" || stored.SnellVersion != 6 || stored.Obfs != "" || stored.Method != "" {
 		t.Fatalf("updated template: %+v %v", stored, err)
 	}
 	if code, _, _ = p.do("DELETE", "/api/node-templates/"+id, nil, nil); code != 200 {

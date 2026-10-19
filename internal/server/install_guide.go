@@ -38,7 +38,7 @@ func (a *App) offlineInstall(serverID, token string, server shared.Server) offli
 func (a *App) offlineInstallAt(publicURL, serverID, token string, server shared.Server) offlineInstallGuide {
 	binaries := []string{"mui-agent"}
 	core := "-"
-	if shared.HasRole(server, shared.RoleExit) {
+	if shared.InstallsCore(server) {
 		binaries = append(binaries, "sing-box")
 		core = "./sing-box"
 	}

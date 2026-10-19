@@ -66,11 +66,14 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 					version = 4
 				}
 				out["version"] = version
+				if version == 6 {
+					out["mode"] = "default"
+				}
 				out["psk"] = item.Password
 				if item.UserKey != "" {
 					out["userkey"] = item.UserKey
 				}
-				if n.Obfs != "" && n.Obfs != "none" {
+				if SnellVersion(n) == 5 && n.Obfs != "" && n.Obfs != "none" {
 					out["obfs_mode"] = n.Obfs
 				}
 				if n.ShadowTLSHost != "" {
@@ -147,7 +150,7 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 					continue
 				}
 				line := fmt.Sprintf("%s = snell, %s, %d, psk=%s, version=%d", n.Name, address, n.Port, item.Password, SnellVersion(n))
-				if n.Obfs == "http" {
+				if SnellVersion(n) == 5 && n.Obfs == "http" {
 					line += ", obfs=http"
 				}
 				lines = append(lines, line+fmt.Sprintf(", shadow-tls-password=%s, shadow-tls-sni=%s, shadow-tls-version=3", item.ShadowTLSPassword, n.ShadowTLSHost))

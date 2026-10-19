@@ -140,9 +140,14 @@ func TestRelayInstallsCoreOnlyWhenRequested(t *testing.T) {
 		t.Fatalf("core install report: %d %v", code, out)
 	}
 	server, err := p.store.Server(id)
-	if err != nil || !shared.HasRole(server, shared.RoleExit) || server.CoreBuild != want {
-		t.Fatalf("relay not converted after install: %+v %v", server, err)
+	if err != nil || !shared.HasRole(server, shared.RoleTransit) || shared.HasRole(server, shared.RoleExit) || server.CoreBuild != want {
+		t.Fatalf("transit role changed or core missing after install: %+v %v", server, err)
 	}
+	p.newAgent(agent)
+	if code, out, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": id, "name": "transit-ss", "protocol": "ss", "port": 51000, "direct": true}, nil); code != 201 {
+		t.Fatalf("installed transit rejected node: %d %v", code, out)
+	}
+	p.applyAll(agent)
 }
 
 func TestAgentUpgradeRejectsBadReleaseAndExpiresUnconfirmed(t *testing.T) {

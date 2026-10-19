@@ -23,6 +23,7 @@ import {
   type Role,
   type InstallGuide,
   roleLabels,
+  canHostNodes,
 } from "./api";
 import "./style.css";
 import OfflineManager from "./components/OfflineManager";
@@ -691,6 +692,15 @@ function App() {
   );
   const hostSelected = useMemo(() => hostSelectable.filter((r) => hostPicked.includes(r.rule)), [hostSelectable, hostPicked]);
   useEffect(() => setHostPicked([]), [fwServer?.id]);
+  const selectedNodeServer = servers.find((s) => s.id === nodeForm.serverId);
+  const nodeCoreMissing = !!selectedNodeServer && canHostNodes(selectedNodeServer) && !selectedNodeServer.coreBuild &&
+    (!!selectedNodeServer.agentVersion || !selectedNodeServer.roles?.includes("exit"));
+  const selectedFormServer = servers.find((s) => s.id === serverForm.id);
+  const serverFormCoreMissing = !!serverForm.id && !!serverForm.agentVersion && canHostNodes(serverForm) && !selectedFormServer?.coreBuild;
+  const serverFormCoreInstalling = operations.some((o) => o.serverId === serverForm.id &&
+    ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status));
+  const nodeCoreInstalling = operations.some((o) => o.serverId === nodeForm.serverId &&
+    ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status));
   const nodeFirewallUnsupported = !!nodeForm.firewallPolicy && nodeForm.firewallPolicy !== "all" &&
     !servers.find((s) => s.id === nodeForm.serverId)?.nodeFirewallPolicies;
   const fwHistory = useMemo(() => operations
@@ -816,6 +826,8 @@ function App() {
     }
   }, []);
   const openServer = (s?: Server) => {
+    setError("");
+    setNotice("");
     setServerForm(s ? { ...s } : { ...emptyServer });
     setModal("server");
   };
@@ -829,7 +841,7 @@ function App() {
     setNodeForm(
       n
         ? { ...n, snellPort: n.snellPort || 20000 + n.port % 10000, password: "", shadowTlsPassword: "" }
-        : { ...emptyNode, serverId: servers.find((s) => s.roles?.includes("exit"))?.id || "" },
+        : { ...emptyNode, serverId: servers.find((s) => canHostNodes(s))?.id || "" },
     );
     setModal("node");
   };
@@ -861,7 +873,7 @@ function App() {
     try {
       const detail = await api<NodeTemplate & { password: string; shadowTlsPassword: string }>(`/api/node-templates/${template.id}`);
       if (request !== templateRequest.current) return;
-      const selectedServer = serverId || servers[0]?.id || "";
+      const selectedServer = serverId || servers.find((s) => canHostNodes(s))?.id || "";
       setNodeForm({
         ...emptyNode,
         serverId: selectedServer,
@@ -951,7 +963,7 @@ function App() {
         setInstallInfo({ ...result, serverName: serverForm.name || "新服务器" });
         return;
       }
-    }, "服务器已保存");
+    }, serverFormCoreMissing ? "服务器类型已保存；尚未安装 sing-box，请在服务器列表安装后创建节点" : "服务器已保存");
     if (ok && serverForm.id) close();
   };
   const submitNode = async (e: React.FormEvent) => {
@@ -1385,14 +1397,14 @@ function App() {
           </div>
         </header>
         {screenshotMode && <div className="banner warning" role="status">截图脱敏已开启：名称、地址、凭据已隐藏，表单暂时只读。关闭后恢复显示。</div>}
-        {error && (
-          <div className="banner error">
+        {error && !modal && (
+          <div className="banner error" role="alert">
             {error}
             <button onClick={() => setError("")}>×</button>
           </div>
         )}
-        {notice && (
-          <div className="banner success">
+        {notice && !modal && (
+          <div className="banner success" role="status">
             {notice}
             <button onClick={() => setNotice("")}>×</button>
           </div>
@@ -1656,7 +1668,7 @@ function App() {
                               });
                             }}
                           >
-                            {s.coreBuild ? "一键升级 sing-box" : s.roles?.includes("exit") ? "安装 sing-box" : "安装 sing-box 并设为落地"}
+                            {s.coreBuild ? "一键升级 sing-box" : canHostNodes(s) ? "安装 sing-box" : "安装 sing-box 并设为落地"}
                           </button>
                           <button
                             onClick={() =>
@@ -2922,10 +2934,10 @@ function App() {
             if (e.target === e.currentTarget) close();
           }}
         >
-          <div className="modal">
+          <div className="modal" role="dialog" aria-modal="true" aria-labelledby="edit-modal-title">
             <div className="modalHead">
               <div>
-                <h2>
+                <h2 id="edit-modal-title">
                   {modal === "server"
                     ? serverForm.id
                       ? "编辑服务器"
@@ -2957,6 +2969,10 @@ function App() {
                 ×
               </button>
             </div>
+            {(error || notice) && <div className={"banner modalFeedback " + (error ? "error" : "success")} role={error ? "alert" : "status"}>
+              <span>{error ? error.replace(/^\/api\/[^\s:]+:\s*/, "") : notice}</span>
+              <button type="button" aria-label={error ? "关闭错误提示" : "关闭操作提示"} onClick={() => error ? setError("") : setNotice("")}>×</button>
+            </div>}
             {modal === "server" && (
               <form className="serverForm" onSubmit={submitServer}>
                 <section className="serverFormSection" aria-labelledby="server-basic-title">
@@ -3025,8 +3041,19 @@ function App() {
                           ))}
                         </div>
                       </fieldset>
-                      <p className="serverFieldHelp">入口、线路可作为首跳；中转、线路可作为中间跳；落地用于搭建节点。</p>
-                      <p className="serverFieldHelp">已接入的服务器需先在列表安装 sing-box，再自动添加落地类型。</p>
+                      <p className="serverFieldHelp">入口、线路可作为首跳；中转、线路可作为中间跳；在线中转和落地都可搭建节点。</p>
+                      <p className="serverFieldHelp">中转服务器建节点前需在列表安装 sing-box，安装后保留中转类型。</p>
+                      {serverFormCoreMissing && <div className="banner warning serverCoreHint" role="status">
+                        <div>
+                          <p>可以保存服务器类型。该服务器尚未安装 sing-box，建节点前需先安装。</p>
+                          <button type="button" className="ghost" disabled={!selectedFormServer?.coreSelfUpdate || !coreReleases[selectedFormServer?.arch || ""] || serverFormCoreInstalling}
+                            onClick={() => act(() => mutation("/api/servers/" + serverForm.id + "/core/upgrade", "POST"), "sing-box 安装已排队，完成后点击刷新安装状态")}>{serverFormCoreInstalling ? "核心安装或升级进行中" : "安装 sing-box"}</button>
+                          <button type="button" className="ghost" disabled={refreshing} onClick={() => void refresh(true)}>{refreshing ? "刷新中…" : "刷新安装状态"}</button>
+                          {!selectedFormServer?.coreSelfUpdate && <p>请先接入支持核心安装的 Agent。</p>}
+                          {!!selectedFormServer?.coreSelfUpdate && !coreReleases[selectedFormServer?.arch || ""] && <p>面板缺少该架构的 sing-box 发布文件。</p>}
+                        </div>
+                      </div>}
+
                     </div>
                   </div>
                 </section>
@@ -3168,8 +3195,8 @@ function App() {
                           : "",
                       })}
                     >
-                      <option value="">选择落地服务器</option>
-                      {servers.filter((s) => s.roles?.includes("exit") || s.id === nodeForm.serverId).map((s) => (
+                      <option value="">选择中转或落地服务器</option>
+                      {servers.filter((s) => canHostNodes(s) || s.id === nodeForm.serverId).map((s) => (
                         <option key={s.id} value={s.id}>
                           {s.name}
                         </option>
@@ -3315,23 +3342,23 @@ function App() {
                   {nodeForm.protocol === "snell" && (
                     <>
                       <Field label="Snell 版本">
-                        <select value={nodeForm.snellVersion || 5} onChange={(e) => setNodeForm({ ...nodeForm, snellVersion: Number(e.target.value) })}>
+                        <select value={nodeForm.snellVersion || 5} onChange={(e) => setNodeForm({ ...nodeForm, snellVersion: Number(e.target.value), obfs: "none" })}>
                           <option value={6}>v6</option><option value={5}>v5</option>
                         </select>
-                        {(nodeForm.snellVersion || 5) === 6 && <small>PSK 需要 12–255 字节；客户端须支持 Snell v6。</small>}
-                        {(nodeForm.snellVersion || 5) === 6 && nodeForm.serverId && !servers.find((s) => s.id === nodeForm.serverId)?.snellV6 && <small className="dangerText">需升级 Agent 至 0.6.9 后应用 v6 配置。</small>}
+                        {(nodeForm.snellVersion || 5) === 6 && <small>PSK 需要 12–255 字节；使用默认流量整形，不使用 HTTP 混淆。</small>}
+                        {(nodeForm.snellVersion || 5) === 6 && nodeForm.serverId && !servers.find((s) => s.id === nodeForm.serverId)?.snellV6 && <small className="dangerText">需升级 Agent 至 0.6.11 后应用 v6 配置。</small>}
                       </Field>
                       <Field label="Snell 内层端口 *">
                         <input required type="number" min={1} max={65535} value={nodeForm.snellPort || ""} onChange={(e) => setNodeForm({ ...nodeForm, snellPort: Number(e.target.value) })} />
                         <small>固定监听 127.0.0.1，不对公网开放；须与其他监听端口不同。</small>
                         {nodeForm.serverId && !servers.find((s) => s.id === nodeForm.serverId)?.snellFixedPort && <small className="dangerText">配置可保存；需升级 Agent 至 0.6.2 或更高版本后才会应用固定内层端口。</small>}
                       </Field>
-                      <Field label="混淆模式">
+                      {(nodeForm.snellVersion || 5) === 5 && <Field label="混淆模式">
                         <select value={nodeForm.obfs || "none"} onChange={(e) => setNodeForm({ ...nodeForm, obfs: e.target.value })}>
                           <option value="none">无</option>
                           <option value="http">HTTP</option>
                         </select>
-                      </Field>
+                      </Field>}
                       <Field label="ShadowTLS v3 SNI / 握手域名 *">
                         <input required placeholder="例如 www.example.com（TLS 站点）" value={nodeForm.shadowTlsHost || ""} onChange={(e) => { clearSelectedTemplate(); setNodeForm({ ...nodeForm, shadowTlsHost: e.target.value }); }} />
                       </Field>
@@ -3412,10 +3439,18 @@ function App() {
                 {manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && <p className="hint">该服务器的防火墙由外部管理。允许直连开关仅决定能否加入直连订阅；实际端口放行、来源白名单和仅链路访问限制请自行配置。</p>}
                 {nodeForm.protocol === "socks5" && !!servers.find((s) => s.id === nodeForm.serverId)?.agentVersion && !servers.find((s) => s.id === nodeForm.serverId)?.agentProxySupport && <div className="banner warning" role="status">配置可以保存；请先将服务器 Agent 升级至 0.6.10，之后才会应用 SOCKS5 节点。</div>}
                 {nodeFirewallUnsupported && <div className="banner warning" role="status">可以保存配置，但该服务器的 Agent 尚未上报支持新规则。更新 Agent 前不会应用此配置，现有 UFW 放行规则仍然生效。</div>}
+                {nodeCoreMissing && <div className="banner warning" role="status">
+                  <p>该服务器需要先安装 sing-box，安装成功后即可创建节点。</p>
+                  <button type="button" className="ghost" disabled={!selectedNodeServer?.coreSelfUpdate || !coreReleases[selectedNodeServer?.arch || ""] || nodeCoreInstalling}
+                    onClick={() => act(() => mutation("/api/servers/" + nodeForm.serverId + "/core/upgrade", "POST"), "sing-box 安装已排队；点击刷新安装状态，完成后提交节点")}>{nodeCoreInstalling ? "sing-box 安装或升级进行中" : "安装 sing-box"}</button>
+                  <button type="button" className="ghost" disabled={refreshing} onClick={() => void refresh(true)}>{refreshing ? "刷新中…" : "刷新安装状态"}</button>
+                  {!selectedNodeServer?.coreSelfUpdate && <p>请先接入支持核心安装的 Agent。</p>}
+                  {!!selectedNodeServer?.coreSelfUpdate && !coreReleases[selectedNodeServer?.arch || ""] && <p>面板缺少该架构的 sing-box 发布文件。</p>}
+                </div>}
                 {nodeForm.protocol === "socks5" && <p className="hint">SOCKS5 支持 TCP，强制用户名密码认证，服务器必须启用 UFW。供入口 Agent 使用时需打开“允许直连”；如限制来源，请放行入口实际出口 IP。仅在可信网络中使用，SOCKS5 本身不加密。</p>}
                 {nodeForm.protocol === "socks5" && (manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) || servers.find((s) => s.id === nodeForm.serverId)?.ufwStatus !== "active") && <div className="banner warning" role="status">请先将该服务器设置为 UFW 托管，并在服务器列表安全初始化防火墙，再提交 SOCKS5 节点。</div>}
                 {templateLoading && <p className="hint">正在读取模板密码…</p>}
-                <button className="primary submit" disabled={templateLoading || (nodeForm.protocol === "socks5" && (manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) || servers.find((s) => s.id === nodeForm.serverId)?.ufwStatus !== "active"))}>提交配置</button>
+                <button className="primary submit" disabled={templateLoading || nodeCoreMissing || (nodeForm.protocol === "socks5" && (manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) || servers.find((s) => s.id === nodeForm.serverId)?.ufwStatus !== "active"))}>提交配置</button>
               </form>
             )}
             {modal === "template" && (
@@ -3480,21 +3515,21 @@ function App() {
                   {templateForm.protocol === "snell" && (
                     <>
                       <Field label="Snell 版本">
-                        <select value={templateForm.snellVersion || 5} onChange={(e) => setTemplateForm({ ...templateForm, snellVersion: Number(e.target.value) })}>
+                        <select value={templateForm.snellVersion || 5} onChange={(e) => setTemplateForm({ ...templateForm, snellVersion: Number(e.target.value), obfs: "none" })}>
                           <option value={6}>v6</option><option value={5}>v5</option>
                         </select>
-                        {(templateForm.snellVersion || 5) === 6 && <small>PSK 需要 12–255 字节；客户端须支持 Snell v6。</small>}
+                        {(templateForm.snellVersion || 5) === 6 && <small>PSK 需要 12–255 字节；使用默认流量整形，不使用 HTTP 混淆。</small>}
                       </Field>
                       <Field label="Snell 内层端口 *">
                         <input required type="number" min={1} max={65535} value={templateForm.snellPort || ""} onChange={(e) => setTemplateForm({ ...templateForm, snellPort: Number(e.target.value) })} />
                         <small>仅监听 127.0.0.1；同一服务器上的节点不能共用。</small>
                       </Field>
-                      <Field label="混淆模式">
+                      {(templateForm.snellVersion || 5) === 5 && <Field label="混淆模式">
                         <select value={templateForm.obfs || "none"} onChange={(e) => setTemplateForm({ ...templateForm, obfs: e.target.value })}>
                           <option value="none">无</option>
                           <option value="http">HTTP</option>
                         </select>
-                      </Field>
+                      </Field>}
                       <Field label="ShadowTLS v3 SNI / 握手域名 *">
                         <input required placeholder="例如 www.example.com（TLS 站点）" value={templateForm.shadowTlsHost || ""} onChange={(e) => setTemplateForm({ ...templateForm, shadowTlsHost: e.target.value })} />
                       </Field>

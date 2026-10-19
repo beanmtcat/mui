@@ -328,7 +328,11 @@ func SingBoxConfig(nodes []ManagedNode, certDir string) ([]byte, error) {
 				return nil, err
 			}
 			base["psk"] = item.Password
-			base["obfs_mode"] = n.Obfs
+			if SnellVersion(n) == 5 {
+				base["obfs_mode"] = n.Obfs
+			} else {
+				base["mode"] = "default"
+			}
 			// Behind ShadowTLS each subscription is authenticated by its own
 			// ShadowTLS password and Snell itself stays single-user: stock Snell
 			// clients such as Surge have no per-user key to send. sing-box carries

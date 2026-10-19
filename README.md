@@ -18,7 +18,7 @@ Surge 的节点订阅通过代理组 `policy-path` 引用。面板“查看链�
 - UFW 托管：初始化时先放行检测到的 SSH 端口；每个节点可选择自动放行所有来源、仅放行指定 IP/CIDR（最多 32 个），或不生成自动规则并用自定义规则管理。SS 自动规则覆盖 TCP/UDP，Snell 与 AnyTLS 覆盖 TCP；只清理带 `mui-` 标记的规则。指定来源模式要求 UFW 默认入站策略为 deny/reject；已有的其他 UFW 允许规则及云安全组仍会影响实际访问。指定来源和节点级手动规则可以先保存；旧 Agent 不会领取相关配置任务，升级至支持该功能的版本并上报能力后才会应用。升级前原有 UFW 放行规则仍会生效。
 - 链路：入口或线路 → 若干跳中转（每跳可多台负载均衡）→ 落地节点，面板在每一跳自动生成转发，详见下文“链路”。
 - 端口转发：协议可选 TCP、UDP、TCP + UDP（Agent 0.6.7 起）；双协议以一条规则共用端口与目标、统一启停删除、合并统计流量。在面板为服务器添加 TCP/UDP 监听端口和一个或多个目标地址与端口（多个目标时主备或轮询，支持 TCP 主动探测或 UDP 被动检查）；支持启停、编辑、删除、累计上/下行统计。**新建转发默认仅放行指定来源（restricted）**，需管理员显式确认才会公开放行所有来源；UFW 托管服务器未启用 UFW 或检测到其他防火墙工具时，转发页会展示 error 横幅。UDP 会话以客户端地址为键、无认证，源地址可被伪造并可能被用于反射，属于 UDP 协议固有风险——不要把转发端口当作认证边界。Agent 使用同一个 `mui-agent` 二进制启动独立的 `mui-forward.service`，进程运行在 `mui-forward` 账户下。TCP 在转发机终止客户端连接并向目标新建连接，因此转发机发送数据的 TCP 段可使用该机的拥塞控制算法（如 BBR）；UDP 使用按客户端地址维护的会话。转发规则会检查节点、SSH 和其他转发的监听端口冲突。尚未升级的 Agent 可以先保存规则，能力上报后自动应用；升级任务不会被待应用规则阻塞。
-- 管理：密码登录与修改、TOTP 启用与关闭、审计、操作记录、失败重试、Agent 凭据吊销、节点密钥加密存储。支持面板分别一键升级 Agent 和 sing-box；非落地服务器可在面板上一键安装 sing-box 并成为落地。Agent 升级不重启 sing-box，sing-box 升级会短暂中断该服务器上的节点连接。
+- 管理：密码登录与修改、TOTP 启用与关闭、审计、操作记录、失败重试、Agent 凭据吊销、节点密钥加密存储。支持面板分别一键升级 Agent 和 sing-box；中转可按需安装 sing-box 并保留中转类型来建节点；入口、线路安装核心后会添加落地类型。Agent 升级不重启 sing-box，sing-box 升级会短暂中断该服务器上的节点连接。
 
 ## 本地开发
 
@@ -76,7 +76,7 @@ CREATE DATABASE mui WITH OWNER mui ENCODING 'UTF8';
 1. 复制 `deploy/.env.example` 为 `deploy/.env`，填写 `MUI_PUBLIC_URL`（对外的 `https://` 地址），以及已有数据库的 `MUI_DB_HOST`、`MUI_DB_PORT`、`MUI_DB_NAME`、`MUI_DB_USER`、`MUI_DB_PASSWORD` 和 `MUI_DB_SSLMODE`。在数据库中提前创建库和用户（见上文 SQL）；独立生成 `MUI_SECRET` 和管理员密码。`MUI_SECRET` 必须稳定保存，丢失后数据库中的节点密钥与证书私钥无法解密。
    数据库地址必须从容器内可访问：宿主机 PostgreSQL 可填 `host.docker.internal`（Compose 已配置 Linux 宿主机映射），其他服务器填其内网 IP 或域名。`127.0.0.1` 在容器内指后端容器自身。PostgreSQL 需监听对应网卡并允许该客户端连接；不使用数据库 TLS 的可信内网实例可将 `MUI_DB_SSLMODE` 设为 `disable`。
 2. 保持 `MUI_BIND=127.0.0.1:8086`。在已有外层 Nginx 的面板域名 HTTPS `server` 块中加入 `deploy/nginx/mui-edge.location.conf` 的转发配置（已有 `location /` 时替换该块），检查 `nginx -t` 后重载外层 Nginx。证书及 HTTPS 跳转继续由外层管理；内层不配置证书。远程 Agent 访问外部 HTTPS 地址。外层默认与前端容器在同一台主机；若在另一台主机或容器，调整上游地址和 `MUI_BIND`，并将内层入口限制为仅外层可访问。
-3. 在有 Docker Buildx 的构建机运行 `deploy/build-agent.sh amd64` 和/或 `deploy/build-agent.sh arm64`。脚本默认构建 Agent 0.6.10 和 sing-box v1.14.2；第二个参数指定 sing-box 的 `vX.Y.Z` 版本，第三个参数指定 Agent 的 `X.Y.Z` 正式版本（如 `deploy/build-agent.sh amd64 v1.14.2 0.6.10`）。正式构建会注入版本号，直接从源码运行 Agent 才显示 `-dev`。脚本构建带 `with_v2ray_api`、`with_clash_api` 的核心，同时构建 Agent，并生成 `SHA256SUMS`。把所需架构的整个 `bin/<架构>/` 目录放到**面板服务器**的仓库 `bin/` 下，无需复制到每台目标服务器。
+3. 在有 Docker Buildx 的构建机运行 `deploy/build-agent.sh amd64` 和/或 `deploy/build-agent.sh arm64`。脚本默认构建 Agent 0.6.11 和 sing-box v1.14.2；第二个参数指定 sing-box 的 `vX.Y.Z` 版本，第三个参数指定 Agent 的 `X.Y.Z` 正式版本（如 `deploy/build-agent.sh amd64 v1.14.2 0.6.11`）。正式构建会注入版本号，直接从源码运行 Agent 才显示 `-dev`。脚本构建带 `with_v2ray_api`、`with_clash_api` 的核心，同时构建 Agent，并生成 `SHA256SUMS`。把所需架构的整个 `bin/<架构>/` 目录放到**面板服务器**的仓库 `bin/` 下，无需复制到每台目标服务器。
 4. 在 `deploy` 目录运行 `docker compose --env-file .env -f compose.yaml up -d --build`。内层 Nginx 提供页面及接口代理，Go 容器只读挂载 `../bin`，通过 Nginx 的 `/download/` 路径提供安装脚本和构建产物。当前 Compose 使用已有的外部网络 `docker_default`，启动前需确认网络存在。用 `docker network inspect docker_default --format '{{json .IPAM.Config}}'` 查看真实网段和网关；`MUI_PROXY_SUBNET` 仅作为 Go 的默认可信代理范围，填写实际网段或单独设置 `MUI_TRUSTED_PROXIES`，修改它不会创建或更改外部网络。`MUI_EDGE_PROXY_CIDR` 则填写外层 Nginx 的实际来源地址。
 5. 目标机支持 Ubuntu 22.04/24.04/26.04、Debian 12/13（systemd），以及 Alpine 3.19+（OpenRC），需要 OpenSSH、`curl`、`sha256sum` 和 `ss`。Alpine 依赖安装、服务管理及小内存机器优化见 [Agent 运维说明](docs/agent-operations.md)。UFW 托管时需安装 UFW（`apt-get install ufw`）；手动管理无需 UFW，安装 iproute2 提供 `ss`。Agent 0.6.3 起同时核对实际 SSH TCP 监听、SSH socket 和 `sshd -T` 配置，无法确认实际监听时拒绝初始化 UFW。LXC 内按容器真实监听端口放行，不能将宿主机映射端口当作容器端口。面板新建服务器时选择类型：带落地类型的下载并安装 Agent 与 sing-box；只做入口、线路、中转的只下载 Agent，不创建 sing-box 账户或服务。在目标机执行显示的一次性接入命令；命令先下载安装脚本，再通过标准输入传递一次性接入 token；token 不会放进子进程参数，不需要手动设置环境变量。它从面板下载适配架构的文件，按 `SHA256SUMS` 校验后安装。令牌 10 分钟有效；超时可重新生成。面板的 `MUI_PUBLIC_URL` 在面板服务器的 `.env` 中配置，必须是目标机可访问的 HTTPS 地址。
 6. Agent 上线后，UFW 托管服务器在面板执行“初始化 UFW”；手动管理服务器跳过此步，自行配置宿主机或安全组放行。启用 UFW 会按默认策略拒绝 SSH 以外的入站连接；机器上若有别的对外服务，初始化后立即在防火墙页为它们添加允许规则。若机器上 firewalld、nftables、netfilter-persistent 或 shorewall 正在运行，Agent 会拒绝写入 UFW 并在面板提示冲突。AnyTLS 先上传对应域名的 PEM 证书链和私钥。端口从云安全组放行后才能从公网访问。
@@ -184,9 +184,11 @@ docker compose --env-file .env -f compose.web.yaml up -d --build
 
 Go 后端可直接通过 `go run ./cmd/server` 或编译后的二进制运行，生产 `.env` 设置 `MUI_LISTEN=127.0.0.1:8087`。前端在 `web/` 执行 `npm ci && npm run build` 后，将 `web/dist/` 内容复制到 `/var/www/mui/`。将 `deploy/nginx/routes.conf` 放到 `/etc/nginx/mui/routes.conf`，将 `deploy/nginx/mui-host.conf` 放到 `/etc/nginx/conf.d/mui.conf`，内层默认只监听 `127.0.0.1:8086`，修改 Go 后端地址，外层转发到该端口。内层只信任同机外层 Nginx，外层在别处时需调整监听地址和可信代理 IP。后端 `.env` 的 `MUI_PUBLIC_URL` 填公开 HTTPS 地址，`MUI_TRUSTED_PROXIES` 填 Nginx 的来源 IP（同机为 `127.0.0.1/32`）。执行 `nginx -t` 后重载 Nginx。
 
-Agent 独立安装并运行 `mui-agent-helper.service`（root，仅接受本机 Agent 的白名单操作）和 `mui-agent.service`（账户 `mui-agent`），无需 sing-box 或转发进程。添加第一条启用的转发规则后，Agent 才创建并启动 `mui-forward.service`（账户 `mui-forward`）；最后一条规则停用或删除后，服务会停止并禁用。落地服务器另安装 `mui-sing-box.service`（账户 `mui-core`）；其他类型无需该服务和二进制。排查时可用 `journalctl -u mui-agent -u mui-agent-helper -f`，有转发时再加 `-u mui-forward`，落地服务器再加 `-u mui-sing-box`。Agent 配置在 `/etc/mui-agent`，核心配置与证书在 `/etc/mui-core`，转发配置在 `/etc/mui-forward`，统计缓存在 `/var/lib/mui-agent`。已有 PostgreSQL 的备份与恢复见下文“备份与恢复”。
+Agent 独立安装并运行 `mui-agent-helper.service`（root，仅接受本机 Agent 的白名单操作）和 `mui-agent.service`（账户 `mui-agent`），无需 sing-box 或转发进程。添加第一条启用的转发规则后，Agent 才创建并启动 `mui-forward.service`（账户 `mui-forward`）；最后一条规则停用或删除后，服务会停止并禁用。落地服务器另安装 `mui-sing-box.service`（账户 `mui-core`）；中转服务器建节点时可按需安装该核心。排查时可用 `journalctl -u mui-agent -u mui-agent-helper -f`，有转发时再加 `-u mui-forward`，落地服务器再加 `-u mui-sing-box`。Agent 配置在 `/etc/mui-agent`，核心配置与证书在 `/etc/mui-core`，转发配置在 `/etc/mui-forward`，统计缓存在 `/var/lib/mui-agent`。已有 PostgreSQL 的备份与恢复见下文“备份与恢复”。
 
-非落地服务器以后需要建节点时，在服务器列表点击“安装 sing-box 并设为落地”。Agent 会从面板下载对应架构的核心、验证 SHA-256 与所需构建功能、安装独立账户和 systemd 服务；成功后自动加上落地类型，面板才允许建节点。去掉落地类型前需先删除其节点，已安装的 sing-box 不会自动卸载。
+在线中转服务器也可创建节点：先在服务器列表或新建节点弹窗点击“安装 sing-box”，成功后保留中转类型，节点支持订阅并可作为链路终点。纯转发中转接入时仍只安装 Agent。入口、线路服务器点击“安装 sing-box 并设为落地”后会添加落地类型。有节点时必须保留中转或落地类型，已安装的 sing-box 不会自动卸载。
+
+服务器类型可在安装核心前保存，例如同时勾选中转和落地。已接入但未安装 sing-box 时，编辑服务器和新建节点弹窗会提供安装入口；安装完成后才能创建节点。保存失败的接口错误在编辑弹窗内直接显示，表单内容保留。
 
 应用配置变更时，只有节点配置或证书发生变化才会重启 sing-box；转发规则变化由转发进程就地重新加载，只有新增、修改或删除的那条规则受影响，其余转发的连接不中断；单独升级 sing-box 也会重启核心，同机节点连接会短暂中断。仅防火墙规则变化不会重启这两个服务。UFW 规则按差异增删，未变化的端口不会被关闭再打开。
 
@@ -270,7 +272,7 @@ pg_restore -h db.example.com -p 5432 -U mui -W -d mui --no-owner mui.dump
 
 ## 链路
 
-服务器有四种类型，可多选：**入口**只能做链路首跳；**线路**可做首跳也可做中间跳；**中转**只能做中间跳；**落地**安装 sing-box 并搭建节点。入口和线路是订阅的接入点。
+服务器有四种类型，可多选：**入口**只能做链路首跳；**线路**可做首跳也可做中间跳；**中转**可做中间跳，也可按需安装 sing-box 搭建节点；**落地**接入时安装 sing-box 并搭建节点。入口和线路是订阅的接入点。
 
 一条链路由首跳服务器、零到八跳中间跳和一个落地节点组成，例如“入口 → 中转 → 中转 → 落地”“线路 → 中转 → 落地”“入口 → 中转 → 线路 → 落地”。保存链路后面板在每一跳自动生成端口转发（SS 节点生成 TCP 和 UDP 两条），这些转发在“端口转发”页只读，修改请编辑链路。
 
@@ -294,7 +296,7 @@ pg_restore -h db.example.com -p 5432 -U mui -W -d mui --no-owner mui.dump
 ## 协议与客户端说明
 
 - 新建 Snell 节点必须填写 ShadowTLS v3 SNI / 握手域名，指向服务器可访问的真实 TLS 站点（服务器握手目标端口为 443）。面板为 Snell PSK 和 ShadowTLS 密码分别生成并加密保存；公网只监听 ShadowTLS 端口，认证后的连接转给内部 Snell 入站。sing-box 订阅使用 Snell 出站 `detour` 到 ShadowTLS 出站，并为每条订阅生成独立的 ShadowTLS 密码；Surge 订阅输出 `shadow-tls-password`、`shadow-tls-sni` 和 `shadow-tls-version=3`。Surge 这一行的写法已用 sing-box 客户端按同样的凭据验证可连通，但没有在真实 Surge 上测试过。
-- Snell 新建节点和模板默认 v6，可选择 v5；服务端按节点版本生成配置，Surge 输出对应的 version=5/6。sing-box v6 出站输出 version=6；仅 v5 TCP 节点使用 v4 出站兼容协议。Snell v6 PSK 为 12–255 字节，需要 Agent 0.6.9；版本变更成功应用前不下发新的客户端配置。Snell v5 的 QUIC Proxy Mode 不支持。
+- Snell 新建节点和模板默认 v6，可选择 v5；服务端按节点版本生成配置，Surge 输出对应的 version=5/6。sing-box v6 出站输出 version=6；仅 v5 TCP 节点使用 v4 出站兼容协议。Snell v6 PSK 为 12–255 字节，需要 Agent 0.6.11；版本变更成功应用前不下发新的客户端配置。Snell v5 的 QUIC Proxy Mode 不支持。
 - AnyTLS 需要有效证书，客户端订阅使用域名进行 TLS 校验。证书目前由管理员上传和更新。
 - sing-box 下载内容是节点出站 JSON，供支持导入出站片段的客户端使用；Surge 下载内容是 `[Proxy]` 片段。
 - 订阅流量按独立登录用户采样，能分别统计同节点的不同订阅；客户流量为其当前关联订阅的合计。订阅链接轮换只换下载令牌，不轮换节点登录凭据。停用、删除或到期会排队移除该订阅的用户；Agent 离线时连接凭据要等 Agent 恢复并应用配置后才失效。节点级流量还包括管理员直接分享节点产生的流量，因此节点合计可高于订阅合计。 传统 SS 的共享密码节点不计入订阅或客户用量，界面显示统计限制，不将无法归属的流量当成 0 B。
@@ -321,3 +323,7 @@ Agent 安装器显式设置目录权限，并以 `mui-agent` 账户检查配置�
 ### SOCKS5 节点与入口 Agent 代理
 
 支持带用户名密码的 SOCKS5 TCP 节点，必须在已启用 UFW 的托管服务器部署。在线入口可选择 SOCKS5 节点，以公网或内网地址连接，经代理安装、接入、上报、取任务及下载升级文件。节点手填端口支持 1–65535，随机生成保留 50000–60000。需发布并升级 Agent 0.6.10，操作步骤见 [SOCKS5 与 Agent 代理说明](docs/agent-socks5.md)。
+
+### Snell v6 配置修复（Agent 0.6.11）
+
+Snell v5 使用 `obfs_mode`；v6 使用默认流量整形 `mode: default`，不能包含 `obfs_mode`。Agent 0.6.11 修复了服务端生成字段，订阅也同步按版本生成，v6 表单不再提供 HTTP 混淆选项。发布 `./deploy/publish.sh --with-agent` 后升级受影响服务器 Agent，再在操作记录重试失败的配置应用任务。核心仍使用已验证的 sing-box v1.14.2，无需升级核心。

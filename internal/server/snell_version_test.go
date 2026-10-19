@@ -25,7 +25,7 @@ func TestSnellV6NodeTemplateAndAgentGate(t *testing.T) {
 	if err := agent.ValidateDesired(state); err != nil {
 		t.Fatal(err)
 	}
-	if code, out, _ := p.do("POST", "/agent/report", map[string]any{"agentVersion": "0.6.8", "snellFixedPort": true, "nodeFirewallPolicies": true}, auth); code != 200 {
+	if code, out, _ := p.do("POST", "/agent/report", map[string]any{"agentVersion": "0.6.10", "snellV6": true, "snellFixedPort": true, "nodeFirewallPolicies": true}, auth); code != 200 {
 		t.Fatalf("report: %d %v", code, out)
 	}
 	if code, job, _ := p.do("GET", "/agent/job", nil, auth); code != 204 {
@@ -66,7 +66,7 @@ func TestSnellV6NodeTemplateAndAgentGate(t *testing.T) {
 func TestSnellVersionsMatchConfigurationAndSubscriptions(t *testing.T) {
 	for _, version := range []int{5, 6} {
 		n := shared.Node{ID: ID(), Name: "Snell", Protocol: "snell", SnellVersion: version, SnellPort: 23456,
-			Listen: "0.0.0.0", Port: 54321, ShadowTLSHost: "example.com", Enabled: true, Status: "active"}
+			Listen: "0.0.0.0", Port: 54321, Obfs: "http", ShadowTLSHost: "example.com", Enabled: true, Status: "active"}
 		item := shared.SubscriptionItem{Node: n, Server: shared.Server{IPv4: "203.0.113.1"}, Password: "a-valid-snell-psk", ShadowTLSPassword: "outer-password"}
 		raw, err := shared.SingBoxConfig([]shared.ManagedNode{{Node: n, Password: item.Password, ShadowTLSPassword: item.ShadowTLSPassword}}, "/certs")
 		if err != nil {
@@ -81,6 +81,16 @@ func TestSnellVersionsMatchConfigurationAndSubscriptions(t *testing.T) {
 		if config.Inbounds[1]["version"] != float64(version) {
 			t.Fatalf("inbound ignored %d: %s", version, raw)
 		}
+		if version == 6 {
+			if _, exists := config.Inbounds[1]["obfs_mode"]; exists {
+				t.Fatalf("v6 emitted obsolete obfs_mode: %s", raw)
+			}
+			if config.Inbounds[1]["mode"] != "default" {
+				t.Fatalf("v6 mode: %s", raw)
+			}
+		} else if config.Inbounds[1]["obfs_mode"] != "http" {
+			t.Fatalf("v5 lost HTTP obfuscation: %s", raw)
+		}
 		for _, format := range []string{"surge", "sing-box"} {
 			out, excluded, err := shared.RenderSubscription(format, []shared.SubscriptionItem{item})
 			if err != nil || len(excluded) != 0 {
@@ -90,6 +100,9 @@ func TestSnellVersionsMatchConfigurationAndSubscriptions(t *testing.T) {
 				want := "version=5"
 				if version == 6 {
 					want = "version=6"
+				}
+				if version == 6 && strings.Contains(string(out), "obfs=") {
+					t.Fatalf("v6 Surge emitted v5 obfs: %s", out)
 				}
 				if !strings.Contains(string(out), want) {
 					t.Fatalf("wrong Surge version: %s", out)
@@ -104,6 +117,11 @@ func TestSnellVersionsMatchConfigurationAndSubscriptions(t *testing.T) {
 				want := 4
 				if version == 6 {
 					want = 6
+				}
+				if version == 6 {
+					if _, exists := client.Outbounds[0]["obfs_mode"]; exists {
+						t.Fatalf("v6 outbound emitted v4 obfs_mode: %s", out)
+					}
 				}
 				if client.Outbounds[0]["version"] != float64(want) {
 					t.Fatalf("wrong sing-box version: %s", out)

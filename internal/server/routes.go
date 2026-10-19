@@ -245,8 +245,8 @@ func (w routeWorld) checkRouteShape(rt shared.Route) error {
 		return errors.New("落地节点不存在")
 	}
 	exit, ok := w.servers[node.ServerID]
-	if !ok || !shared.HasRole(exit, shared.RoleExit) {
-		return errors.New("落地节点所在服务器不是落地类型")
+	if !ok || !shared.CanHostNodes(exit) {
+		return errors.New("落地节点必须位于在线管理的中转或落地服务器")
 	}
 	if seen[exit.ID] {
 		return fmt.Errorf("落地服务器 %s 不能同时是本链路的一跳", exit.Name)

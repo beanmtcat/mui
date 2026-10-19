@@ -1262,3 +1262,22 @@ th.num {
 .agentDownloadRow > .hint { max-width: 45%; text-align: right; }
 
 .formGrid > .hint { grid-column: 1 / -1; margin: 0; }
+
+.modalFeedback {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 10%);
+  align-items: start;
+}
+.modalFeedback > span {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.serverCoreHint p { margin: 0 0 8px; }
+.serverCoreHint button + button { margin-left: 8px; }

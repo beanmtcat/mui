@@ -1,6 +1,5 @@
-// A server may hold several roles. Only an exit runs sing-box and carries
-// nodes; entry and line servers can be the first hop of a route, transit and
-// line servers a middle hop.
+// Online transit and exit servers may host nodes. Entry and line servers
+// can be the first hop of a route; transit and line servers a middle hop.
 export type Role = "entry" | "line" | "transit" | "exit";
 export type OfflineInstallGuide = {
     command: string;
@@ -67,6 +66,9 @@ export type Server = {
   firewallConflict?: string;
   ufwRules?: string[] | null;
 };
+export const canHostNodes = (server: Partial<Server>) =>
+  server.managementMode !== "offline" && !!server.roles?.some((r) => r === "exit" || r === "transit");
+
 export type Node = {
   id: string;
   serverId: string;

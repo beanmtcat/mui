@@ -469,7 +469,7 @@ func (a *App) installCommand(serverID, token string, server shared.Server) strin
 
 func (a *App) installCommandAt(publicURL, serverID, token string, server shared.Server) string {
 	purpose := "relay"
-	if shared.HasRole(server, shared.RoleExit) {
+	if shared.InstallsCore(server) {
 		purpose = "node"
 	}
 	// Keep the token out of every child process's arguments, including the
@@ -1318,19 +1318,18 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, err.Error())
 		return
 	}
-	hadExit, wantExit := shared.HasRole(old, shared.RoleExit), slices.Contains(roles, shared.RoleExit)
-	if wantExit && !hadExit && old.AgentVersion != "" && old.CoreBuild == "" {
-		errorJSON(w, 409, "该服务器没有 sing-box；请在服务器列表安装 sing-box，安装成功后自动成为落地")
-		return
-	}
-	if hadExit && !wantExit {
+	// Roles describe the intended use of the server. Core installation is a
+	// separate action; changing roles must not depend on a last reported hash.
+	candidate := old
+	candidate.Roles = roles
+	if shared.CanHostNodes(before) && !shared.CanHostNodes(candidate) {
 		nodes, err := a.Store.Nodes(id)
 		if err != nil {
 			errorJSON(w, 500, err.Error())
 			return
 		}
 		if len(nodes) > 0 {
-			errorJSON(w, 409, "该服务器仍有节点，请先删除节点再取消落地类型")
+			errorJSON(w, 409, "该服务器仍有节点，请保留中转或落地类型，或先删除所有节点")
 			return
 		}
 	}
@@ -1447,7 +1446,9 @@ func normalizeNodeTemplate(t *shared.NodeTemplate) {
 		if t.SnellPort == 0 {
 			t.SnellPort = shared.SnellListenPort(shared.Node{Port: t.Port})
 		}
-		if t.Obfs == "" {
+		if t.SnellVersion == 6 {
+			t.Obfs = ""
+		} else if t.Obfs == "" {
 			t.Obfs = "none"
 		}
 		t.Method, t.TLSName = "", ""
@@ -1659,6 +1660,9 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 		if n.SnellVersion == 0 {
 			n.SnellVersion = 6
 		}
+		if shared.SnellVersion(n) == 6 {
+			n.Obfs = ""
+		}
 		if n.SnellPort == 0 {
 			n.SnellPort = shared.SnellListenPort(n)
 		}
@@ -1672,8 +1676,12 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "服务器不存在")
 		return
 	}
-	if !shared.HasRole(server, shared.RoleExit) {
-		errorJSON(w, 409, "只有落地服务器可以建节点；请先在服务器列表把它设为落地（未装 sing-box 的需先安装）")
+	if !shared.CanHostNodes(server) {
+		errorJSON(w, 409, "只有在线管理的中转或落地服务器可以建节点；离线服务器仅支持转发")
+		return
+	}
+	if server.CoreBuild == "" && (server.AgentVersion != "" || !shared.HasRole(server, shared.RoleExit)) {
+		errorJSON(w, 409, "该服务器未安装 sing-box；请先在服务器列表安装 sing-box，安装成功后即可建节点")
 		return
 	}
 	var cert *shared.Certificate
@@ -1907,6 +1915,9 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if n.SnellVersion == 0 && n.Protocol == "snell" {
 		n.SnellVersion = 6
+	}
+	if n.Protocol == "snell" && shared.SnellVersion(n) == 6 {
+		n.Obfs = ""
 	}
 	policy, sources, accessErr := shared.NormalizeAdminFirewallAccess(n.FirewallPolicy, n.FirewallSources)
 	if accessErr != nil {
@@ -3523,7 +3534,7 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if allowApply && !server.SnellV6 {
+	if allowApply && (!server.SnellV6 || !shared.VersionAtLeast(server.AgentVersion, "0.6.11")) {
 		nodes, err := a.Store.Nodes(id)
 		if err != nil {
 			errorJSON(w, 500, err.Error())
@@ -3658,7 +3669,7 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		server.ForwardTCPUDP = in.ForwardTCPUDP
 		server.ShadowTLSAuth = in.ShadowTLSAuth
 		server.SnellFixedPort = in.SnellFixedPort
-		server.SnellV6 = in.SnellV6
+		server.SnellV6 = in.SnellV6 && shared.VersionAtLeast(in.AgentVersion, "0.6.11")
 		server.AgentProxySupport = in.AgentProxySupport
 		server.ReleaseKeyPinned = in.ReleaseKeyPinned
 		server.AgentSelfUpdate = in.AgentSelfUpdate
@@ -3755,8 +3766,9 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
-		if op.Kind == "core.upgrade" && in.JobStatus == "success" && !shared.HasRole(server, shared.RoleExit) {
-			// Installing sing-box is what makes a server an exit.
+		if op.Kind == "core.upgrade" && in.JobStatus == "success" && !shared.CanHostNodes(server) {
+			// Transit already supports nodes. Other roles become an exit when
+			// sing-box is explicitly installed.
 			server.Roles, _ = validRoles(append(server.Roles, shared.RoleExit))
 			if err = a.Store.PutServer(server); err != nil {
 				errorJSON(w, 500, err.Error())
