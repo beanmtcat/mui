@@ -46,7 +46,7 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 				excluded = append(excluded, n.Name+": 无发布地址")
 				continue
 			}
-			out := map[string]any{"tag": subscriptionTag(n), "server": address, "server_port": n.Port}
+			out := map[string]any{"tag": n.Name, "server": address, "server_port": n.Port}
 			var shadowOutbound map[string]any
 			switch n.Protocol {
 			case "ss":
@@ -115,18 +115,20 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 			}
 			switch n.Protocol {
 			case "ss":
-				if n.Method != "2022-blake3-aes-128-gcm" && n.Method != "2022-blake3-aes-256-gcm" {
-					excluded = append(excluded, n.Name+": Surge 订阅仅支持 AES-GCM 的 SS 2022 节点")
+				switch n.Method {
+				case "aes-128-gcm", "aes-192-gcm", "aes-256-gcm", "chacha20-ietf-poly1305", "xchacha20-ietf-poly1305", "2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm":
+				default:
+					excluded = append(excluded, n.Name+": Surge 不支持该 SS 加密方式")
 					continue
 				}
-				lines = append(lines, fmt.Sprintf("%s = ss, %s, %d, encrypt-method=%s, password=%s", subscriptionTag(n), address, n.Port, n.Method, item.Password))
+				lines = append(lines, fmt.Sprintf("%s = ss, %s, %d, encrypt-method=%s, password=%s", n.Name, address, n.Port, n.Method, item.Password))
 			case "snell":
 				// A per-user Snell key is a sing-box extension Surge cannot send.
 				if n.ShadowTLSHost == "" || item.ShadowTLSPassword == "" || item.UserKey != "" {
 					excluded = append(excluded, n.Name+": Surge 订阅中的 Snell 节点需启用 ShadowTLS，且服务器 Agent 需为新版")
 					continue
 				}
-				line := fmt.Sprintf("%s = snell, %s, %d, psk=%s, version=4", subscriptionTag(n), address, n.Port, item.Password)
+				line := fmt.Sprintf("%s = snell, %s, %d, psk=%s, version=4", n.Name, address, n.Port, item.Password)
 				if n.Obfs == "http" {
 					line += ", obfs=http"
 				}
@@ -136,17 +138,30 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 			}
 		}
 		return []byte(strings.Join(lines, "\n") + "\n"), excluded, nil
+	case "v2rayn":
+		lines := []string{}
+		for _, item := range items {
+			n := item.Node
+			if !n.Enabled || n.Status != "active" {
+				excluded = append(excluded, n.Name+": 节点未生效或已停用")
+				continue
+			}
+			if n.Protocol != "ss" && n.Protocol != "anytls" {
+				excluded = append(excluded, n.Name+": v2rayN 订阅仅支持 SS 和 AnyTLS 节点，不支持 Snell / ShadowTLS")
+				continue
+			}
+			line, err := ShareURI(item)
+			if err != nil {
+				excluded = append(excluded, n.Name+": "+err.Error())
+				continue
+			}
+			lines = append(lines, line)
+		}
+		// v2rayN accepts a Base64-encoded, newline-separated list of share URIs.
+		return []byte(base64.StdEncoding.EncodeToString([]byte(strings.Join(lines, "\n")))), excluded, nil
 	default:
 		return nil, nil, fmt.Errorf("不支持的订阅格式 %q", format)
 	}
-}
-
-func subscriptionTag(n Node) string {
-	id := n.ID
-	if len(id) > 8 {
-		id = id[:8]
-	}
-	return n.Name + "-" + id
 }
 
 func ShareURI(item SubscriptionItem) (string, error) {
@@ -156,11 +171,14 @@ func ShareURI(item SubscriptionItem) (string, error) {
 		return "", fmt.Errorf("缺少发布地址")
 	}
 	address := net.JoinHostPort(a, fmt.Sprint(n.Port))
+	// URI fragments and userinfo use percent escapes, not form-style '+' spaces.
+	name := strings.ReplaceAll(url.QueryEscape(n.Name), "+", "%20")
 	switch n.Protocol {
 	case "ss":
-		return "ss://" + base64.RawURLEncoding.EncodeToString([]byte(n.Method+":"+item.Password)) + "@" + address + "#" + url.QueryEscape(n.Name), nil
+		return "ss://" + base64.RawURLEncoding.EncodeToString([]byte(n.Method+":"+item.Password)) + "@" + address + "#" + name, nil
 	case "anytls":
-		return "anytls://" + url.QueryEscape(item.Password) + "@" + address + "?sni=" + url.QueryEscape(n.TLSName) + "#" + url.QueryEscape(n.Name), nil
+		password := strings.ReplaceAll(url.QueryEscape(item.Password), "+", "%20")
+		return "anytls://" + password + "@" + address + "?sni=" + url.QueryEscape(n.TLSName) + "#" + name, nil
 	default:
 		return "", fmt.Errorf("该协议使用订阅配置")
 	}

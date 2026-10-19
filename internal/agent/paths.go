@@ -49,14 +49,17 @@ type HostStatus struct {
 	// Supported reports whether this helper implements the current
 	// panel protocol. The capability bits below describe what this
 	// build can do; the panel gates features on them.
-	Supported            bool `json:"supported"`
-	AgentSelfUpdate      bool `json:"agentSelfUpdate"`
-	ForwardSupport       bool `json:"forwardSupport"`
-	ShadowTLSAuth        bool `json:"shadowTlsAuth"`
-	MultiUserStats       bool `json:"multiUserStats"`
-	NodeFirewallPolicies bool `json:"nodeFirewallPolicies"`
-	CoreSelfUpdate       bool `json:"coreSelfUpdate"`
-	ReleaseKeyPinned     bool `json:"releaseKeyPinned"`
+	Supported             bool `json:"supported"`
+	ManualFirewallSupport bool `json:"manualFirewallSupport"`
+	AgentSelfUpdate       bool `json:"agentSelfUpdate"`
+	ForwardTCPUDP         bool `json:"forwardTcpUdp"`
+	ForwardSupport        bool `json:"forwardSupport"`
+	ShadowTLSAuth         bool `json:"shadowTlsAuth"`
+	SnellFixedPort        bool `json:"snellFixedPort"`
+	MultiUserStats        bool `json:"multiUserStats"`
+	NodeFirewallPolicies  bool `json:"nodeFirewallPolicies"`
+	CoreSelfUpdate        bool `json:"coreSelfUpdate"`
+	ReleaseKeyPinned      bool `json:"releaseKeyPinned"`
 }
 
 // IDs the panel issues; anything else in a desired state or a stats name is rejected.

@@ -98,6 +98,13 @@ files=(go.mod go.sum .dockerignore cmd internal web/src web/package.json web/pac
   deploy/compose.backend.yaml deploy/nginx deploy/.env.example deploy/web.env.example
   deploy/publish.sh deploy/publish.env.example)
 if [[ "$with_agent" == 1 ]]; then
+  release_key=${MUI_RELEASE_KEY:-"$script_dir/.secrets/release.key"}
+  if [[ -n "${MUI_RELEASE_KEY:-}" && ! -f "$release_key" ]]; then
+    die "发布签名私钥不存在：$release_key"
+  fi
+  if [[ -f "$release_key" ]]; then
+    command -v go >/dev/null || die '自动签名需要本机安装 Go'
+  fi
   found=0
   for arch in amd64 arm64; do
     [[ -d "$repo_dir/bin/$arch" ]] || continue
@@ -105,6 +112,9 @@ if [[ "$with_agent" == 1 ]]; then
       [[ -f "$repo_dir/bin/$arch/$file" && ! -L "$repo_dir/bin/$arch/$file" ]] || die "缺少普通文件 bin/$arch/$file；先运行 deploy/build-agent.sh $arch"
       files+=("bin/$arch/$file")
     done
+    if [[ -f "$release_key" ]]; then
+      (cd "$repo_dir" && go run ./cmd/release-sign sign "$release_key" "bin/$arch")
+    fi
     if [[ -f "$repo_dir/bin/$arch/SHA256SUMS.sig" ]]; then files+=("bin/$arch/SHA256SUMS.sig"); fi
     found=1
   done
@@ -147,7 +157,11 @@ PREFLIGHT
 [[ "$stage" == "$REMOTE_DIR"/.publish-* && "$stage" != *[$'\r\n']* ]] || die '远程返回的临时目录无效'
 printf '上传源码…\n'
 # COPYFILE_DISABLE prevents macOS AppleDouble metadata in Linux releases.
-COPYFILE_DISABLE=1 tar -czf - -C "$repo_dir" "${files[@]}" |
+# macOS bsdtar also stores extended attributes (provenance, ACLs) as pax
+# headers that GNU tar on the target reports one warning each for.
+tar_flags=()
+if tar --version 2>/dev/null | grep -q bsdtar; then tar_flags=(--no-xattrs --no-acls --no-mac-metadata); fi
+COPYFILE_DISABLE=1 tar ${tar_flags[@]+"${tar_flags[@]}"} -czf - -C "$repo_dir" "${files[@]}" |
   ssh "${ssh_args[@]}" "$SSH_HOST" "umask 077; tar -xzf - -C $(quote "$stage")"
 if [[ -n "$init_env" ]]; then
   ssh "${ssh_args[@]}" "$SSH_HOST" "umask 077; cat > $(quote "$stage/.publish-env")" < "$init_env"
@@ -208,7 +222,9 @@ ln -s -- "$root/bin" "$release/bin"
 "${compose[@]}" up -d --no-build --no-deps --wait --wait-timeout "$timeout" "${services[@]}"
 if [[ "$service" != backend ]]; then
   # Check the real API through inner Nginx too; /nginx-health checks static serving only.
-  "${compose[@]}" exec -T mui-web wget -T 10 -q -O /dev/null http://127.0.0.1:8086/healthz
+  # SSH feeds this Bash program over stdin. Do not let Compose consume the
+  # remaining program while forwarding stdin into the health-check process.
+  "${compose[@]}" exec -T mui-web wget -T 10 -q -O /dev/null http://127.0.0.1:8086/healthz </dev/null
 fi
 "${compose[@]}" ps "${services[@]}"
 next="$root/.current-${release##*/}"

@@ -329,6 +329,20 @@ var migrations = [][]string{
 		// mui_forwards, marked with the route ID.
 		`CREATE TABLE mui_routes (id TEXT PRIMARY KEY, data TEXT NOT NULL)`,
 	},
+	{
+		// Certificates are shared across servers; keep their IDs, PEM chains,
+		// encrypted keys and existing node references intact.
+		`ALTER TABLE mui_certificates DROP COLUMN server_id`,
+	},
+	{
+		`CREATE TABLE mui_offline_exports (id TEXT PRIMARY KEY, server_id TEXT NOT NULL, revision BIGINT NOT NULL, bundle_enc TEXT NOT NULL, imported_at BIGINT NOT NULL DEFAULT 0)`,
+		`CREATE INDEX mui_offline_exports_server ON mui_offline_exports(server_id)`,
+	},
+	{
+		// Offline exports no longer need receipt secrets or stored snapshots.
+		// The server document records only its latest exported revision.
+		`DROP TABLE mui_offline_exports`,
+	},
 }
 
 func ID() string {
@@ -759,11 +773,8 @@ func (s *Store) PutNodeWithShadowTLS(v shared.Node, password, shadowTLSPassword 
 	_, err = s.DB.Exec(`INSERT INTO mui_nodes(id,server_id,data,secret,shadow_tls_secret) VALUES($1,$2,$3,$4,$5) ON CONFLICT(id) DO UPDATE SET server_id=excluded.server_id,data=excluded.data,secret=excluded.secret,shadow_tls_secret=excluded.shadow_tls_secret`, v.ID, v.ServerID, Marshal(v), secret, shadowSecret)
 	return err
 }
-func (s *Store) Certificates(serverID string) ([]shared.Certificate, error) {
-	if serverID == "" {
-		return queryJSON[shared.Certificate](s.DB, `SELECT data FROM mui_certificates ORDER BY id`)
-	}
-	return queryJSON[shared.Certificate](s.DB, `SELECT data FROM mui_certificates WHERE server_id=$1 ORDER BY id`, serverID)
+func (s *Store) Certificates() ([]shared.Certificate, error) {
+	return queryJSON[shared.Certificate](s.DB, `SELECT data FROM mui_certificates ORDER BY id`)
 }
 func (s *Store) Certificate(id string) (shared.Certificate, error) {
 	var raw string
@@ -788,7 +799,7 @@ func (s *Store) PutCertificate(v shared.Certificate) error {
 		return err
 	}
 	v.Key = ""
-	_, err = s.DB.Exec(`INSERT INTO mui_certificates(id,server_id,data,secret) VALUES($1,$2,$3,$4)`, v.ID, v.ServerID, Marshal(v), secret)
+	_, err = s.DB.Exec(`INSERT INTO mui_certificates(id,data,secret) VALUES($1,$2,$3)`, v.ID, Marshal(v), secret)
 	return err
 }
 func (s *Store) Rules(serverID string) ([]shared.FirewallRule, error) {

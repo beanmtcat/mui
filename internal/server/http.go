@@ -42,6 +42,7 @@ type rateBucket struct {
 type App struct {
 	Store       *Store
 	PublicURL   string
+	publicURLs  []*url.URL
 	agentBinDir string
 	// mu serialises mutating admin requests. Agent traffic uses per-server
 	// locks instead (see lockServer), so one slow agent report no longer
@@ -72,6 +73,10 @@ type App struct {
 var installAgentScript []byte
 
 func NewApp(s *Store, publicURL string) (*App, error) {
+	publicURLs, err := parsePublicURLs(publicURL)
+	if err != nil {
+		return nil, err
+	}
 	password := os.Getenv("MUI_ADMIN_PASSWORD")
 	var count int
 	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM mui_admin`).Scan(&count); err != nil {
@@ -103,7 +108,7 @@ func NewApp(s *Store, publicURL string) (*App, error) {
 	if binDir == "" {
 		binDir = "bin"
 	}
-	app := &App{Store: s, PublicURL: strings.TrimRight(publicURL, "/"), agentBinDir: binDir, rates: map[string]rateBucket{}, downloads: make(chan struct{}, 4), serverLocks: map[string]*sync.Mutex{}, nonces: map[string]time.Time{}, downloadsByIP: map[string]int{}}
+	app := &App{Store: s, PublicURL: publicURLs[0].String(), publicURLs: publicURLs, agentBinDir: binDir, rates: map[string]rateBucket{}, downloads: make(chan struct{}, 4), serverLocks: map[string]*sync.Mutex{}, nonces: map[string]time.Time{}, downloadsByIP: map[string]int{}}
 	if _, err := s.EnsurePanelSigningKey(); err != nil {
 		return nil, fmt.Errorf("panel signing key: %w", err)
 	}
@@ -302,6 +307,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/servers", a.require(a.servers))
 	mux.HandleFunc("PATCH /api/servers/{id}", a.require(a.serverByID))
 	mux.HandleFunc("DELETE /api/servers/{id}", a.require(a.serverByID))
+	mux.HandleFunc("POST /api/servers/{id}/offline/export", a.require(a.offlineExport))
 	mux.HandleFunc("POST /api/servers/{id}/enrollment", a.require(a.enrollment))
 	mux.HandleFunc("POST /api/servers/{id}/agent/upgrade", a.require(a.agentUpgrade))
 	mux.HandleFunc("POST /api/servers/{id}/core/upgrade", a.require(a.coreUpgrade))
@@ -326,7 +332,10 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/certificates/{id}", a.require(a.certificateByID))
 	mux.HandleFunc("GET /api/firewall", a.require(a.firewall))
 	mux.HandleFunc("POST /api/firewall", a.require(a.firewall))
+	mux.HandleFunc("PATCH /api/firewall/{id}", a.require(a.firewallByID))
 	mux.HandleFunc("DELETE /api/firewall/{id}", a.require(a.firewallByID))
+	mux.HandleFunc("POST /api/servers/{id}/ufw/delete", a.require(a.hostRuleDelete))
+	mux.HandleFunc("POST /api/servers/{id}/ufw/adopt", a.require(a.hostRuleAdopt))
 	mux.HandleFunc("GET /api/forwards", a.require(a.forwards))
 	mux.HandleFunc("POST /api/forwards", a.require(a.forwards))
 	mux.HandleFunc("PATCH /api/forwards/{id}", a.require(a.forwardByID))
@@ -438,11 +447,10 @@ func (a *App) downloadAgentFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	if strings.HasPrefix(name, "SHA256SUMS") {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	} else {
-		w.Header().Set("Content-Type", "application/octet-stream")
-	}
+	// Preserve extensionless release filenames. Serving a manifest as plain
+	// text lets browsers append .txt, which breaks the target install command.
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Disposition", "attachment; filename=\""+name+"\"")
 	// A real write deadline: a client that stops reading is cut off instead of
 	// holding a download slot forever.
 	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(30 * time.Minute))
@@ -456,19 +464,29 @@ func shellQuote(value string) string {
 // installCommand installs sing-box ("node") only on an exit server; the
 // others run forwards alone ("relay").
 func (a *App) installCommand(serverID, token string, server shared.Server) string {
+	return a.installCommandAt(a.PublicURL, serverID, token, server)
+}
+
+func (a *App) installCommandAt(publicURL, serverID, token string, server shared.Server) string {
 	purpose := "relay"
 	if shared.HasRole(server, shared.RoleExit) {
 		purpose = "node"
 	}
-	pipeline := "curl -fsSL " + shellQuote(a.PublicURL+"/download/install.sh") +
-		" | sudo sh -s -- " + shellQuote(a.PublicURL) +
-		" " + shellQuote(serverID) +
-		" " + shellQuote(token) +
-		" " + shellQuote(purpose)
+	// Keep the token out of every child process's arguments, including the
+	// outer shell. Download the script first so its stdin can carry the token.
+	command := "(\nset -eu\numask 077\n" +
+		"if [ \"$(id -u)\" -eq 0 ]; then\n  set -- sh\n" +
+		"elif command -v sudo >/dev/null 2>&1; then\n  set -- sudo sh\n" +
+		"else\n  printf '%s\\n' '当前用户不是 root，且未安装 sudo；请切换到 root 后重新执行接入命令。' >&2\n  exit 1\nfi\n" +
+		"mui_installer=$(mktemp)\n" +
+		"trap 'rm -f \"$mui_installer\"' EXIT HUP INT TERM\n" +
+		"curl -fsSL " + shellQuote(publicURL+"/download/install.sh") + " -o \"$mui_installer\"\n" +
+		"\"$@\" \"$mui_installer\" " + shellQuote(publicURL) +
+		" " + shellQuote(serverID) + " - " + shellQuote(purpose)
 	if a.releaseKeyB64 != "" {
-		pipeline += " " + shellQuote(a.releaseKeyB64)
+		command += " " + shellQuote(a.releaseKeyB64)
 	}
-	return "bash -o pipefail -c " + shellQuote(pipeline)
+	return command + " <<'MUI_ENROLLMENT_TOKEN'\n" + token + "\nMUI_ENROLLMENT_TOKEN\n)"
 }
 
 func (a *App) SecurityHeaders(next http.Handler) http.Handler {
@@ -481,14 +499,7 @@ func (a *App) SecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")
 		if r.Method != "GET" && r.Method != "HEAD" && r.Method != "OPTIONS" {
 			if origin := r.Header.Get("Origin"); origin != "" {
-				u, err := url.Parse(origin)
-				// A reverse proxy may rewrite Host, so the public URL's
-				// host is an equally valid origin.
-				publicHost := ""
-				if pub, perr := url.Parse(a.PublicURL); perr == nil {
-					publicHost = pub.Host
-				}
-				if err != nil || (!strings.EqualFold(u.Host, r.Host) && !strings.EqualFold(u.Host, publicHost)) {
+				if !a.originAllowed(r, origin) {
 					errorJSON(w, 403, "origin mismatch")
 					return
 				}
@@ -674,6 +685,10 @@ func (a *App) agentAuth(next http.HandlerFunc) http.HandlerFunc {
 			errorJSON(w, 401, "agent authentication failed")
 			return
 		}
+		if srv, err := a.Store.Server(id); err != nil || shared.OfflineManaged(srv) {
+			errorJSON(w, 403, "离线管理服务器不接收在线 Agent 请求")
+			return
+		}
 		// A signed request is always verified. An unsigned one is accepted
 		// only from an agent that has never signed: one that predates
 		// signatures keeps reporting (and can fetch the upgrade that teaches
@@ -741,7 +756,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "mui_session", Value: token, Path: "/", HttpOnly: true, Secure: r.TLS != nil || strings.HasPrefix(a.PublicURL, "https://"), SameSite: http.SameSiteStrictMode, Expires: expiry})
+	http.SetCookie(w, &http.Cookie{Name: "mui_session", Value: token, Path: "/", HttpOnly: true, Secure: r.TLS != nil || strings.HasPrefix(a.publicURLForRequest(r), "https://"), SameSite: http.SameSiteStrictMode, Expires: expiry})
 	writeJSON(w, 200, map[string]any{"ok": true, "totpEnabled": totp != ""})
 }
 func (a *App) logout(w http.ResponseWriter, r *http.Request) {
@@ -963,6 +978,10 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
+	if !shared.ValidFirewallMode(in.FirewallMode) {
+		errorJSON(w, 400, "防火墙管理模式无效")
+		return
+	}
 	// Only administrator-supplied fields are copied. Agent-reported fields
 	// (AppliedRevision, AgentBuild, LastSeen, DetectedIPv4/IPv6, UFWRules,
 	// SSHPorts, ...) are never writable at creation.
@@ -977,6 +996,7 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		Provider: in.Provider, Tags: in.Tags, Notes: in.Notes,
 		IPv4: in.IPv4, IPv6: in.IPv6, Domain: in.Domain, InternalAddress: strings.TrimSpace(in.InternalAddress),
 		Status: "pending", UFWStatus: "unknown",
+		FirewallMode: in.FirewallMode, ManagementMode: in.ManagementMode,
 	}
 	if err = validInternalAddress(srv.InternalAddress); err != nil {
 		errorJSON(w, 400, err.Error())
@@ -990,19 +1010,35 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "IP 格式无效")
 		return
 	}
+	if err := validateManagement(srv); err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
 	token := Token()
-	_, err = a.Store.DB.Exec(`INSERT INTO mui_servers(id,data,enroll_hash,enroll_expires) VALUES($1,$2,$3,$4)`, srv.ID, Marshal(srv), Hash(token), time.Now().Add(10*time.Minute).Unix())
+	enrollHash, enrollExpires := Hash(token), time.Now().Add(10*time.Minute).Unix()
+	if shared.OfflineManaged(srv) {
+		token, enrollHash, enrollExpires = "", "", 0
+	}
+	_, err = a.Store.DB.Exec(`INSERT INTO mui_servers(id,data,enroll_hash,enroll_expires) VALUES($1,$2,$3,$4)`, srv.ID, Marshal(srv), enrollHash, enrollExpires)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
 	}
 	a.Store.Audit("server.create", srv.ID, srv.Name)
-	writeJSON(w, 201, map[string]any{"server": srv, "enrollToken": token, "installCommand": a.installCommand(srv.ID, token, srv)})
+	publicURL := a.publicURLForRequest(r)
+	if shared.OfflineManaged(srv) {
+		writeJSON(w, 201, map[string]any{"server": srv})
+		return
+	}
+	writeJSON(w, 201, map[string]any{"server": srv, "enrollToken": token, "installCommand": a.installCommandAt(publicURL, srv.ID, token, srv), "offlineInstall": a.offlineInstallAt(publicURL, srv.ID, token, srv), "standaloneInstall": a.standaloneInstallAt(publicURL)})
 }
 
 // serverStatus derives what the stored status cannot express: a server that
 // stopped reporting is offline, whatever its last report said.
 func serverStatus(s shared.Server) string {
+	if shared.OfflineManaged(s) {
+		return "offline-managed"
+	}
 	if s.LastSeen == nil {
 		return "pending"
 	}
@@ -1046,7 +1082,7 @@ func (a *App) purgeServer(id string) error {
 		}
 	}
 	for _, stmt := range []string{
-		`DELETE FROM mui_nodes WHERE server_id=$1`, `DELETE FROM mui_firewall_rules WHERE server_id=$1`, `DELETE FROM mui_forwards WHERE server_id=$1`, `DELETE FROM mui_certificates WHERE server_id=$1`,
+		`DELETE FROM mui_nodes WHERE server_id=$1`, `DELETE FROM mui_firewall_rules WHERE server_id=$1`, `DELETE FROM mui_forwards WHERE server_id=$1`,
 		`DELETE FROM mui_operations WHERE server_id=$1`, `DELETE FROM mui_server_traffic WHERE server_id=$1`, `DELETE FROM mui_server_totals WHERE server_id=$1`, `DELETE FROM mui_server_applied WHERE server_id=$1`,
 		`DELETE FROM mui_connection_ips WHERE server_id=$1`,
 		`DELETE FROM mui_servers WHERE id=$1`,
@@ -1183,7 +1219,6 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		nodes, _ := a.Store.Nodes(id)
 		rules, _ := a.Store.Rules(id)
 		forwards, _ := a.Store.Forwards(id)
-		certs, _ := a.Store.Certificates(id)
 		routes, err := a.Store.Routes()
 		if err != nil {
 			errorJSON(w, 500, err.Error())
@@ -1197,8 +1232,8 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 409, "服务器被链路 "+strings.Join(names, "、")+" 使用，请先修改或删除这些链路")
 			return
 		}
-		if (len(nodes) > 0 || len(rules) > 0 || len(forwards) > 0 || len(certs) > 0) && r.URL.Query().Get("force") != "1" {
-			errorJSON(w, 409, "该服务器仍有节点、转发、规则或证书；离线服务器可强制删除")
+		if (len(nodes) > 0 || len(rules) > 0 || len(forwards) > 0) && r.URL.Query().Get("force") != "1" {
+			errorJSON(w, 409, "该服务器仍有节点、转发或规则；离线服务器可强制删除")
 			return
 		}
 		if err = a.purgeServer(id); err != nil {
@@ -1213,6 +1248,32 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
+	if in.ManagementMode == "" {
+		in.ManagementMode = old.ManagementMode
+	}
+	managementChanged := shared.OfflineManaged(old) != shared.OfflineManaged(in)
+	if managementChanged {
+		var agentHash string
+		if err := a.Store.DB.QueryRow(`SELECT agent_hash FROM mui_servers WHERE id=$1`, id).Scan(&agentHash); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		if old.AgentVersion != "" || agentHash != "" || old.OfflineExportedAt != nil {
+			errorJSON(w, 409, "已接入或已导出离线配置的服务器不能更改管理方式，请新建独立服务器档案")
+			return
+		}
+	}
+	if in.FirewallMode == "" {
+		in.FirewallMode = old.FirewallMode
+	}
+
+	if err := a.checkFirewallModeChange(old, in.FirewallMode); err != nil {
+		errorJSON(w, 409, err.Error())
+		return
+	}
+	modeChanged := shared.ManualFirewall(old.FirewallMode) != shared.ManualFirewall(in.FirewallMode)
+	old.FirewallMode = in.FirewallMode
+	old.ManagementMode = in.ManagementMode
 	old.Name = in.Name
 	roles, err := validRoles(in.Roles)
 	if err != nil {
@@ -1241,6 +1302,10 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	old.Roles = roles
+	if err := validateManagement(old); err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
 	old.InternalAddress = in.InternalAddress
 	old.Country = strings.ToUpper(in.Country)
 	old.Region = in.Region
@@ -1277,6 +1342,18 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
+	if managementChanged {
+		if _, err = a.Store.DB.Exec(`UPDATE mui_servers SET enroll_hash='',enroll_expires=0 WHERE id=$1`, id); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+	}
+	if modeChanged || managementChanged {
+		if err = a.queueApplyLocked(id, "nodes.apply"); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+	}
 	// syncRoutes may queue this server's own forwards and takes its lock.
 	// The document write is complete; release before reconciling routes.
 	unlock()
@@ -1295,13 +1372,18 @@ func (a *App) enrollment(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "服务器不存在")
 		return
 	}
+	if shared.OfflineManaged(server) {
+		errorJSON(w, 409, "离线服务器请导出配置，不使用接入令牌")
+		return
+	}
 	token := Token()
 	_, err = a.Store.DB.Exec(`UPDATE mui_servers SET enroll_hash=$1,enroll_expires=$2 WHERE id=$3`, Hash(token), time.Now().Add(10*time.Minute).Unix(), id)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	writeJSON(w, 200, map[string]string{"enrollToken": token, "installCommand": a.installCommand(id, token, server)})
+	publicURL := a.publicURLForRequest(r)
+	writeJSON(w, 200, map[string]any{"enrollToken": token, "installCommand": a.installCommandAt(publicURL, id, token, server), "offlineInstall": a.offlineInstallAt(publicURL, id, token, server), "standaloneInstall": a.standaloneInstallAt(publicURL)})
 }
 
 func normalizeNodeTemplate(t *shared.NodeTemplate) {
@@ -1320,6 +1402,9 @@ func normalizeNodeTemplate(t *shared.NodeTemplate) {
 	case "snell":
 		if t.SnellVersion == 0 {
 			t.SnellVersion = 5
+		}
+		if t.SnellPort == 0 {
+			t.SnellPort = shared.SnellListenPort(shared.Node{Port: t.Port})
 		}
 		if t.Obfs == "" {
 			t.Obfs = "none"
@@ -1529,6 +1614,9 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 	n.FirewallPolicy, n.FirewallSources = policy, sources
 	if n.Protocol == "snell" {
 		n.SnellVersion = 5
+		if n.SnellPort == 0 {
+			n.SnellPort = shared.SnellListenPort(n)
+		}
 		if n.ShadowTLSHost == "" {
 			errorJSON(w, 400, "Snell 节点需要 ShadowTLS SNI / 握手域名")
 			return
@@ -1546,13 +1634,19 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 	var cert *shared.Certificate
 	if n.CertificateID != "" {
 		v, err := a.Store.Certificate(n.CertificateID)
-		if err == nil && v.ServerID == n.ServerID {
+		if err == nil {
 			cert = &v
 		}
 	}
 	if err := shared.ValidateNode(n, cert, false); err != nil {
 		errorJSON(w, 400, err.Error())
 		return
+	}
+	if n.Protocol == "snell" {
+		if err := sshPortError(server, n.SnellPort, n.SnellPort); err != nil {
+			errorJSON(w, 400, err.Error())
+			return
+		}
 	}
 	if err := sshPortError(server, n.Port, n.Port); err != nil {
 		errorJSON(w, 400, err.Error())
@@ -1761,6 +1855,9 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n.FirewallPolicy, n.FirewallSources = policy, sources
+	if n.Protocol == "snell" && n.SnellPort == 0 {
+		n.SnellPort = shared.SnellListenPort(n)
+	}
 	if n.Protocol == "snell" && n.ShadowTLSHost == "" {
 		errorJSON(w, 400, "Snell 节点需要 ShadowTLS SNI / 握手域名")
 		return
@@ -1768,7 +1865,7 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 	var cert *shared.Certificate
 	if n.CertificateID != "" {
 		v, e := a.Store.Certificate(n.CertificateID)
-		if e == nil && v.ServerID == n.ServerID {
+		if e == nil {
 			cert = &v
 		}
 	}
@@ -1804,6 +1901,12 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		errorJSON(w, 404, "服务器不存在")
 		return
+	}
+	if n.Protocol == "snell" {
+		if err := sshPortError(server, n.SnellPort, n.SnellPort); err != nil {
+			errorJSON(w, 400, err.Error())
+			return
+		}
 	}
 	if n.Port != old.Port {
 		if err = sshPortError(server, n.Port, n.Port); err != nil {
@@ -1898,7 +2001,7 @@ func (a *App) share(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) certificates(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "GET" {
-		list, err := a.Store.Certificates(r.URL.Query().Get("serverId"))
+		list, err := a.Store.Certificates()
 		if err != nil {
 			errorJSON(w, 500, err.Error())
 			return
@@ -1912,10 +2015,6 @@ func (a *App) certificates(w http.ResponseWriter, r *http.Request) {
 	}
 	var in shared.Certificate
 	if !readJSON(w, r, &in) {
-		return
-	}
-	if _, err := a.Store.Server(in.ServerID); err != nil {
-		errorJSON(w, 404, "服务器不存在")
 		return
 	}
 	expires, _, err := shared.ParseCertificate(in.PEM, in.Key)
@@ -1949,7 +2048,11 @@ func (a *App) certificateByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "证书不存在")
 		return
 	}
-	nodes, _ := a.Store.Nodes(c.ServerID)
+	nodes, err := a.Store.Nodes("")
+	if err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
 	for _, n := range nodes {
 		if n.CertificateID == id {
 			errorJSON(w, 409, "证书仍被节点使用")
@@ -1969,7 +2072,7 @@ func (a *App) certificateByID(w http.ResponseWriter, r *http.Request) {
 // days. It runs on the pruning schedule, so one entry appears per check
 // cycle per certificate, not per request.
 func (a *App) CheckExpiringCertificates() {
-	list, err := a.Store.Certificates("")
+	list, err := a.Store.Certificates()
 	if err != nil {
 		log.Printf("certificate expiry check: %v", err)
 		return
@@ -1979,7 +2082,7 @@ func (a *App) CheckExpiringCertificates() {
 		if !soon {
 			continue
 		}
-		msg := fmt.Sprintf("证书 %s（服务器 %s）%d 天后过期", c.Domain, c.ServerID, days)
+		msg := fmt.Sprintf("证书 %s %d 天后过期", c.Domain, days)
 		log.Printf("certificate expiring: %s", msg)
 		a.Store.Audit("certificate.expiring", c.ID, msg)
 	}
@@ -1995,32 +2098,36 @@ func (a *App) firewall(w http.ResponseWriter, r *http.Request) {
 		paginateList(w, r, list, func(rule shared.FirewallRule) string { return rule.ID })
 		return
 	}
-	var in shared.FirewallRule
-	if !readJSON(w, r, &in) {
+	var body struct {
+		shared.FirewallRule
+		// ReplaceHostRule converts a rule added on the host into this
+		// custom rule: the host rule is removed first.
+		ReplaceHostRule string `json:"replaceHostRule"`
+	}
+	if !readJSON(w, r, &body) {
 		return
 	}
+	in := body.FirewallRule
 	server, err := a.Store.Server(in.ServerID)
 	if err != nil {
 		errorJSON(w, 404, "服务器不存在")
 		return
 	}
-	if strings.TrimSpace(in.Source) != "" {
-		_, source, err := shared.NormalizeFirewallAccess("restricted", in.Source)
-		if err != nil || strings.Contains(source, ",") {
-			errorJSON(w, 400, "单条规则的来源必须是一个 IP 或 CIDR")
-			return
-		}
-		in.Source = source
-	}
-	if err := validateRule(in); err != nil {
+	if err := normalizeCustomRule(server, &in); err != nil {
 		errorJSON(w, 400, err.Error())
 		return
 	}
-	if in.Action == "deny" && in.Network == "tcp" {
-		if err := sshPortError(server, in.PortFrom, in.PortTo); err != nil {
-			errorJSON(w, 400, "拒绝规则不能覆盖 SSH 端口："+err.Error())
+	if body.ReplaceHostRule != "" {
+		lines, err := hostRules(server, []string{body.ReplaceHostRule})
+		if err != nil {
+			errorJSON(w, 409, err.Error())
 			return
 		}
+		if err := a.queueHostRuleDelete(server.ID, lines); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		a.Store.Audit("firewall.host_delete", server.ID, body.ReplaceHostRule)
 	}
 	in.ID = ID()
 	in.Owner = "custom"
@@ -2053,7 +2160,7 @@ func validateRule(r shared.FirewallRule) error {
 			return errors.New("来源必须是 CIDR")
 		}
 	}
-	return nil
+	return shared.RuleFamilyError(r)
 }
 func (a *App) firewallByID(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -2069,8 +2176,21 @@ func (a *App) firewallByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "规则不存在")
 		return
 	}
+	server, err := a.Store.Server(target.ServerID)
+	if err != nil {
+		errorJSON(w, 404, "服务器不存在")
+		return
+	}
+	if err := requireManagedFirewall(server); err != nil {
+		errorJSON(w, 409, err.Error())
+		return
+	}
+	if r.Method == http.MethodPatch {
+		a.updateCustomRule(w, r, *target)
+		return
+	}
 	target.Deleting = true
-	_, err := a.Store.DB.Exec(`UPDATE mui_firewall_rules SET data=$1 WHERE id=$2`, Marshal(target), id)
+	_, err = a.Store.DB.Exec(`UPDATE mui_firewall_rules SET data=$1 WHERE id=$2`, Marshal(target), id)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
@@ -2087,6 +2207,10 @@ func (a *App) ufwInit(w http.ResponseWriter, r *http.Request) {
 	server, err := a.Store.Server(id)
 	if err != nil {
 		errorJSON(w, 404, "服务器不存在")
+		return
+	}
+	if err := requireManagedFirewall(server); err != nil {
+		errorJSON(w, 409, err.Error())
 		return
 	}
 	if server.UFWStatus == "active" && serverStatus(server) == "online" {
@@ -2180,7 +2304,7 @@ func (a *App) subscriptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := raw.Subscription
-	if in.Name == "" || (in.Format != "sing-box" && in.Format != "surge") {
+	if in.Name == "" || (in.Format != "sing-box" && in.Format != "surge" && in.Format != "v2rayn") {
 		errorJSON(w, 400, "名称或格式无效")
 		return
 	}
@@ -2213,7 +2337,7 @@ func (a *App) subscriptions(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	in.URL = a.PublicURL + "/s/" + token
+	in.URL = a.publicURLForRequest(r) + "/s/" + token
 	a.Store.Audit("subscription.create", in.ID, in.Name)
 	writeJSON(w, 201, in)
 }
@@ -2301,7 +2425,7 @@ func (a *App) subscriptionByID(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
-	if strings.TrimSpace(in.Name) == "" || (in.Format != "sing-box" && in.Format != "surge") {
+	if strings.TrimSpace(in.Name) == "" || (in.Format != "sing-box" && in.Format != "surge" && in.Format != "v2rayn") {
 		errorJSON(w, 400, "名称或格式无效")
 		return
 	}
@@ -2384,8 +2508,8 @@ func (a *App) queueSubscriptionsApply(subs ...shared.Subscription) error {
 }
 
 func validateSubscriptionNode(format string, n shared.Node) error {
-	if n.Protocol == "ss" && !shared.SSMultiUser(n.Method) {
-		return errors.New("订阅多用户统计要求 SS 节点使用 2022 加密方式")
+	if format == "v2rayn" && n.Protocol != "ss" && n.Protocol != "anytls" {
+		return errors.New("v2rayN 订阅仅支持 SS 和 AnyTLS 节点，不支持 Snell / ShadowTLS")
 	}
 	if format == "surge" {
 		switch {
@@ -2472,7 +2596,7 @@ func (a *App) rotateSubscription(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.Store.Audit("subscription.rotate", id, "")
-	writeJSON(w, 200, map[string]string{"url": a.PublicURL + "/s/" + token})
+	writeJSON(w, 200, map[string]string{"url": a.publicURLForRequest(r) + "/s/" + token})
 }
 
 // subscriptionLink shows an existing link again. Links created before tokens
@@ -2498,7 +2622,7 @@ func (a *App) subscriptionLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, 200, map[string]string{"url": a.PublicURL + "/s/" + token})
+	writeJSON(w, 200, map[string]string{"url": a.publicURLForRequest(r) + "/s/" + token})
 }
 
 func (a *App) subscriptionDownload(w http.ResponseWriter, r *http.Request) {
@@ -2581,6 +2705,9 @@ func (a *App) previewSubscription(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"content": string(body), "excluded": excluded})
 }
 
+// operationKinds are the jobs the panel queues for agents.
+var operationKinds = []string{"nodes.apply", "firewall.apply", "forwards.apply", "subscriptions.apply", "ufw.init", "ufw.delete", "agent.upgrade", "core.upgrade"}
+
 func (a *App) operations(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	if err := a.Store.ExpireUpgrades(); err != nil {
@@ -2592,8 +2719,31 @@ func (a *App) operations(w http.ResponseWriter, r *http.Request) {
 	// IDs start with their creation time, so "before an ID" means "older than".
 	query, args := newLogQuery(`SELECT data FROM mui_operations`)
 	query.equal("server_id", r.URL.Query().Get("serverId"))
-	query.before("id", r.URL.Query().Get("before"))
-	rows, err := a.Store.DB.Query(query.sql("id DESC", pageLimit(r), 0), *args...)
+	if kind := r.URL.Query().Get("kind"); kind != "" {
+		// The kind lives in the JSON document, which the panel writes with
+		// json.Marshal: exactly `"kind":"<kind>"`. Only known kinds are
+		// accepted, so the pattern is never user text.
+		if !slices.Contains(operationKinds, kind) {
+			errorJSON(w, 400, "操作类型无效")
+			return
+		}
+		query.where("data LIKE " + query.arg(`%"kind":"`+likeEscape(kind)+`"%`) + ` ESCAPE '\'`)
+	}
+	page, err := readLogPage(r)
+	if err == nil {
+		err = query.idRange(r, "id")
+	}
+	if err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
+	limit, offset := pageLimit(r), 0
+	if page.paged {
+		limit, offset = page.size, page.offset()
+	} else {
+		query.before("id", r.URL.Query().Get("before"))
+	}
+	rows, err := a.Store.DB.Query(query.sql("id DESC", limit, offset), *args...)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
@@ -2607,6 +2757,10 @@ func (a *App) operations(w http.ResponseWriter, r *http.Request) {
 		_ = json.Unmarshal([]byte(raw), &op)
 		op.Deployed = nil
 		out = append(out, op)
+	}
+	if page.paged {
+		a.writeLogPage(w, query, out)
+		return
 	}
 	writeJSON(w, 200, out)
 }
@@ -2788,11 +2942,24 @@ func (a *App) trafficSummary(w http.ResponseWriter, r *http.Request) {
 }
 func (a *App) audit(w http.ResponseWriter, r *http.Request) {
 	query, args := newLogQuery(`SELECT id,at_ms,action,target,detail FROM mui_audit`)
-	query.before("id", r.URL.Query().Get("before"))
 	if q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q"))); q != "" {
 		query.where("LOWER(action || ' ' || detail) LIKE " + query.arg("%"+likeEscape(q)+"%") + ` ESCAPE '\'`)
 	}
-	rows, err := a.Store.DB.Query(query.sql("id DESC", pageLimit(r), 0), *args...)
+	page, err := readLogPage(r)
+	if err == nil {
+		err = query.timeRange(r, "at_ms")
+	}
+	if err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
+	limit, offset := pageLimit(r), 0
+	if page.paged {
+		limit, offset = page.size, page.offset()
+	} else {
+		query.before("id", r.URL.Query().Get("before"))
+	}
+	rows, err := a.Store.DB.Query(query.sql("id DESC", limit, offset), *args...)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
@@ -2806,6 +2973,10 @@ func (a *App) audit(w http.ResponseWriter, r *http.Request) {
 			out = append(out, map[string]any{"id": id, "at": time.UnixMilli(at), "action": action, "target": target, "detail": detail})
 		}
 	}
+	if page.paged {
+		a.writeLogPage(w, query, out)
+		return
+	}
 	writeJSON(w, 200, out)
 }
 
@@ -2818,7 +2989,7 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 	if err != nil {
 		return shared.DesiredState{}, err
 	}
-	state := shared.DesiredState{Revision: server.Revision, ProtocolVersion: 1, Nodes: []shared.ManagedNode{}, Rules: []shared.FirewallRule{}, Forwards: []shared.ForwardRule{}}
+	state := shared.DesiredState{FirewallMode: server.FirewallMode, Revision: server.Revision, ProtocolVersion: 1, Nodes: []shared.ManagedNode{}, Rules: []shared.FirewallRule{}, Forwards: []shared.ForwardRule{}}
 	subscriptions, err := a.Store.Subscriptions()
 	if err != nil {
 		return state, err
@@ -2836,6 +3007,13 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 			continue
 		}
 		n.FirewallPolicy, n.FirewallSources = effectiveNodeAccess(n)
+		if shared.ManualFirewall(server.FirewallMode) {
+			n.FirewallPolicy, n.FirewallSources = "manual", ""
+		}
+		n.FirewallPolicy, n.FirewallSources, err = shared.NormalizeFirewallAccess(n.FirewallPolicy, n.FirewallSources)
+		if err != nil {
+			return state, fmt.Errorf("节点 %s 防火墙来源: %w", n.Name, err)
+		}
 		password, err := a.Store.NodeSecret(n.ID)
 		if err != nil {
 			return state, err
@@ -2885,6 +3063,13 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 	}
 	for _, forward := range forwards {
 		if !forward.Deleting {
+			if shared.ManualFirewall(server.FirewallMode) {
+				forward.FirewallPolicy, forward.FirewallSources = "manual", ""
+			}
+			forward.FirewallPolicy, forward.FirewallSources, err = shared.NormalizeFirewallAccess(forward.FirewallPolicy, forward.FirewallSources)
+			if err != nil {
+				return state, fmt.Errorf("转发 %s 防火墙来源: %w", forward.Name, err)
+			}
 			state.Forwards = append(state.Forwards, forward)
 		}
 	}
@@ -2903,8 +3088,10 @@ func (a *App) subscriptionItem(sub shared.Subscription, n shared.Node, server sh
 		return shared.SubscriptionItem{}, err
 	}
 	item := shared.SubscriptionItem{Node: n, Server: server, Password: password, ShadowTLSPassword: shadowPassword}
-	if n.Protocol == "ss" && !shared.SSMultiUser(n.Method) {
-		return item, errors.New("订阅不支持非 2022 的 SS 节点")
+	if shared.SharedSubscriptionPassword(n) {
+		// Legacy AEAD SS has one node password, not SS 2022's
+		// server-key:user-key pair. Do not invent a per-subscription key.
+		return item, nil
 	}
 	user := a.Store.SubscriptionUser(n, sub.ID)
 	switch n.Protocol {
@@ -2943,7 +3130,20 @@ func (a *App) queueApplyLocked(serverID, kind string) error {
 	if err != nil {
 		return err
 	}
+	if shared.ManualFirewall(server.FirewallMode) && strings.HasPrefix(kind, "ufw.") {
+		return errors.New("手动管理模式不允许通过面板操作 UFW")
+	}
 	apply := strings.HasSuffix(kind, ".apply")
+	if shared.OfflineManaged(server) {
+		if !apply {
+			return errors.New("离线服务器不执行在线任务，请导出配置并在目标机应用")
+		}
+		if err := a.Store.SupersedeQueuedApply(serverID); err != nil {
+			return err
+		}
+		server.Revision++
+		return a.Store.PutServer(server)
+	}
 	if kind == "forwards.apply" && !server.ForwardSupport {
 		// This agent cannot act on forwards, and nothing else changed. The rule
 		// stays pending; the first report from a capable agent queues a full
@@ -3005,6 +3205,12 @@ func (a *App) nodeLive(n shared.Node, server shared.Server, subscriptionID strin
 	if !n.Enabled || n.Deleting {
 		return false, nil
 	}
+	sharedPassword := shared.SharedSubscriptionPassword(n)
+	if sharedPassword {
+		// There is no additional subscription login to install for this node.
+		// Its deployed node fingerprint still has to match below.
+		subscriptionID = ""
+	}
 	if subscriptionID != "" && !server.MultiUserStats {
 		return false, nil
 	}
@@ -3015,7 +3221,7 @@ func (a *App) nodeLive(n shared.Node, server shared.Server, subscriptionID strin
 	if !known {
 		// No apply has completed since deployments were first recorded; fall
 		// back to the server-wide revision check used before.
-		return n.Status == "active" && server.MultiUserStats && server.AppliedRevision >= server.Revision, nil
+		return n.Status == "active" && (server.MultiUserStats || sharedPassword) && server.AppliedRevision >= server.Revision, nil
 	}
 	deployed, ok := applied[n.ID]
 	if !ok {
@@ -3144,6 +3350,12 @@ func (a *App) agentEnroll(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
+	unlock := a.lockServer(in.ServerID)
+	defer unlock()
+	if srv, err := a.Store.Server(in.ServerID); err == nil && shared.OfflineManaged(srv) {
+		errorJSON(w, 403, "离线管理服务器不支持在线接入")
+		return
+	}
 	var expected string
 	var expires int64
 	err := a.Store.DB.QueryRow(`SELECT enroll_hash,enroll_expires FROM mui_servers WHERE id=$1`, in.ServerID).Scan(&expected, &expires)
@@ -3199,6 +3411,37 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if allowApply && !server.SnellFixedPort {
+		nodes, err := a.Store.Nodes(id)
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		for _, node := range nodes {
+			if node.Enabled && !node.Deleting && node.Protocol == "snell" && node.ShadowTLSHost != "" && node.SnellPort != 0 {
+				// An older helper silently ignores this field. Keep the apply
+				// queued, while still allowing its agent.upgrade job through.
+				allowApply = false
+				break
+			}
+		}
+	}
+	if allowApply && !server.ForwardTCPUDP {
+		forwards, err := a.Store.Forwards(id)
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		for _, f := range forwards {
+			if !f.Deleting && f.Network == shared.ForwardTCPUDP {
+				allowApply = false
+				break
+			}
+		}
+	}
+	if shared.ManualFirewall(server.FirewallMode) && !server.ManualFirewallSupport {
+		allowApply = false
+	}
 	job, err := a.Store.ClaimJob(id, allowApply)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
@@ -3221,6 +3464,10 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 	server, err := a.Store.Server(id)
 	if err != nil {
 		errorJSON(w, 404, "服务器不存在")
+		return
+	}
+	if shared.OfflineManaged(server) {
+		errorJSON(w, 403, "离线管理服务器不接收在线上报")
 		return
 	}
 	// Validate the job report before any write takes effect: an invalid
@@ -3266,6 +3513,8 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 	server.Status = "online"
 	becameMultiUser := !server.MultiUserStats && in.MultiUserStats
 	becameForward := !server.ForwardSupport && in.ForwardSupport
+	becameForwardTCPUDP := in.AgentVersion != "" && !server.ForwardTCPUDP && in.ForwardTCPUDP
+	becameManualFirewall := in.AgentVersion != "" && !server.ManualFirewallSupport && in.ManualFirewallSupport && shared.ManualFirewall(server.FirewallMode)
 	// Agent-supplied text ends up in the server document and on the admin's
 	// screen; keep each piece to a sane size.
 	in.OS, in.Arch, in.AgentVersion, in.AgentBuild = clip(in.OS, 120), clip(in.Arch, 32), clip(in.AgentVersion, 64), clip(in.AgentBuild, 64)
@@ -3291,9 +3540,12 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 	if in.AgentVersion != "" {
 		server.AgentVersion = in.AgentVersion
 		server.NodeFirewallPolicies = in.NodeFirewallPolicies
+		server.ManualFirewallSupport = in.ManualFirewallSupport
 		server.MultiUserStats = in.MultiUserStats
 		server.ForwardSupport = in.ForwardSupport
+		server.ForwardTCPUDP = in.ForwardTCPUDP
 		server.ShadowTLSAuth = in.ShadowTLSAuth
+		server.SnellFixedPort = in.SnellFixedPort
 		server.ReleaseKeyPinned = in.ReleaseKeyPinned
 		server.AgentSelfUpdate = in.AgentSelfUpdate
 		server.AgentBuild = in.AgentBuild
@@ -3446,6 +3698,9 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 					log.Printf("drop deleted nodes from subscriptions: %v", err)
 				}
 				rules, _ := a.Store.Rules(id)
+				if shared.ManualFirewall(server.FirewallMode) {
+					rules = nil // A manual apply did not change these host rules.
+				}
 				for _, rule := range rules {
 					if rule.Deleting {
 						_, _ = a.Store.DB.Exec(`DELETE FROM mui_firewall_rules WHERE id=$1`, rule.ID)
@@ -3484,6 +3739,9 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 				rules, _ := a.Store.Rules(id)
+				if shared.ManualFirewall(server.FirewallMode) {
+					rules = nil
+				}
 				for _, rule := range rules {
 					if rule.Status == "pending" || rule.Deleting {
 						rule.Status = "error"
@@ -3520,7 +3778,7 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if becameForward {
+	if becameForward || becameForwardTCPUDP {
 		forwards, e := a.Store.Forwards(id)
 		if e != nil {
 			errorJSON(w, 500, e.Error())
@@ -3531,6 +3789,14 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 				errorJSON(w, 500, err.Error())
 				return
 			}
+		}
+	}
+	if becameManualFirewall {
+		// Even an empty manual server needs a signed local state so the
+		// helper knows which firewall mode applies before any nodes exist.
+		if err = a.queueApplyLocked(id, "nodes.apply"); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
 		}
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})

@@ -422,6 +422,18 @@ td small.dangerText {
 .serverFilters {
   flex-wrap: wrap;
 }
+.forwardFilters {
+  flex-wrap: wrap;
+}
+.forwardFilters input,
+.forwardFilters select {
+  max-width: 100%;
+  min-width: 0;
+}
+.forwardFilters .hint {
+  margin: 0;
+  white-space: nowrap;
+}
 main > .filters {
   padding: 0 0 14px;
   border: 0;
@@ -578,6 +590,23 @@ input[type="checkbox"] {
   border: 1px solid var(--line);
   border-radius: 4px;
 }
+.subscriptionRouteChoice {
+  align-items: flex-start;
+  padding: 4px 0;
+}
+.subscriptionRouteChoice input {
+  flex-shrink: 0;
+  margin-top: 3px;
+}
+.subscriptionRouteDetails {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.subscriptionRouteChoice .routeChoiceIssue {
+  color: var(--warn);
+}
 .hint {
   margin-top: 12px;
 }
@@ -612,6 +641,72 @@ input[type="checkbox"] {
 .modal > form {
   padding: 20px;
 }
+.serverFormSection + .serverFormSection {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.serverFormSection h3 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.serverForm .formGrid {
+  align-items: start;
+  gap: 14px 16px;
+}
+.serverForm .field {
+  min-width: 0;
+  align-content: start;
+}
+.serverForm .field input,
+.serverForm .field select {
+  height: 36px;
+}
+.serverForm .field textarea {
+  font: inherit;
+  font-size: 14px;
+}
+.serverFormWide {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.serverRoles {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.serverRoles legend {
+  padding: 0;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.serverRoles .checkRow {
+  gap: 8px;
+}
+.serverRoles .check {
+  padding: 7px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+}
+.serverFieldHelp {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.serverFieldHelp p + p {
+  margin-top: 4px;
+}
+.serverFormActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
 .installModal {
   width: min(760px, 100%);
 }
@@ -624,6 +719,64 @@ input[type="checkbox"] {
 }
 .installModal .hint {
   margin: 0;
+}
+.installMethods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 16px 20px 0;
+}
+.installMethods button {
+  padding: 6px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+}
+.installMethods button[aria-pressed="true"] {
+  color: var(--ink-text);
+  border-color: var(--ink);
+  background: var(--ink);
+}
+.offlineInstall {
+  display: grid;
+  gap: 20px;
+  padding: 20px;
+  min-width: 0;
+}
+.installStep {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.installStep + .installStep {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.installStep h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.installStep .field {
+  margin-bottom: 0;
+}
+.installStep > button {
+  justify-self: start;
+}
+.installDownloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.installDownloads a {
+  padding: 5px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+.offlineInstall .commandBox {
+  padding: 0;
+  border: 0;
 }
 .confirmationOverlay {
   z-index: 20;
@@ -947,15 +1100,39 @@ td .menuList button {
 .filters input {
   width: 260px;
 }
-.loadMore {
+.pager {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px 12px;
   padding: 10px 16px;
   border-top: 1px solid var(--line);
 }
-.loadMore .hint {
+.pager .hint {
+  margin: 0;
+}
+.pager .pages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.pager .pages button {
+  min-width: 34px;
+}
+.pager select {
+  width: auto;
+}
+.dateRange {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.dateRange input {
+  width: auto;
+}
+.dateRange .hint {
   margin: 0;
 }
 
@@ -1030,3 +1207,28 @@ th.num {
   gap: 8px 12px;
   margin-bottom: 8px;
 }
+
+.headerRefreshStatus { font-size: .8rem; color: var(--muted); }
+.headerActions .iconButton[aria-pressed="true"] { color: var(--accent); background: var(--code-bg); border-color: currentColor; }
+.refreshing svg { animation: mui-refresh-spin 1s linear infinite; }
+@keyframes mui-refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .refreshing svg { animation: none; } }
+
+.firewallControls { border: 0; padding: 0; margin: 0; min-width: 0; }
+
+.offlineManager .offlineStep { min-width: 0; }
+.offlineManager .offlineStep + .offlineStep { border-top: 1px solid var(--line); padding-top: 20px; }
+.offlineManager .offlineStep h3 { margin: 0; font-size: 14px; }
+.offlineManager .offlineStep > * + * { margin-top: 12px; }
+.offlineManager textarea { display: block; width: 100%; font-family: var(--mono, monospace); }
+.offlineManager select { max-width: 180px; }
+.offlineManager .installCommand { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; max-height: 320px; overflow: auto; padding: 12px; border-radius: 4px; background: var(--code-bg); font-size: 12px; }
+.offlineManager .offlineStep > button + button { margin-left: 10px; }
+
+.panelHead .headerActions, .offlineInstall .headerActions { flex-wrap: wrap; }
+.agentDownloadList { display: grid; gap: 10px; min-width: 0; }
+.agentDownloadRow { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px; border: 1px solid var(--line); border-radius: 4px; min-width: 0; }
+.agentDownloadRow strong, .agentDownloadRow small { display: block; overflow-wrap: anywhere; }
+.agentDownloadRow small { font-size: 12px; color: var(--muted); margin-top: 3px; }
+.agentDownloadRow a { color: var(--accent); white-space: nowrap; }
+.agentDownloadRow > .hint { max-width: 45%; text-align: right; }

@@ -147,6 +147,7 @@ func Start(rules []shared.ForwardRule) (*Service, error) {
 func (s *Service) Reload(rules []shared.ForwardRule) error {
 	wanted := map[string]shared.ForwardRule{}
 	order := []string{}
+	logicalIDs := map[string]bool{}
 	for _, spec := range rules {
 		if !spec.Enabled || spec.Deleting {
 			continue
@@ -157,11 +158,19 @@ func (s *Service) Reload(rules []shared.ForwardRule) error {
 		if spec.Listen == "" {
 			spec.Listen = "0.0.0.0"
 		}
-		if _, dup := wanted[spec.ID]; dup {
+		if logicalIDs[spec.ID] {
 			return fmt.Errorf("转发 %q: 重复的规则 ID %q", spec.Name, spec.ID)
 		}
-		order = append(order, spec.ID)
-		wanted[spec.ID] = spec
+		logicalIDs[spec.ID] = true
+		// Listener identities include the protocol; traffic counters retain
+		// the logical ID so TCP and UDP share one public statistics record.
+		for _, network := range shared.ForwardNetworks(spec.Network) {
+			socket := spec
+			socket.Network = network
+			key := spec.ID + "\x00" + network
+			order = append(order, key)
+			wanted[key] = socket
+		}
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -223,10 +232,10 @@ func (s *Service) Reload(rules []shared.ForwardRule) error {
 		if _, running := s.rules[id]; running {
 			continue
 		}
-		stats := s.counts[id]
+		stats := s.counts[wanted[id].ID]
 		if stats == nil {
 			stats = &counter{}
-			s.counts[id] = stats
+			s.counts[wanted[id].ID] = stats
 		}
 		startedRule, err := s.startRule(wanted[id], stats)
 		if err != nil {
@@ -244,10 +253,10 @@ func (s *Service) Reload(rules []shared.ForwardRule) error {
 				if _, running := s.rules[oid]; running {
 					continue
 				}
-				ostats := s.counts[oid]
+				ostats := s.counts[ospec.ID]
 				if ostats == nil {
 					ostats = &counter{}
-					s.counts[oid] = ostats
+					s.counts[ospec.ID] = ostats
 				}
 				oldRule, rerr := s.startRule(ospec, ostats)
 				if rerr != nil {

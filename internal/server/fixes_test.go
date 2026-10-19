@@ -549,10 +549,9 @@ func makeTestCertificate(t *testing.T, isCA bool, eku []x509.ExtKeyUsage, days i
 // be CAs; the list reports days until expiry.
 func TestCertificateEKUAndExpiry(t *testing.T) {
 	p := newTestMui(t)
-	serverID, _ := p.enroll("cert-server")
 	post := func(certPEM, keyPEM string) (int, map[string]any) {
 		code, out, _ := p.do("POST", "/api/certificates", map[string]any{
-			"serverId": serverID, "domain": "example.com", "pem": certPEM, "key": keyPEM,
+			"domain": "example.com", "pem": certPEM, "key": keyPEM,
 		}, nil)
 		return code, out
 	}
@@ -573,7 +572,7 @@ func TestCertificateEKUAndExpiry(t *testing.T) {
 	if code, out := post(certPEM, keyPEM); code != 201 {
 		t.Fatalf("certificate without EKU should be accepted: %d %v", code, out)
 	}
-	code, body := rawDo(t, p, "GET", "/api/certificates?serverId="+serverID, nil, nil)
+	code, body := rawDo(t, p, "GET", "/api/certificates", nil, nil)
 	if code != 200 {
 		t.Fatalf("certificate list: %d %s", code, body)
 	}
@@ -582,6 +581,9 @@ func TestCertificateEKUAndExpiry(t *testing.T) {
 		t.Fatalf("certificate list should have 2 entries: %d %s", code, body)
 	}
 	for _, c := range list {
+		if c["key"] != nil || c["pem"] != nil || c["serverId"] != nil {
+			t.Fatalf("certificate list must only expose shared metadata: %v", c)
+		}
 		if c["expiringSoon"] == nil || c["daysUntilExpiry"] == nil {
 			t.Fatalf("certificate should report expiry: %v", c)
 		}

@@ -20,8 +20,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"mui/internal/shared"
 )
 
 const (
@@ -196,19 +194,9 @@ func downloadUpgradeArtifact(name, expected string, maxSize int64) (string, erro
 	// The hash above came from the panel together with the file. With a pinned
 	// release key it must also be listed in a manifest signed off the panel.
 	prefix := strings.TrimRight(base.String(), "/") + "/download/" + runtime.GOARCH + "/"
-	manifest, err := fetchSmall(ctx, client, prefix+"SHA256SUMS")
+	manifest, err := fetchUpgradeManifest(ctx, client, prefix, key, name, expected)
 	if err != nil {
 		return "", err
-	}
-	signature, err := fetchSmall(ctx, client, prefix+"SHA256SUMS.sig")
-	if err != nil {
-		return "", err
-	}
-	if err = shared.VerifyManifest(key, manifest, signature); err != nil {
-		return "", err
-	}
-	if listed, ok := shared.ManifestHash(manifest, name); !ok || listed != expected {
-		return "", fmt.Errorf("%s is not listed in the signed release manifest", name)
 	}
 	// A release may require a minimum agent version (e.g. for a new helper
 	// protocol). Refuse to upgrade into a release this agent cannot serve.
@@ -234,22 +222,6 @@ func downloadUpgradeArtifact(name, expected string, maxSize int64) (string, erro
 	}
 	valid = true
 	return tmp.Name(), nil
-}
-
-func fetchSmall(ctx context.Context, client *http.Client, endpoint string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s: HTTP %d", endpoint, resp.StatusCode)
-	}
-	return io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 }
 
 // randomUnitSuffix returns an unpredictable suffix for transient systemd-run

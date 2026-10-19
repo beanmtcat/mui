@@ -12,3 +12,4 @@ deploy/tls/*
 !deploy/tls/.gitkeep
 .claude
 deploy/publish.env
+deploy/.secrets/

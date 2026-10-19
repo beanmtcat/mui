@@ -9,3 +9,4 @@ web/dist
 deploy/tls
 deploy/.env
 deploy/publish.env
+deploy/.secrets

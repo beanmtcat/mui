@@ -2,7 +2,7 @@
 set -eu
 
 usage() {
-  echo 'usage: sh -s -- PANEL_URL SERVER_ID ENROLL_TOKEN node|relay [RELEASE_PUBLIC_KEY]' >&2
+  echo 'usage: sh INSTALL_SCRIPT PANEL_URL SERVER_ID ENROLL_TOKEN|- node|relay [RELEASE_PUBLIC_KEY]' >&2
   exit 2
 }
 [ "$#" -ge 4 ] && [ "$#" -le 5 ] || usage
@@ -11,6 +11,12 @@ server_id=$2
 enroll_token=$3
 purpose=$4
 release_key=${5:-}
+if [ "$enroll_token" = - ]; then
+  IFS= read -r enroll_token || {
+    echo 'could not read enrollment token from stdin' >&2
+    exit 2
+  }
+fi
 case "$purpose" in
   node|relay) ;;
   *) echo 'server purpose must be node or relay' >&2; exit 2 ;;
@@ -62,7 +68,8 @@ if [ "$purpose" = node ]; then verify="$verify sing-box"; fi
 chmod 755 "$workdir/mui-agent"
 if [ "$purpose" = node ]; then
   chmod 755 "$workdir/sing-box"
-  "$workdir/mui-agent" install "$panel_url" "$server_id" "$enroll_token" "$workdir/sing-box" "$release_key"
+  printf '%s\n' "$enroll_token" | "$workdir/mui-agent" install "$panel_url" "$server_id" - "$workdir/sing-box" "$release_key" --token-stdin
 else
-  "$workdir/mui-agent" install "$panel_url" "$server_id" "$enroll_token" - "$release_key"
+  printf '%s\n' "$enroll_token" | "$workdir/mui-agent" install "$panel_url" "$server_id" - - "$release_key" --token-stdin
 fi
+printf '%s\n' 'MUI Agent 安装完成。'

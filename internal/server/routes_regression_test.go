@@ -218,6 +218,7 @@ func TestRouteForwardsListenOnIPv6(t *testing.T) {
 	entry.IPv4 = ""
 	entry.Domain = ""
 	entry.IPv6 = "2001:db8::1"
+	entry.DetectedIPv4 = "198.51.100.1" // Clients use IPv6; egress to the IPv4 exit uses IPv4.
 	if err := l.p.store.PutServer(entry); err != nil {
 		t.Fatal(err)
 	}
@@ -269,6 +270,13 @@ func TestServerEditCanReconcileItsOwnRouteForwards(t *testing.T) {
 // may type: a large load-balanced group must not break the exit's apply.
 func TestRouteManySourcesStillApply(t *testing.T) {
 	l := newRouteLab(t)
+	// A hostname can resolve to either family; both upstream families are
+	// needed here. Literal IPv4 destinations now correctly admit IPv4 only.
+	exit, _ := l.p.store.Server(l.exit)
+	exit.IPv4, exit.IPv6, exit.Domain = "", "", "exit.example.com"
+	if err := l.p.store.PutServer(exit); err != nil {
+		t.Fatal(err)
+	}
 	var group []string
 	for i := range 16 {
 		id, _ := l.p.enrollAs("lb", []string{"transit"}, map[string]any{"ipv4": fmt.Sprintf("198.51.101.%d", i+1), "ipv6": fmt.Sprintf("2001:db8:1::%d", i+1)})

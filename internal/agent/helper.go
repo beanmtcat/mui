@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -34,10 +33,10 @@ import (
 const helperTimeout = 4 * time.Minute
 
 // helperWriteMu serializes every helper write operation (ufw.init,
-// ufw.confirm, all *.apply kinds, agent.upgrade, core.upgrade,
-// upgrade.confirm). Two applies must never interleave: each
+// ufw.confirm, ufw.delete, ufw.ssh, all *.apply kinds, agent.upgrade,
+// core.upgrade, upgrade.confirm). Two applies must never interleave: each
 // one reads the live state, rewrites it, and rolls back on failure. The
-// read-only status kind is exempt.
+// read-only status kind is exempt; ufw.ssh skips rather than waits.
 var helperWriteMu sync.Mutex
 
 // helperConnSem caps concurrent helper connections. ServeHelper blocks
@@ -55,6 +54,9 @@ type helperRequest struct {
 	Kind            string              `json:"kind"`
 	ProtocolVersion int                 `json:"protocolVersion"`
 	State           shared.DesiredState `json:"state"`
+	// StateRaw is a job's state as the panel sent it. When present, State is
+	// decoded from it and the signature is checked over it.
+	StateRaw json.RawMessage `json:"stateRaw,omitempty"`
 }
 type helperResponse struct {
 	Error           string      `json:"error,omitempty"`
@@ -136,10 +138,28 @@ func handleHelper(conn net.Conn) {
 		_ = json.NewEncoder(conn).Encode(helperResponse{Error: "unsupported helper protocol version", ProtocolVersion: 1})
 		return
 	}
+	if len(req.StateRaw) > 0 {
+		req.State = shared.DesiredState{}
+		if err = json.Unmarshal(req.StateRaw, &req.State); err != nil {
+			_ = json.NewEncoder(conn).Encode(helperResponse{Error: "invalid job state: " + err.Error(), ProtocolVersion: 1})
+			return
+		}
+	}
 	resp := helperResponse{ProtocolVersion: 1}
 	// Every write kind runs under the write lock. Status is read-only and
 	// exempt, so status queries keep working while an apply is in flight.
-	if req.Kind != "status" {
+	switch req.Kind {
+	case "status":
+	case "ufw.ssh":
+		// The periodic SSH check never waits behind an apply, which runs the
+		// same check when it syncs UFW; waiting would stall the agent's
+		// reports for as long as the apply takes.
+		if !helperWriteMu.TryLock() {
+			_ = json.NewEncoder(conn).Encode(resp)
+			return
+		}
+		defer helperWriteMu.Unlock()
+	default:
 		helperWriteMu.Lock()
 		defer helperWriteMu.Unlock()
 	}
@@ -151,6 +171,10 @@ func handleHelper(conn net.Conn) {
 		err = initUFW()
 	case "ufw.confirm":
 		confirmUFW()
+	case "ufw.ssh":
+		err = ensureSSHAllowed()
+	case "ufw.delete":
+		err = deleteHostRules(req.State, req.StateRaw)
 	// Apply kinds are strictly separated: firewall.apply reconciles UFW
 	// rules only and never touches sing-box, certificates, or forwards;
 	// the other apply kinds run the full apply. No apply kind ever
@@ -161,7 +185,7 @@ func handleHelper(conn net.Conn) {
 	// firewall-only apply would silently drop a node change it superseded.
 	// ApplyDesired restarts nothing whose configuration did not change.
 	case "nodes.apply", "firewall.apply", "forwards.apply", "subscriptions.apply":
-		err = ApplyDesired(req.State)
+		err = ApplyDesired(req.State, req.StateRaw)
 	case "agent.upgrade":
 		err = runUpgradeOnce("agent.upgrade", req.State.UpgradeSHA256, func() error { return upgradeAgent(req.State.UpgradeSHA256) })
 	case "core.upgrade":
@@ -222,6 +246,10 @@ func writeUpgradeConfirmation(path, sha string) error {
 }
 
 func callHelper(kind string, state shared.DesiredState) (helperResponse, error) {
+	return callHelperRaw(kind, state, nil)
+}
+
+func callHelperRaw(kind string, state shared.DesiredState, raw json.RawMessage) (helperResponse, error) {
 	var resp helperResponse
 	conn, err := net.DialTimeout("unix", SocketPath, 5*time.Second)
 	if err != nil {
@@ -229,7 +257,7 @@ func callHelper(kind string, state shared.DesiredState) (helperResponse, error) 
 	}
 	defer conn.Close()
 	_ = conn.SetDeadline(time.Now().Add(helperTimeout))
-	if err = json.NewEncoder(conn).Encode(helperRequest{Kind: kind, ProtocolVersion: 1, State: state}); err != nil {
+	if err = json.NewEncoder(conn).Encode(helperRequest{Kind: kind, ProtocolVersion: 1, State: state, StateRaw: raw}); err != nil {
 		return resp, err
 	}
 	if err = json.NewDecoder(conn).Decode(&resp); err != nil {
@@ -246,6 +274,13 @@ func CallHelper(kind string, state shared.DesiredState) error {
 	return err
 }
 
+// CallHelperJob runs a panel job, handing over the state's bytes as received
+// so the helper checks the signature over exactly what the panel signed.
+func CallHelperJob(job shared.Job) error {
+	_, err := callHelperRaw(job.Kind, job.State, job.StateRaw)
+	return err
+}
+
 // QueryHostStatus asks the root helper for the firewall state; `ufw status`
 // and `sshd -T` both refuse to run as the unprivileged agent account.
 func QueryHostStatus() HostStatus {
@@ -257,7 +292,7 @@ func QueryHostStatus() HostStatus {
 }
 
 func hostStatus() HostStatus {
-	status := HostStatus{UFW: UFWStatus(), Conflict: firewallConflict(), Supported: true, AgentSelfUpdate: true, ForwardSupport: true, ShadowTLSAuth: true, MultiUserStats: true, NodeFirewallPolicies: true, CoreSelfUpdate: true, ReleaseKeyPinned: fileExists(ReleaseKeyPath)}
+	status := HostStatus{UFW: UFWStatus(), Conflict: firewallConflict(), ManualFirewallSupport: true, Supported: true, AgentSelfUpdate: true, ForwardSupport: true, ForwardTCPUDP: true, ShadowTLSAuth: true, SnellFixedPort: true, MultiUserStats: true, NodeFirewallPolicies: true, CoreSelfUpdate: true, ReleaseKeyPinned: fileExists(ReleaseKeyPath)}
 	if file, err := os.Open(ForwardStats); err == nil {
 		var traffic []shared.ForwardTrafficPoint
 		_ = json.NewDecoder(io.LimitReader(file, 1<<20)).Decode(&traffic)
@@ -423,24 +458,7 @@ func confirmUFW() {
 }
 
 func sshPorts() (map[int]bool, error) {
-	out, err := command("sshd", "-T")
-	if err != nil {
-		return nil, fmt.Errorf("cannot detect active SSH ports: %w", err)
-	}
-	ports := map[int]bool{}
-	for _, line := range strings.Split(out, "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[0] == "port" {
-			port, e := strconv.Atoi(fields[1])
-			if e == nil && port >= 1 && port <= 65535 {
-				ports[port] = true
-			}
-		}
-	}
-	if len(ports) == 0 {
-		return nil, errors.New("cannot detect active SSH port")
-	}
-	return ports, nil
+	return detectSSHPorts(command)
 }
 
 func coreActive() bool {
@@ -476,9 +494,9 @@ func forwardEnabled() bool {
 // timeout is not a failure: the apply keeps running in the background, and
 // the caller must learn the outcome from a later job/status query instead
 // of dispatching the job again.
-func ApplyDesired(state shared.DesiredState) error {
+func ApplyDesired(state shared.DesiredState, raw []byte) error {
 	done := make(chan error, 1)
-	go func() { done <- applyDesiredInternal(state) }()
+	go func() { done <- applyDesiredInternal(state, raw) }()
 	select {
 	case err := <-done:
 		return err
@@ -487,8 +505,8 @@ func ApplyDesired(state shared.DesiredState) error {
 	}
 }
 
-func applyDesiredInternal(state shared.DesiredState) error {
-	if err := verifyDesiredSignature(state); err != nil {
+func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
+	if err := verifyDesiredSignature(state, raw); err != nil {
 		return err
 	}
 	if err := validateDesired(state); err != nil {
@@ -510,26 +528,28 @@ func applyDesiredInternal(state shared.DesiredState) error {
 	}
 	if current.Revision == state.Revision && state.Revision > 0 {
 		forwardReady := (needsForward && wasForwardActive && wasForwardEnabled) || (!needsForward && !wasForwardActive && !wasForwardEnabled && forwardConfigEmpty)
-		if UFWStatus() == "active" && (!hasCore || coreActive()) && forwardReady && !driftDetected(state, hasCore) {
+		if (shared.ManualFirewall(state.FirewallMode) || UFWStatus() == "active") && (!hasCore || coreActive()) && forwardReady && !driftDetected(state, hasCore) {
 			return nil
 		}
 	}
 	if current.Revision > state.Revision {
 		return fmt.Errorf("stale configuration revision %d (current %d)", state.Revision, current.Revision)
 	}
-	if conflict := firewallConflict(); conflict != "" {
-		return conflictError(conflict)
-	}
-	if UFWStatus() != "active" {
-		return errors.New("UFW 未启用；请先在面板初始化 UFW")
-	}
-	if err := checkManualUFWBypass(state); err != nil {
-		return err
-	}
-	if restrictedNodesNeedDeny(state) {
-		status, err := command("ufw", "status", "verbose")
-		if err != nil || !defaultIncomingDeny.MatchString(status) {
-			return errors.New("指定来源模式要求 UFW 默认入站策略为 deny 或 reject")
+	if !shared.ManualFirewall(state.FirewallMode) {
+		if conflict := firewallConflict(); conflict != "" {
+			return conflictError(conflict)
+		}
+		if UFWStatus() != "active" {
+			return errors.New("UFW 未启用；请初始化 UFW 或在服务器设置中选择手动管理防火墙")
+		}
+		if err := checkManualUFWBypass(state); err != nil {
+			return err
+		}
+		if restrictedNodesNeedDeny(state) {
+			status, err := command("ufw", "status", "verbose")
+			if err != nil || !defaultIncomingDeny.MatchString(status) {
+				return errors.New("指定来源模式要求 UFW 默认入站策略为 deny 或 reject")
+			}
 		}
 	}
 	if hasCore {
@@ -621,7 +641,9 @@ func applyDesiredInternal(state shared.DesiredState) error {
 	}
 	if err = syncUFW(state); err != nil {
 		_ = os.Remove(tmp)
-		_ = restoreUFW(oldState)
+		if !shared.ManualFirewall(state.FirewallMode) {
+			_ = restoreUFW(oldState)
+		}
 		restoreCerts()
 		return err
 	}
@@ -674,7 +696,9 @@ func applyDesiredInternal(state shared.DesiredState) error {
 		if coreChanged {
 			rollbackCore(previous)
 		}
-		_ = restoreUFW(oldState)
+		if !shared.ManualFirewall(state.FirewallMode) {
+			_ = restoreUFW(oldState)
+		}
 		return err
 	}
 	if coreChanged {
@@ -750,7 +774,7 @@ func applyDesiredInternal(state shared.DesiredState) error {
 // are still accepted while panels roll out signing, and a signature without
 // a pinned panel key is accepted as well; both cases log a warning so the
 // gap is visible instead of silent.
-func verifyDesiredSignature(state shared.DesiredState) error {
+func verifyDesiredSignature(state shared.DesiredState, raw []byte) error {
 	panelKey, err := panelPublicKey()
 	if err != nil {
 		return err
@@ -765,20 +789,12 @@ func verifyDesiredSignature(state shared.DesiredState) error {
 		fmt.Fprintln(os.Stderr, "warning: desired state carries a signature, but no panel public key is pinned; accepting without verification")
 		return nil
 	}
-	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(state.Signature))
-	if err != nil || len(sig) != ed25519.SignatureSize {
-		return errors.New("invalid desired state signature")
+	// The bytes as received are what the panel signed. Re-encoding with
+	// this agent's own types would drop fields it does not know yet.
+	if len(raw) > 0 {
+		return shared.VerifyDesiredStateRaw(panelKey, raw)
 	}
-	unsigned := state
-	unsigned.Signature = ""
-	raw, err := json.Marshal(unsigned)
-	if err != nil {
-		return err
-	}
-	if !ed25519.Verify(panelKey, raw, sig) {
-		return errors.New("desired state signature verification failed")
-	}
-	return nil
+	return shared.VerifyDesiredState(panelKey, state)
 }
 
 func panelPublicKey() (ed25519.PublicKey, error) {
@@ -842,6 +858,9 @@ func driftDetected(state shared.DesiredState, hasCore bool) bool {
 		if err != nil || !bytes.Equal(key, []byte(item.CertificateKey)) {
 			return true
 		}
+	}
+	if shared.ManualFirewall(state.FirewallMode) {
+		return false
 	}
 	out, err := command("ufw", "status", "numbered")
 	if err != nil {
@@ -968,7 +987,9 @@ func checkManualUFWBypass(state shared.DesiredState) error {
 		if !f.Enabled || f.Deleting {
 			continue
 		}
-		managed[portProto{f.Port, f.Network}] = true
+		for _, network := range shared.ForwardNetworks(f.Network) {
+			managed[portProto{f.Port, network}] = true
+		}
 	}
 	for _, rule := range state.Rules {
 		if rule.Deleting {
@@ -1056,7 +1077,7 @@ func ensureForwardUnit() (bool, error) {
 			return false, err
 		}
 	}
-	if err := os.MkdirAll(ForwardDir, 0750); err != nil {
+	if err := makeDirectory(ForwardDir, 0750); err != nil {
 		return false, err
 	}
 	if err := chownRootGroup(ForwardDir, forwardUser); err != nil {
@@ -1136,39 +1157,44 @@ func verifyNodeListeners(state shared.DesiredState) error {
 // core, and a node conflict surfaces through verifyNodeListeners after
 // sing-box restarts.
 func checkNewPorts(current, next shared.DesiredState) error {
+	active := forwardActive()
 	for _, f := range next.Forwards {
 		if !f.Enabled || f.Deleting {
 			continue
 		}
-		alreadyListening := false
-		if forwardActive() {
-			for _, old := range current.Forwards {
-				if old.Enabled && !old.Deleting && old.Network == f.Network && old.Port == f.Port && old.Listen == f.Listen {
-					alreadyListening = true
-					break
+		for _, network := range shared.ForwardNetworks(f.Network) {
+			alreadyListening := false
+			if active {
+				for _, old := range current.Forwards {
+					if old.Enabled && !old.Deleting && shared.ForwardNetworkIncludes(old.Network, network) && old.Port == f.Port && old.Listen == f.Listen {
+						alreadyListening = true
+						break
+					}
 				}
 			}
-		}
-		if alreadyListening {
-			continue
-		}
-		listen := f.Listen
-		if listen == "" {
-			listen = "0.0.0.0"
-		}
-		address := net.JoinHostPort(listen, strconv.Itoa(f.Port))
-		if f.Network == "tcp" {
-			listener, err := net.Listen("tcp", address)
-			if err != nil {
-				return fmt.Errorf("转发 %q 的 TCP 端口 %d 无法监听: %w", f.Name, f.Port, err)
+			if alreadyListening {
+				continue
 			}
-			_ = listener.Close()
-		} else {
-			listener, err := net.ListenPacket("udp", address)
-			if err != nil {
-				return fmt.Errorf("转发 %q 的 UDP 端口 %d 无法监听: %w", f.Name, f.Port, err)
+			listen := f.Listen
+			if listen == "" {
+				listen = "0.0.0.0"
+			} else if listen == "::" {
+				listen = ""
 			}
-			_ = listener.Close()
+			address := net.JoinHostPort(listen, strconv.Itoa(f.Port))
+			if network == "tcp" {
+				listener, err := net.Listen("tcp", address)
+				if err != nil {
+					return fmt.Errorf("转发 %q 的 TCP 端口 %d 无法监听: %w", f.Name, f.Port, err)
+				}
+				_ = listener.Close()
+			} else {
+				listener, err := net.ListenPacket("udp", address)
+				if err != nil {
+					return fmt.Errorf("转发 %q 的 UDP 端口 %d 无法监听: %w", f.Name, f.Port, err)
+				}
+				_ = listener.Close()
+			}
 		}
 	}
 	return nil
@@ -1253,6 +1279,9 @@ func restoreUFW(oldState []byte) error {
 }
 
 func syncUFW(state shared.DesiredState) error {
+	if shared.ManualFirewall(state.FirewallMode) {
+		return nil
+	}
 	// ownedRulesError is the fail-closed gate: an illegal policy, action,
 	// port, or source must stop the sync before any rule is written.
 	if err := ownedRulesError(state); err != nil {
@@ -1299,8 +1328,114 @@ func syncUFW(state shared.DesiredState) error {
 			return err
 		}
 	}
+	return ensureSSHAllowedForMode(state.FirewallMode)
+}
+
+// ensureSSHAllowed opens every SSH port (listening or configured) that no
+// allowing UFW rule covers. The rule written at UFW initialisation protects
+// only the ports of that moment; without this, moving sshd to a new port
+// would lock the host out at the next sshd restart. Nothing in the request
+// steers it: the ports come from this host alone.
+func ensureSSHAllowed() error {
+	current, err := readCurrentChecked()
+	if err != nil {
+		return err
+	}
+	// Wait for a signed configuration before automatically writing rules.
+	if current.Revision == 0 {
+		return nil
+	}
+	return ensureSSHAllowedForMode(current.FirewallMode)
+}
+
+func ensureSSHAllowedForMode(mode string) error {
+	if shared.ManualFirewall(mode) {
+		return nil
+	}
+	if UFWStatus() != "active" {
+		return nil
+	}
+	ports, err := sshPorts()
+	if err != nil {
+		return err
+	}
+	list := make([]int, 0, len(ports))
+	for port := range ports {
+		list = append(list, port)
+	}
+	out, err := command("ufw", "status", "numbered")
+	if err != nil {
+		return err
+	}
+	for _, port := range shared.UncoveredSSHPorts(out, list) {
+		if _, err := command("ufw", "allow", strconv.Itoa(port)+"/tcp", "comment", "mui-ssh"); err != nil {
+			return err
+		}
+	}
 	return nil
 }
+
+// deleteHostRules removes rules that were added on the host outside the
+// panel, each listed line on its own: removing an IPv6 line leaves the IPv4
+// line of the same rule in place. It is signed like an apply, never
+// touches a rule the panel manages, and refuses any rule that may admit SSH.
+// The whole batch is checked before anything is deleted. Rules that are
+// already gone are not an error.
+func deleteHostRules(state shared.DesiredState, raw []byte) error {
+	if err := verifyDesiredSignature(state, raw); err != nil {
+		return err
+	}
+	current, err := readCurrentChecked()
+	if err != nil {
+		return err
+	}
+	if shared.ManualFirewall(state.FirewallMode) || shared.ManualFirewall(current.FirewallMode) {
+		return errors.New("手动管理模式不允许通过面板删除 UFW 规则")
+	}
+	if len(state.HostRules) == 0 || len(state.HostRules) > 100 {
+		return errors.New("invalid host rule batch")
+	}
+	want := map[string]bool{}
+	for _, rule := range state.HostRules {
+		key := shared.UFWRuleKey(rule)
+		if key == "" || len(rule) > 300 {
+			return errors.New("invalid host rule")
+		}
+		want[key] = true
+	}
+	out, err := command("ufw", "status", "numbered")
+	if err != nil {
+		return err
+	}
+	ports, err := sshPorts()
+	if err != nil {
+		return err
+	}
+	ssh := make([]int, 0, len(ports))
+	for port := range ports {
+		ssh = append(ssh, port)
+	}
+	var indices []int
+	for _, raw := range strings.Split(out, "\n") {
+		line, ok := shared.ParseUFWLine(raw)
+		if !ok || !want[shared.UFWRuleKey(line.Rule)] {
+			continue
+		}
+		if reason := shared.HostRuleError(line, ssh); reason != "" {
+			return fmt.Errorf("%s: %s", line.Rule, reason)
+		}
+		indices = append(indices, line.Index)
+	}
+	// Highest number first: deleting a rule renumbers the ones after it.
+	sort.Sort(sort.Reverse(sort.IntSlice(indices)))
+	for _, i := range indices {
+		if _, err := command("ufw", "--force", "delete", strconv.Itoa(i)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func addUFWRule(rule shared.FirewallRule, timeout time.Duration) error {
 	if rule.Action != "allow" && rule.Action != "deny" {
 		return errors.New("invalid UFW action")
@@ -1328,7 +1463,15 @@ func addUFWRule(rule shared.FirewallRule, timeout time.Duration) error {
 	}
 	source := rule.Source
 	if source == "" {
-		source = "any"
+		// "any" covers both families; a single family is its whole range.
+		switch rule.Family {
+		case "ipv4":
+			source = "0.0.0.0/0"
+		case "ipv6":
+			source = "::/0"
+		default:
+			source = "any"
+		}
 	} else {
 		if _, _, err := net.ParseCIDR(source); err != nil {
 			return err

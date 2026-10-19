@@ -47,6 +47,9 @@ with open(os.environ['PUBLISH_MOCK_LOG'],'a') as stream: stream.write(json.dumps
 if args == ['compose','up','--help']: print('--wait-timeout'); raise SystemExit(0)
 failure = os.environ.get('PUBLISH_MOCK_FAIL')
 if args and args[0] == 'compose':
+    # Compose exec forwards stdin even with -T. Simulate that behavior so
+    # the health check cannot swallow the rest of the remote Bash program.
+    if 'exec' in args: sys.stdin.read()
     for step in ('build','up','exec'):
         if step in args and failure == step: raise SystemExit(27)
     if 'ps' in args: print('mui-service healthy; mui-web healthy')
@@ -194,6 +197,33 @@ for line in pathlib.Path('SHA256SUMS').read_text().splitlines():
         self.run_publish("--init-env", str(self.production), "--with-agent", ok=False)
         self.assertFalse(any("build" in call for call in self.calls()))
         self.assertFalse((self.remote / "current").exists())
+
+    def test_agent_manifests_are_signed_locally_and_private_key_is_not_uploaded(self):
+        self.agent_fixture()
+        key = self.script.parent / ".secrets/release.key"
+        key.parent.mkdir(mode=0o700)
+        key.write_text("private-fixture-key")
+        key.chmod(0o600)
+        self.command("go", r'''
+import pathlib, sys
+args = sys.argv[1:]
+assert args[:3] == ['run','./cmd/release-sign','sign']
+assert pathlib.Path(args[3]).read_text() == 'private-fixture-key'
+(pathlib.Path(args[4]) / 'SHA256SUMS.sig').write_text('fixture-signature\\n')
+''')
+        self.run_publish("--init-env", str(self.production), "--with-agent")
+        signature = self.remote / "bin/amd64/SHA256SUMS.sig"
+        self.assertTrue(signature.is_file())
+        self.assertFalse(list(self.remote.rglob("release.key")))
+        self.assertFalse(list(self.remote.rglob(".secrets")))
+
+    def test_missing_configured_signing_key_aborts_before_ssh(self):
+        self.agent_fixture()
+        with self.config.open("a") as stream:
+            stream.write("MUI_RELEASE_KEY=" + shlex.quote(str(self.base / "missing.key")) + "\n")
+        result = self.run_publish("--init-env", str(self.production), "--with-agent", ok=False)
+        self.assertIn("发布签名私钥不存在", result.stderr)
+        self.assertFalse(self.calls())
 
     def test_backend_only_does_not_probe_or_restart_frontend(self):
         self.initialize()

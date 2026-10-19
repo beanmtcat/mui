@@ -110,6 +110,9 @@ func (a *App) queueBinaryUpgrade(serverID, kind string) (shared.Operation, error
 	if err != nil {
 		return shared.Operation{}, err
 	}
+	if shared.OfflineManaged(server) {
+		return shared.Operation{}, errors.New("离线服务器请下载新版 Agent 和对应摘要、签名文件，上传后由本机已安装的 /usr/local/bin/mui-agent offline upgrade --binary ./mui-agent 执行升级")
+	}
 	var artifact, current string
 	var state shared.DesiredState
 	switch kind {

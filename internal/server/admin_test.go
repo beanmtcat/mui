@@ -149,7 +149,7 @@ func (p *testMui) enroll(name string) (string, map[string]string) {
 // newAgent reports the capabilities of a current agent.
 func (p *testMui) newAgent(agent map[string]string) {
 	p.t.Helper()
-	if code, out, _ := p.do("POST", "/agent/report", map[string]any{"agentVersion": "0.6.0", "multiUserStats": true, "nodeFirewallPolicies": true, "forwardSupport": true, "shadowTlsAuth": true, "ufwStatus": "active"}, agent); code != 200 {
+	if code, out, _ := p.do("POST", "/agent/report", map[string]any{"agentVersion": "0.6.7", "forwardTcpUdp": true, "manualFirewallSupport": true, "multiUserStats": true, "nodeFirewallPolicies": true, "forwardSupport": true, "shadowTlsAuth": true, "snellFixedPort": true, "ufwStatus": "active"}, agent); code != 200 {
 		p.t.Fatalf("capabilities: %d %v", code, out)
 	}
 }
@@ -216,6 +216,7 @@ func totpCode(secret string, at time.Time) string {
 func TestQueuedJobStateIsEncryptedAndClearedWhenFinished(t *testing.T) {
 	p := newTestMui(t)
 	id, agent := p.enroll("a")
+	p.newAgent(agent)
 	const psk = "PLAINTEXT-PSK-MARKER"
 	if code, out, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": id, "name": "n", "protocol": "snell", "port": 8443, "password": psk, "shadowTlsHost": "www.example.com"}, nil); code != 201 {
 		t.Fatalf("node: %d %v", code, out)
@@ -397,6 +398,7 @@ func TestNodeFirewallAccessPolicy(t *testing.T) {
 func TestSnellShadowTLSTemplateNodeAndSubscription(t *testing.T) {
 	p := newTestMui(t)
 	serverID, agent := p.enroll("shadowtls-server")
+	p.newAgent(agent)
 	if code, _, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true,
 		"serverId": serverID, "name": "missing-host", "protocol": "snell", "port": 54320,
 	}, nil); code != 400 {
@@ -479,6 +481,7 @@ func TestSnellShadowTLSTemplateNodeAndSubscription(t *testing.T) {
 func TestOfflineServerCanBeForceDeleted(t *testing.T) {
 	p := newTestMui(t)
 	id, agent := p.enroll("gone")
+	p.newAgent(agent)
 	_, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": id, "name": "n", "protocol": "snell", "port": 8443, "shadowTlsHost": "www.example.com"}, nil)
 	nodeID := node["id"].(string)
 	p.do("POST", "/agent/report", map[string]any{"traffic": []map[string]any{{"nodeId": nodeID, "instanceId": "i", "sequence": 1, "uplink": 5, "downlink": 5, "at": time.Now()}}}, agent)
@@ -678,17 +681,18 @@ func TestAdminResetFromEnvironment(t *testing.T) {
 func TestExpiredCertificateDoesNotBlockDisablingTheNode(t *testing.T) {
 	p := newTestMui(t)
 	id, _ := p.enroll("s")
-	cert := shared.Certificate{ID: ID(), ServerID: id, Domain: "node.example.com", PEM: "unused", Key: "unused", ExpiresAt: time.Now().Add(time.Hour)}
+	certPEM, keyPEM := makeTestCertificate(t, false, nil, 10)
+	cert := shared.Certificate{ID: ID(), Domain: "example.com", PEM: certPEM, Key: keyPEM, ExpiresAt: time.Now().Add(time.Hour)}
 	if err := p.store.PutCertificate(cert); err != nil {
 		t.Fatal(err)
 	}
-	body := map[string]any{"serverId": id, "name": "tls", "protocol": "anytls", "port": 8443, "tlsName": "node.example.com", "certificateId": cert.ID, "enabled": true}
+	body := map[string]any{"serverId": id, "name": "tls", "protocol": "anytls", "port": 8443, "tlsName": "example.com", "certificateId": cert.ID, "enabled": true}
 	code, node, _ := p.do("POST", "/api/nodes", body, nil)
 	if code != 201 {
 		t.Fatalf("node: %d %v", code, node)
 	}
 	cert.ExpiresAt = time.Now().Add(-time.Hour)
-	if _, err := p.store.DB.Exec(`UPDATE mui_certificates SET data=$1 WHERE id=$2`, Marshal(shared.Certificate{ID: cert.ID, ServerID: id, Domain: cert.Domain, PEM: cert.PEM, ExpiresAt: cert.ExpiresAt}), cert.ID); err != nil {
+	if _, err := p.store.DB.Exec(`UPDATE mui_certificates SET data=$1 WHERE id=$2`, Marshal(shared.Certificate{ID: cert.ID, Domain: cert.Domain, PEM: cert.PEM, ExpiresAt: cert.ExpiresAt}), cert.ID); err != nil {
 		t.Fatal(err)
 	}
 	path := "/api/nodes/" + node["id"].(string)

@@ -306,3 +306,19 @@ func TestClosedAccessValidatesAndRemovesPreviousAllows(t *testing.T) {
 		t.Fatal("closed forward generated an allow or missed default deny")
 	}
 }
+
+func TestForwardTCPUDPUFWRestrictedSource(t *testing.T) {
+	state := shared.DesiredState{Forwards: []shared.ForwardRule{{ID: "combined", Name: "combined", Network: shared.ForwardTCPUDP, Port: 51000, Enabled: true, FirewallPolicy: "restricted", FirewallSources: "192.0.2.1/32"}}}
+	if err := ownedRulesError(state); err != nil {
+		t.Fatal(err)
+	}
+	rules := ownedRules(state)
+	if len(rules) != 2 || rules[0].Network != "tcp" || rules[1].Network != "udp" {
+		t.Fatalf("dual UFW rules: %+v", rules)
+	}
+	for _, rule := range rules {
+		if rule.PortFrom != 51000 || rule.Source != "192.0.2.1/32" {
+			t.Fatalf("wrong UFW scope: %+v", rule)
+		}
+	}
+}

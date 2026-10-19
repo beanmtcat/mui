@@ -58,15 +58,11 @@ func (idx *portConflictIndex) claim(port int, class, listen string) {
 	idx.seen[key][normalizeListen(listen)] = true
 }
 
-func nodePortClasses(protocol string) []string {
-	if protocol == "ss" {
-		return []string{"tcp", "udp"}
-	}
-	return []string{"tcp"}
-}
-
 // ValidateDesired validates the exact configuration accepted by the Linux helper.
 func ValidateDesired(state shared.DesiredState) error {
+	if !shared.ValidFirewallMode(state.FirewallMode) {
+		return errors.New("invalid firewall management mode")
+	}
 	if state.Revision <= 0 || len(state.Nodes) > 500 || len(state.Rules) > 2000 || len(state.Forwards) > 500 {
 		return errors.New("invalid desired state size or revision")
 	}
@@ -108,15 +104,13 @@ func ValidateDesired(state shared.DesiredState) error {
 		if item.Node.Protocol == "snell" && item.Node.ShadowTLSHost != "" && len(item.ShadowTLSPassword) < 8 {
 			return errors.New("invalid ShadowTLS password")
 		}
-		for _, class := range nodePortClasses(item.Node.Protocol) {
-			if nodeIndex.conflicts(item.Node.Port, class, item.Node.Listen) {
-				return errors.New("duplicate node port")
+		for _, listener := range shared.NodeListeners(item.Node) {
+			if nodeIndex.conflicts(listener.Port, listener.Network, listener.Listen) {
+				return errors.New("duplicate node port (including Snell inner listener)")
 			}
-		}
-		for _, class := range nodePortClasses(item.Node.Protocol) {
-			nodeIndex.claim(item.Node.Port, class, item.Node.Listen)
+			nodeIndex.claim(listener.Port, listener.Network, listener.Listen)
 			if item.Node.Enabled && !item.Node.Deleting {
-				liveIndex.claim(item.Node.Port, class, item.Node.Listen)
+				liveIndex.claim(listener.Port, listener.Network, listener.Listen)
 			}
 		}
 	}
@@ -132,6 +126,9 @@ func ValidateDesired(state shared.DesiredState) error {
 				return err
 			}
 		}
+		if err := shared.RuleFamilyError(rule); err != nil {
+			return err
+		}
 	}
 	for _, f := range state.Forwards {
 		if !safeRuleID.MatchString(f.ID) {
@@ -146,10 +143,12 @@ func ValidateDesired(state shared.DesiredState) error {
 		// The live index holds every live node (an ss node claimed both
 		// tcp and udp) and every earlier forward, so one lookup covers
 		// forward-forward and forward-node conflicts together.
-		if liveIndex.conflicts(f.Port, f.Network, f.Listen) {
-			return errors.New("forward port conflicts with another forward or node")
+		for _, network := range shared.ForwardNetworks(f.Network) {
+			if liveIndex.conflicts(f.Port, network, f.Listen) {
+				return errors.New("forward port conflicts with another forward or node")
+			}
+			liveIndex.claim(f.Port, network, f.Listen)
 		}
-		liveIndex.claim(f.Port, f.Network, f.Listen)
 	}
 	return nil
 }

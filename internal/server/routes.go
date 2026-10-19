@@ -99,19 +99,46 @@ func clientAddress(s shared.Server) string {
 
 // sourceAddresses are the IPs a server's traffic can arrive from at the next
 // hop: its internal address on a private link, otherwise its configured and
-// detected public addresses. A name is no source a firewall can use.
-func sourceAddresses(s shared.Server, internal bool) []string {
+// detected public addresses. Filter by the next-hop destination address family;
+// names may resolve to either family. A name is no source a firewall can use.
+func sourceAddresses(s shared.Server, internal bool, targets ...string) []string {
+	ipv4, ipv6 := len(targets) == 0, len(targets) == 0
+	for _, target := range targets {
+		ip := net.ParseIP(target)
+		if ip == nil {
+			ipv4, ipv6 = true, true
+		} else if ip.To4() != nil {
+			ipv4 = true
+		} else {
+			ipv6 = true
+		}
+	}
 	candidates := []string{s.IPv4, s.IPv6, s.DetectedIPv4, s.DetectedIPv6}
 	if internal {
 		candidates = []string{s.InternalAddress}
 	}
 	var out []string
 	for _, v := range candidates {
-		if ip := net.ParseIP(v); ip != nil && !slices.Contains(out, ip.String()) {
+		if ip := net.ParseIP(v); ip != nil && (ip.To4() != nil && ipv4 || ip.To4() == nil && ipv6) && !slices.Contains(out, ip.String()) {
 			out = append(out, ip.String())
 		}
 	}
 	return out
+}
+
+func validRouteSourceMode(mode string) bool {
+	return mode == "" || mode == "auto" || mode == "public" || mode == "internal"
+}
+
+func routeSourceInternal(destinationInternal bool, mode string) bool {
+	switch mode {
+	case "internal":
+		return true
+	case "public":
+		return false
+	default:
+		return destinationInternal
+	}
 }
 
 func validRoles(roles []string) ([]string, error) {
@@ -163,6 +190,9 @@ func (w routeWorld) checkRouteShape(rt shared.Route) error {
 	if len([]rune(rt.Notes)) > 200 {
 		return errors.New("链路备注不能超过 200 字符")
 	}
+	if !validRouteSourceMode(rt.NodeSourceMode) {
+		return errors.New("落地 UFW 来源地址模式无效")
+	}
 	entry, ok := w.servers[rt.EntryServerID]
 	if !ok {
 		return errors.New("首跳服务器不存在")
@@ -178,6 +208,9 @@ func (w routeWorld) checkRouteShape(rt shared.Route) error {
 	}
 	seen := map[string]bool{rt.EntryServerID: true}
 	for i, hop := range rt.Hops {
+		if !validRouteSourceMode(hop.SourceMode) {
+			return fmt.Errorf("第 %d 跳的 UFW 来源地址模式无效", i+1)
+		}
 		if len(hop.ServerIDs) == 0 || len(hop.ServerIDs) > 16 {
 			return fmt.Errorf("第 %d 跳需要 1–16 台服务器", i+1)
 		}
@@ -227,29 +260,36 @@ func (w routeWorld) checkRouteShape(rt shared.Route) error {
 	if err := reachableAddress(hopAddress(exit, rt.NodeInternal)); err != nil {
 		return fmt.Errorf("落地服务器 %s：%w", exit.Name, err)
 	}
-	// Every sender needs an explicit source IP; a destination hostname alone
-	// cannot tell the next hop which source to admit.
+	// A UFW-managed receiver needs explicit sender IPs for its allowlist.
+	// Manual receivers leave access control to the administrator.
 	if !rt.Enabled {
 		return nil
 	}
 	previous := []string{rt.EntryServerID}
 	for _, hop := range rt.Hops {
-		if err := w.checkSources(previous, hop.Internal); err != nil {
-			return err
+		for _, id := range hop.ServerIDs {
+			if !shared.ManualFirewall(w.servers[id].FirewallMode) {
+				if err := w.checkSources(previous, routeSourceInternal(hop.Internal, hop.SourceMode), hopAddress(w.servers[id], hop.Internal)); err != nil {
+					return err
+				}
+			}
 		}
 		previous = hop.ServerIDs
 	}
-	return w.checkSources(previous, rt.NodeInternal)
+	if shared.ManualFirewall(exit.FirewallMode) {
+		return nil
+	}
+	return w.checkSources(previous, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), hopAddress(exit, rt.NodeInternal))
 }
 
-func (w routeWorld) checkSources(group []string, internal bool) error {
+func (w routeWorld) checkSources(group []string, internal bool, targets ...string) error {
 	for _, id := range group {
-		if len(sourceAddresses(w.servers[id], internal)) == 0 {
+		if len(sourceAddresses(w.servers[id], internal, targets...)) == 0 {
 			kind := "公网 IP"
 			if internal {
 				kind = "内网 IP（不能只填域名）"
 			}
-			return fmt.Errorf("服务器 %s 缺少可用于下一跳防火墙的%s", w.servers[id].Name, kind)
+			return fmt.Errorf("服务器 %s 缺少与下一跳地址族匹配、可用于防火墙的%s", w.servers[id].Name, kind)
 		}
 	}
 	return nil
@@ -277,13 +317,17 @@ func (w routeWorld) portFree(rt shared.Route, serverID string) error {
 		return fmt.Errorf("服务器 %s: %w", s.Name, err)
 	}
 	for _, f := range w.forwards {
-		if f.ServerID == serverID && f.Port == rt.Port && f.Enabled && !f.Deleting && (f.Network == "tcp" || w.nodes[rt.NodeID].Protocol == "ss") && (rt.ID == "" || f.RouteID != rt.ID) {
+		if f.ServerID == serverID && f.Port == rt.Port && f.Enabled && !f.Deleting && (shared.ForwardNetworkIncludes(f.Network, "tcp") || w.nodes[rt.NodeID].Protocol == "ss") && (rt.ID == "" || f.RouteID != rt.ID) {
 			return fmt.Errorf("端口 %d 在服务器 %s 上已被转发“%s”占用", rt.Port, s.Name, f.Name)
 		}
 	}
 	for _, n := range w.nodes {
-		if n.ServerID == serverID && n.Port == rt.Port && n.Enabled && !n.Deleting {
-			return fmt.Errorf("端口 %d 在服务器 %s 上已被节点“%s”占用", rt.Port, s.Name, n.Name)
+		if n.ServerID == serverID && n.Enabled && !n.Deleting {
+			for _, listener := range shared.NodeListeners(n) {
+				if listener.Port == rt.Port {
+					return fmt.Errorf("端口 %d 在服务器 %s 上已被节点“%s”占用", rt.Port, s.Name, n.Name)
+				}
+			}
 		}
 	}
 	return nil
@@ -354,14 +398,22 @@ func (w routeWorld) routeForwards(rt shared.Route) []shared.ForwardRule {
 		} else {
 			targets = []shared.ForwardTarget{{Host: hopAddress(exit, rt.NodeInternal), Port: node.Port}}
 		}
-		policy, sources := "all", ""
-		if k > 0 {
-			policy = "closed" // Never expose a hop when a report loses its source IP.
-			if list := w.groupSources(groups[k-1], rt.Hops[k-1].Internal); len(list) > 0 && w.checkSources(groups[k-1], rt.Hops[k-1].Internal) == nil {
-				policy, sources = "restricted", strings.Join(list, ",")
-			}
-		}
 		for _, id := range group {
+			policy, sources := "all", ""
+			if k > 0 {
+				incoming := rt.Hops[k-1]
+				internal := routeSourceInternal(incoming.Internal, incoming.SourceMode)
+				// This rule admits traffic into this hop. The address of its
+				// outbound target may use a different family.
+				destination := hopAddress(w.servers[id], incoming.Internal)
+				policy = "closed"
+				if list := w.groupSources(groups[k-1], internal, destination); len(list) > 0 && w.checkSources(groups[k-1], internal, destination) == nil {
+					policy, sources = "restricted", strings.Join(list, ",")
+				}
+			}
+			if shared.ManualFirewall(w.servers[id].FirewallMode) {
+				policy, sources = "manual", ""
+			}
 			for _, network := range networks {
 				out = append(out, shared.ForwardRule{
 					ID: routeForwardID(rt.ID, id, network), ServerID: id, Name: rt.Name, Network: network,
@@ -374,10 +426,10 @@ func (w routeWorld) routeForwards(rt shared.Route) []shared.ForwardRule {
 	return out
 }
 
-func (w routeWorld) groupSources(group []string, internal bool) []string {
+func (w routeWorld) groupSources(group []string, internal bool, targets ...string) []string {
 	var out []string
 	for _, id := range group {
-		for _, ip := range sourceAddresses(w.servers[id], internal) {
+		for _, ip := range sourceAddresses(w.servers[id], internal, targets...) {
 			if !slices.Contains(out, ip) {
 				out = append(out, ip)
 			}
@@ -398,7 +450,7 @@ func (w routeWorld) nodeRouteSources(nodeID string) string {
 		if len(rt.Hops) > 0 {
 			last = rt.Hops[len(rt.Hops)-1].ServerIDs
 		}
-		for _, ip := range w.groupSources(last, rt.NodeInternal) {
+		for _, ip := range w.groupSources(last, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), hopAddress(w.servers[w.nodes[nodeID].ServerID], rt.NodeInternal)) {
 			if !slices.Contains(out, ip) {
 				out = append(out, ip)
 			}
@@ -511,6 +563,7 @@ func routeStatus(rt shared.Route, forwards []shared.ForwardRule) string {
 		return "disabled"
 	}
 	status := "active"
+	hasOfflineExport := false
 	for _, f := range forwards {
 		if f.RouteID != rt.ID {
 			continue
@@ -519,9 +572,14 @@ func routeStatus(rt shared.Route, forwards []shared.ForwardRule) string {
 		case "error":
 			return "error"
 		case "active":
+		case "exported":
+			hasOfflineExport = true
 		default:
 			status = "pending"
 		}
+	}
+	if status == "active" && hasOfflineExport {
+		return "exported"
 	}
 	return status
 }
@@ -549,10 +607,10 @@ func (a *App) routeExitAccessLive(rt shared.Route, world routeWorld) (bool, erro
 	if len(rt.Hops) > 0 {
 		last = rt.Hops[len(rt.Hops)-1].ServerIDs
 	}
-	if err := world.checkSources(last, rt.NodeInternal); err != nil {
+	if err := world.checkSources(last, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), hopAddress(world.servers[node.ServerID], rt.NodeInternal)); err != nil {
 		return false, nil
 	}
-	for _, source := range world.groupSources(last, rt.NodeInternal) {
+	for _, source := range world.groupSources(last, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), hopAddress(world.servers[node.ServerID], rt.NodeInternal)) {
 		addr, err := netip.ParseAddr(source)
 		if err != nil {
 			return false, nil
@@ -575,12 +633,22 @@ func (a *App) routeExitAccessLive(rt shared.Route, world routeWorld) (bool, erro
 	return true, nil
 }
 
-// routeLive reports whether clients can use a route now: the node is live with
-// a login for the subscription, the entry runs its forwards, and every hop
-// group has at least one server running its forwards (the rest are skipped by
-// the health checks).
+// Offline hops are eligible after exporting the desired config. This does
+// not verify whether the administrator applied it on the isolated host.
+// Every offline member needs its current config exported, including backups:
+// local application and connectivity remain the administrator's responsibility.
+func offlineRouteReady(rt shared.Route, servers map[string]shared.Server) bool {
+	for _, id := range routeServers(rt) {
+		s := servers[id]
+		if shared.OfflineManaged(s) && (s.OfflineExportedAt == nil || s.OfflineExportedRevision != s.Revision) {
+			return false
+		}
+	}
+	return true
+}
+
 func (a *App) routeLive(rt shared.Route, w routeWorld, subscriptionID string) (bool, error) {
-	if !rt.Enabled || w.checkRouteShape(rt) != nil {
+	if !rt.Enabled || w.checkRouteShape(rt) != nil || !offlineRouteReady(rt, w.servers) {
 		return false, nil
 	}
 	node := w.nodes[rt.NodeID]
@@ -593,7 +661,7 @@ func (a *App) routeLive(rt shared.Route, w routeWorld, subscriptionID string) (b
 	}
 	active := map[string]bool{}
 	for _, f := range w.forwards {
-		if f.RouteID == rt.ID && f.Network == "tcp" && f.Status == "active" && !f.Deleting {
+		if f.RouteID == rt.ID && f.Network == "tcp" && (f.Status == "active" || (shared.OfflineManaged(w.servers[f.ServerID]) && f.Status == "exported")) && !f.Deleting {
 			active[f.ServerID] = true
 		}
 	}
@@ -617,7 +685,10 @@ func (a *App) routes(w http.ResponseWriter, r *http.Request) {
 		}
 		for i := range world.routes {
 			world.routes[i].Status = routeStatus(world.routes[i], world.forwards)
-			if world.routes[i].Status == "active" {
+			if (world.routes[i].Status == "active" || world.routes[i].Status == "exported") && !offlineRouteReady(world.routes[i], world.servers) {
+				world.routes[i].Status = "pending"
+			}
+			if world.routes[i].Status == "active" || world.routes[i].Status == "exported" {
 				allowed, err := a.routeExitAccessLive(world.routes[i], world)
 				if err != nil {
 					errorJSON(w, 500, err.Error())

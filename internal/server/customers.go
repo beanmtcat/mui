@@ -112,9 +112,9 @@ func (a *App) customerByID(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, old)
 }
 
-func (a *App) accessLog(query *logQuery, limit int) ([]shared.SubscriptionAccess, error) {
+func (a *App) accessLog(query *logQuery, limit, offset int) ([]shared.SubscriptionAccess, error) {
 	out := []shared.SubscriptionAccess{}
-	rows, err := a.Store.DB.Query(query.sql("id DESC", limit, 0), query.args...)
+	rows, err := a.Store.DB.Query(query.sql("id DESC", limit, offset), query.args...)
 	if err != nil {
 		return nil, err
 	}
@@ -138,9 +138,9 @@ type connectionCursor struct {
 	IP          string `json:"ip"`
 }
 
-func (a *App) connectionLog(query *logQuery, limit int) ([]shared.ConnectionIP, error) {
+func (a *App) connectionLog(query *logQuery, limit, offset int) ([]shared.ConnectionIP, error) {
 	out := []shared.ConnectionIP{}
-	rows, err := a.Store.DB.Query(query.sql("first_seen_ms DESC, server_id DESC, node_id DESC, ip DESC", limit, 0), query.args...)
+	rows, err := a.Store.DB.Query(query.sql("first_seen_ms DESC, server_id DESC, node_id DESC, ip DESC", limit, offset), query.args...)
 	if err != nil {
 		return nil, err
 	}
@@ -171,10 +171,27 @@ func (a *App) clientAccesses(w http.ResponseWriter, r *http.Request) {
 	query, _ := newLogQuery(accessColumns)
 	query.equal("customer_id", r.URL.Query().Get("customerId"))
 	query.equal("subscription_id", r.URL.Query().Get("subscriptionId"))
-	query.before("id", r.URL.Query().Get("before"))
-	out, err := a.accessLog(query, pageLimit(r))
+	page, err := readLogPage(r)
+	if err == nil {
+		err = query.timeRange(r, "at_ms")
+	}
+	if err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
+	limit, offset := pageLimit(r), 0
+	if page.paged {
+		limit, offset = page.size, page.offset()
+	} else {
+		query.before("id", r.URL.Query().Get("before"))
+	}
+	out, err := a.accessLog(query, limit, offset)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
+		return
+	}
+	if page.paged {
+		a.writeLogPage(w, query, out)
 		return
 	}
 	writeJSON(w, 200, out)
@@ -185,7 +202,16 @@ func (a *App) clientAccesses(w http.ResponseWriter, r *http.Request) {
 func (a *App) clientConnections(w http.ResponseWriter, r *http.Request) {
 	query, _ := newLogQuery(connectionColumns)
 	query.equal("server_id", r.URL.Query().Get("serverId"))
-	if before := r.URL.Query().Get("before"); before != "" {
+	page, err := readLogPage(r)
+	if err == nil {
+		// The page shows when each address was last seen; filter on that.
+		err = query.timeRange(r, "at_ms")
+	}
+	if err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
+	if before := r.URL.Query().Get("before"); before != "" && !page.paged {
 		if len(before) > 512 {
 			errorJSON(w, 400, "无效的连接记录游标")
 			return
@@ -198,9 +224,17 @@ func (a *App) clientConnections(w http.ResponseWriter, r *http.Request) {
 		}
 		query.where("(first_seen_ms,server_id,node_id,ip)<(" + query.arg(cursor.FirstSeenMs) + "," + query.arg(cursor.ServerID) + "," + query.arg(cursor.NodeID) + "," + query.arg(cursor.IP) + ")")
 	}
-	out, err := a.connectionLog(query, pageLimit(r))
+	limit, offset := pageLimit(r), 0
+	if page.paged {
+		limit, offset = page.size, page.offset()
+	}
+	out, err := a.connectionLog(query, limit, offset)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
+		return
+	}
+	if page.paged {
+		a.writeLogPage(w, query, out)
 		return
 	}
 	writeJSON(w, 200, out)
@@ -208,13 +242,13 @@ func (a *App) clientConnections(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) clientActivity(w http.ResponseWriter, r *http.Request) {
 	accessQuery, _ := newLogQuery(accessColumns)
-	access, err := a.accessLog(accessQuery, 200)
+	access, err := a.accessLog(accessQuery, 200, 0)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
 	}
 	connectionQuery, _ := newLogQuery(connectionColumns)
-	connections, err := a.connectionLog(connectionQuery, 200)
+	connections, err := a.connectionLog(connectionQuery, 200, 0)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return

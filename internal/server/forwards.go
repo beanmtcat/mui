@@ -40,6 +40,9 @@ func (a *App) forwards(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, err.Error())
 		return
 	}
+	if shared.ManualFirewall(server.FirewallMode) {
+		in.FirewallPolicy, in.FirewallSources = "manual", ""
+	}
 	if err := a.checkForward(in, server); err != nil {
 		errorJSON(w, 409, err.Error())
 		return
@@ -100,6 +103,9 @@ func (a *App) forwardByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, err.Error())
 		return
 	}
+	if shared.ManualFirewall(server.FirewallMode) {
+		in.FirewallPolicy, in.FirewallSources = "manual", ""
+	}
 	if err := a.checkForward(in, server); err != nil {
 		errorJSON(w, 409, err.Error())
 		return
@@ -141,7 +147,7 @@ func (a *App) queueForwardApply(serverID string) error {
 }
 
 func (a *App) checkForward(f shared.ForwardRule, server shared.Server) error {
-	if f.Network == "tcp" {
+	if shared.ForwardNetworkIncludes(f.Network, "tcp") {
 		if err := sshPortError(server, f.Port, f.Port); err != nil {
 			return err
 		}
@@ -159,7 +165,7 @@ func (a *App) checkForward(f shared.ForwardRule, server shared.Server) error {
 		return err
 	}
 	for _, other := range forwards {
-		if !other.Enabled || other.Deleting || other.ID == f.ID || other.Network != f.Network {
+		if !other.Enabled || other.Deleting || other.ID == f.ID || !shared.ForwardNetworksOverlap(other.Network, f.Network) {
 			continue
 		}
 		if other.Port == f.Port && listenOverlap(other.Listen, f.Listen) {
@@ -171,11 +177,13 @@ func (a *App) checkForward(f shared.ForwardRule, server shared.Server) error {
 		return err
 	}
 	for _, node := range nodes {
-		if !node.Enabled || node.Deleting || node.Port != f.Port || f.Network == "udp" && node.Protocol != "ss" {
+		if !node.Enabled || node.Deleting {
 			continue
 		}
-		if listenOverlap(node.Listen, f.Listen) {
-			return errors.New("监听端口已被节点占用")
+		for _, listener := range shared.NodeListeners(node) {
+			if listener.Port == f.Port && shared.ForwardNetworkIncludes(f.Network, listener.Network) && listenOverlap(listener.Listen, f.Listen) {
+				return errors.New("监听端口已被节点占用（含 Snell 内层端口）")
+			}
 		}
 	}
 	return nil
@@ -244,7 +252,7 @@ func sameLocalTarget(f shared.ForwardRule, t shared.ForwardTarget) bool {
 		return listen != nil && (listen.IsUnspecified() || listen.IsLoopback())
 	}
 	listen := net.ParseIP(f.Listen)
-	return listen != nil && (listen.IsUnspecified() || listen.Equal(target))
+	return listen != nil && (listen.Equal(target) || listen.IsUnspecified() && (target.IsLoopback() || target.IsUnspecified()))
 }
 
 func (a *App) checkNodeForwardPort(n shared.Node) error {
@@ -253,11 +261,13 @@ func (a *App) checkNodeForwardPort(n shared.Node) error {
 		return err
 	}
 	for _, forward := range forwards {
-		if !forward.Enabled || forward.Deleting || forward.Port != n.Port || forward.Network == "udp" && n.Protocol != "ss" {
+		if !forward.Enabled || forward.Deleting {
 			continue
 		}
-		if listenOverlap(forward.Listen, n.Listen) {
-			return errors.New("端口已被转发规则占用")
+		for _, listener := range shared.NodeListeners(n) {
+			if listener.Port == forward.Port && shared.ForwardNetworkIncludes(forward.Network, listener.Network) && listenOverlap(forward.Listen, listener.Listen) {
+				return errors.New("端口已被转发规则占用（含 Snell 内层端口）")
+			}
 		}
 	}
 	return nil

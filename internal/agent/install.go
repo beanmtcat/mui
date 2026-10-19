@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"mui/internal/shared"
 )
@@ -83,6 +84,9 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 	if runtime.GOOS != "linux" || os.Geteuid() != 0 {
 		return errors.New("install must run as root on Linux")
 	}
+	if fileExists(OfflineModePath) {
+		return errors.New("此机已安装离线转发服务，不能同时接入在线 Agent")
+	}
 	// 1. Validate input.
 	if url == "" || serverID == "" || enrollToken == "" {
 		return errors.New("panel URL, server ID and enrollment token are required")
@@ -103,10 +107,10 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 			release[pair[0]] = strings.Trim(pair[1], "\"")
 		}
 	}
-	if !(release["ID"] == "ubuntu" && (release["VERSION_ID"] == "22.04" || release["VERSION_ID"] == "24.04")) && !(release["ID"] == "debian" && (release["VERSION_ID"] == "12" || release["VERSION_ID"] == "13")) {
+	if !(release["ID"] == "ubuntu" && (release["VERSION_ID"] == "22.04" || release["VERSION_ID"] == "24.04" || release["VERSION_ID"] == "26.04")) && !(release["ID"] == "debian" && (release["VERSION_ID"] == "12" || release["VERSION_ID"] == "13")) {
 		return fmt.Errorf("unsupported distribution %s %s", release["ID"], release["VERSION_ID"])
 	}
-	for _, tool := range []string{"systemctl", "systemd-run", "ufw", "sshd"} {
+	for _, tool := range []string{"systemctl", "systemd-run", "sshd", "ss"} {
 		if _, err = exec.LookPath(tool); err != nil {
 			return fmt.Errorf("%s is required: %w", tool, err)
 		}
@@ -190,12 +194,12 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 			}
 		}
 	}
-	if err = os.MkdirAll(ConfigDir, 0750); err != nil {
+	if err = makeDirectory(ConfigDir, 0750); err != nil {
 		return fail(err)
 	}
 	if core != "" {
 		for _, dir := range []string{CoreDir, CertDir} {
-			if err = os.MkdirAll(dir, 0750); err != nil {
+			if err = makeDirectory(dir, 0750); err != nil {
 				return fail(err)
 			}
 			if err = chownRootGroup(dir, coreUser); err != nil {
@@ -203,10 +207,10 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 			}
 		}
 	}
-	if err = os.MkdirAll(DataDir, 0750); err != nil {
+	if err = makeDirectory(DataDir, 0750); err != nil {
 		return fail(err)
 	}
-	if err = os.MkdirAll("/run/mui-agent", 0755); err != nil {
+	if err = makeDirectory("/run/mui-agent", 0755); err != nil {
 		return fail(err)
 	}
 	if err = chownRootGroup(ConfigDir, agentUser); err != nil {
@@ -216,7 +220,7 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 		if err = rb.backup(ReleaseKeyPath, 0644); err != nil {
 			return fail(err)
 		}
-		if err = os.WriteFile(ReleaseKeyPath, []byte(releaseKey+"\n"), 0644); err != nil {
+		if err = writeFileAtomic(ReleaseKeyPath, []byte(releaseKey+"\n"), 0644); err != nil {
 			return fail(err)
 		}
 	}
@@ -270,9 +274,15 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 		if err = rb.backup(path, 0644); err != nil {
 			return fail(err)
 		}
-		if err = os.WriteFile(path, []byte(content), 0644); err != nil {
+		if err = writeFileAtomic(path, []byte(content), 0644); err != nil {
 			return fail(err)
 		}
+	}
+	// Check using the actual service account before reporting installation success.
+	// Root can read a config even when restrictive inherited umasks made its
+	// parent directory inaccessible to the worker.
+	if err = verifyInstalledConfig(); err != nil {
+		return fail(err)
 	}
 	if _, err = command("systemctl", "daemon-reload"); err != nil {
 		return fail(err)
@@ -428,4 +438,29 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	return fsyncDir(filepath.Dir(dst))
+}
+
+// makeDirectory also repairs an existing directory created under umask 077.
+func makeDirectory(path string, mode os.FileMode) error {
+	if err := os.MkdirAll(path, mode); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
+}
+
+func verifyInstalledConfig() error {
+	uid, err := userID(agentUser)
+	if err != nil {
+		return err
+	}
+	gid, err := groupID(agentUser)
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command("/usr/local/bin/mui-agent", "check-config")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Credential: &syscall.Credential{Uid: uint32(uid), Gid: uint32(gid)}}
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("Agent 配置读取检查失败（以 mui-agent 账户执行）: %s: %w", strings.TrimSpace(string(out)), err)
+	}
+	return nil
 }

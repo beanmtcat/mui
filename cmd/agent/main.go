@@ -17,6 +17,7 @@ const usage = `usage: mui-agent <command> [args]
   mui-agent install PANEL_URL SERVER_ID ENROLL_TOKEN [SING_BOX_BINARY|-] [RELEASE_PUBLIC_KEY] [--token-stdin | --token-file <path> | --token-file=<path>]
   mui-agent run
   mui-agent forward
+  mui-agent offline <init|check|install|apply|receipt> [args]   (offline --help for details)
   mui-agent helper
   mui-agent version
   mui-agent rollback-if-unconfirmed EXPECTED_SHA256
@@ -34,6 +35,8 @@ func main() {
 	}
 	var err error
 	switch os.Args[1] {
+	case "offline":
+		err = runOfflineCommand(os.Args[2:])
 	case "version":
 		fmt.Println("mui-agent " + agent.Version)
 	case "rollback-if-unconfirmed":
@@ -59,6 +62,12 @@ func main() {
 			err = fmt.Errorf("helper is only supported on Linux")
 		} else {
 			err = agent.ServeHelper()
+		}
+	case "check-config":
+		var config agent.Config
+		config, err = agent.ReadConfig()
+		if err == nil {
+			err = agent.CheckConfigURL(config.URL)
 		}
 	case "run":
 		if runtime.GOOS != "linux" {

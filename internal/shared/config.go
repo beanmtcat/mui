@@ -22,7 +22,7 @@ const ConnectionsAPIPort = 10086
 func ValidateNodeTemplate(t NodeTemplate) error {
 	n := Node{
 		Name: t.Name, Protocol: t.Protocol, Port: t.Port,
-		Listen: t.Listen, Method: t.Method, SnellVersion: t.SnellVersion,
+		Listen: t.Listen, Method: t.Method, SnellVersion: t.SnellVersion, SnellPort: t.SnellPort,
 		Obfs: t.Obfs, ShadowTLSHost: t.ShadowTLSHost, TLSName: t.TLSName,
 	}
 	var cert *Certificate
@@ -47,7 +47,7 @@ func ValidateNode(n Node, cert *Certificate, allowExpired bool) error {
 		return errors.New("端口必须在 1-65535 之间")
 	}
 	if n.Port == StatsAPIPort || n.Port == ConnectionsAPIPort {
-		return fmt.Errorf("端口 %d 保留给本机统计接口", StatsAPIPort)
+		return fmt.Errorf("端口 %d 保留给本机统计接口", n.Port)
 	}
 	if n.Listen == "" {
 		n.Listen = "0.0.0.0"
@@ -69,6 +69,12 @@ func ValidateNode(n Node, cert *Certificate, allowExpired bool) error {
 			return errors.New("不支持的 SS 加密方式")
 		}
 	case "snell":
+		if n.ShadowTLSHost != "" {
+			port := SnellListenPort(n)
+			if port < 1 || port > 65535 || port == n.Port || port == StatsAPIPort || port == ConnectionsAPIPort {
+				return errors.New("Snell 内层端口必须在 1–65535 之间，且不能与公网端口或统计接口端口相同")
+			}
+		}
 		if n.SnellVersion != 0 && n.SnellVersion != 5 {
 			return errors.New("首版仅支持 Snell v5")
 		}
@@ -85,7 +91,12 @@ func ValidateNode(n Node, cert *Certificate, allowExpired bool) error {
 		if !allowExpired && time.Now().After(cert.ExpiresAt) {
 			return errors.New("证书已过期")
 		}
-		if !strings.EqualFold(n.TLSName, cert.Domain) {
+		matches := strings.EqualFold(n.TLSName, cert.Domain)
+		if cert.PEM != "" {
+			// A shared certificate can cover multiple DNS names or a wildcard.
+			matches = CertificateCovers(cert.PEM, n.TLSName)
+		}
+		if !matches {
 			return errors.New("证书域名与节点域名不匹配")
 		}
 	default:
@@ -309,8 +320,8 @@ func SingBoxConfig(nodes []ManagedNode, certDir string) ([]byte, error) {
 				if item.ShadowTLSPassword == "" {
 					return nil, fmt.Errorf("Snell 节点 %q 缺少 ShadowTLS 密码", n.Name)
 				}
-				delete(base, "listen")
-				delete(base, "listen_port")
+				base["listen"] = "127.0.0.1"
+				base["listen_port"] = SnellListenPort(n)
 				shadowUsers := []map[string]string{{"name": n.ID, "password": item.ShadowTLSPassword}}
 				for _, user := range item.Users {
 					shadowUsers = append(shadowUsers, map[string]string{"name": user.Name, "password": user.ShadowTLSPassword})
@@ -353,12 +364,17 @@ func SingBoxConfig(nodes []ManagedNode, certDir string) ([]byte, error) {
 
 func SSMultiUser(method string) bool { return strings.HasPrefix(method, "2022-blake3-") }
 
+// SharedSubscriptionPassword identifies single-user SS nodes. Their existing
+// node password can be delivered in a subscription, but cannot identify which
+// subscription a connection belongs to.
+func SharedSubscriptionPassword(n Node) bool { return n.Protocol == "ss" && !SSMultiUser(n.Method) }
+
 func ValidateForward(f ForwardRule) error {
 	if strings.TrimSpace(f.Name) == "" || len(f.Name) > 100 {
 		return errors.New("转发名称不能为空且不能超过 100 字符")
 	}
-	if f.Network != "tcp" && f.Network != "udp" {
-		return errors.New("转发协议只能是 TCP 或 UDP")
+	if len(ForwardNetworks(f.Network)) == 0 {
+		return errors.New("转发协议只能是 TCP、UDP 或 TCP + UDP")
 	}
 	if f.Port < 1024 || f.Port > 65535 {
 		return errors.New("监听端口必须为 1024–65535")
@@ -420,20 +436,46 @@ func validForwardHost(host string) bool {
 	return true
 }
 
-func PortConflict(a, b Node) bool {
-	if a.Port != b.Port || a.ServerID != b.ServerID || a.ID == b.ID {
-		return false
+// SnellListenPort gives old saved nodes an explicit, reproducible port too.
+// New nodes persist the chosen value; sing-box is never given port zero.
+func SnellListenPort(n Node) int {
+	if n.SnellPort != 0 {
+		return n.SnellPort
 	}
-	al, bl := a.Listen, b.Listen
-	if al == "" {
-		al = "0.0.0.0"
-	}
-	if bl == "" {
-		bl = "0.0.0.0"
-	}
-	return al == bl || al == "0.0.0.0" || bl == "0.0.0.0" || al == "::" || bl == "::"
+	return 20000 + n.Port%10000
 }
 
-// networksOverlap was dead code: both branches returned true. PortConflict no
-// longer consults it; every protocol pair can share a port only when the
-// listen addresses do not overlap, which PortConflict checks directly.
+type NodeListener struct {
+	Port    int
+	Listen  string
+	Network string
+}
+
+func NodeListeners(n Node) []NodeListener {
+	out := []NodeListener{{n.Port, n.Listen, "tcp"}}
+	if n.Protocol == "ss" {
+		out = append(out, NodeListener{n.Port, n.Listen, "udp"})
+	}
+	if n.Protocol == "snell" && n.ShadowTLSHost != "" {
+		out = append(out, NodeListener{SnellListenPort(n), "127.0.0.1", "tcp"})
+	}
+	return out
+}
+
+func ListenerOverlap(a, b string) bool {
+	return a == b || a == "" || b == "" || a == "0.0.0.0" || b == "0.0.0.0" || a == "::" || b == "::"
+}
+
+func PortConflict(a, b Node) bool {
+	if a.ServerID != b.ServerID || a.ID == b.ID {
+		return false
+	}
+	for _, al := range NodeListeners(a) {
+		for _, bl := range NodeListeners(b) {
+			if al.Port == bl.Port && al.Network == bl.Network && ListenerOverlap(al.Listen, bl.Listen) {
+				return true
+			}
+		}
+	}
+	return false
+}

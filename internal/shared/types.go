@@ -1,10 +1,16 @@
 package shared
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 type Server struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ManagementMode          string     `json:"managementMode"`
+	OfflineExportedRevision int64      `json:"offlineExportedRevision"`
+	OfflineExportedAt       *time.Time `json:"offlineExportedAt,omitempty"`
+	ID                      string     `json:"id"`
+	Name                    string     `json:"name"`
 	// Roles is any combination of entry, line, transit and exit. Only an exit
 	// server runs sing-box and carries nodes; the others run forwards.
 	Roles    []string `json:"roles"`
@@ -19,28 +25,32 @@ type Server struct {
 	Domain   string   `json:"domain"`
 	// InternalAddress is how other servers on the same private network or
 	// dedicated line (IPLC/IEPL) reach this one; a route hop can use it.
-	InternalAddress      string     `json:"internalAddress"`
-	Status               string     `json:"status"`
-	OS                   string     `json:"os"`
-	Arch                 string     `json:"arch"`
-	AgentVersion         string     `json:"agentVersion"`
-	AgentBuild           string     `json:"agentBuild"`
-	AgentSelfUpdate      bool       `json:"agentSelfUpdate"`
-	NodeFirewallPolicies bool       `json:"nodeFirewallPolicies"`
-	MultiUserStats       bool       `json:"multiUserStats"`
-	ForwardSupport       bool       `json:"forwardSupport"`
-	ShadowTLSAuth        bool       `json:"shadowTlsAuth"`
-	ReleaseKeyPinned     bool       `json:"releaseKeyPinned"`
-	AppliedRevision      int64      `json:"appliedRevision"`
-	CoreVersion          string     `json:"coreVersion"`
-	CoreBuild            string     `json:"coreBuild"`
-	CoreSelfUpdate       bool       `json:"coreSelfUpdate"`
-	UFWStatus            string     `json:"ufwStatus"`
-	StatsStatus          string     `json:"statsStatus"`
-	NetworkRx            int64      `json:"networkRx"`
-	NetworkTx            int64      `json:"networkTx"`
-	LastSeen             *time.Time `json:"lastSeen"`
-	Revision             int64      `json:"revision"`
+	InternalAddress       string     `json:"internalAddress"`
+	FirewallMode          string     `json:"firewallMode"`
+	ManualFirewallSupport bool       `json:"manualFirewallSupport"`
+	Status                string     `json:"status"`
+	OS                    string     `json:"os"`
+	Arch                  string     `json:"arch"`
+	AgentVersion          string     `json:"agentVersion"`
+	AgentBuild            string     `json:"agentBuild"`
+	AgentSelfUpdate       bool       `json:"agentSelfUpdate"`
+	NodeFirewallPolicies  bool       `json:"nodeFirewallPolicies"`
+	MultiUserStats        bool       `json:"multiUserStats"`
+	ForwardTCPUDP         bool       `json:"forwardTcpUdp"`
+	ForwardSupport        bool       `json:"forwardSupport"`
+	ShadowTLSAuth         bool       `json:"shadowTlsAuth"`
+	SnellFixedPort        bool       `json:"snellFixedPort"`
+	ReleaseKeyPinned      bool       `json:"releaseKeyPinned"`
+	AppliedRevision       int64      `json:"appliedRevision"`
+	CoreVersion           string     `json:"coreVersion"`
+	CoreBuild             string     `json:"coreBuild"`
+	CoreSelfUpdate        bool       `json:"coreSelfUpdate"`
+	UFWStatus             string     `json:"ufwStatus"`
+	StatsStatus           string     `json:"statsStatus"`
+	NetworkRx             int64      `json:"networkRx"`
+	NetworkTx             int64      `json:"networkTx"`
+	LastSeen              *time.Time `json:"lastSeen"`
+	Revision              int64      `json:"revision"`
 	// Reported by the agent; never edited by the administrator.
 	DetectedIPv4     string   `json:"detectedIpv4"`
 	DetectedIPv6     string   `json:"detectedIpv6"`
@@ -51,15 +61,18 @@ type Server struct {
 }
 
 type Node struct {
-	ID              string `json:"id"`
-	ServerID        string `json:"serverId"`
-	Name            string `json:"name"`
-	Protocol        string `json:"protocol"`
-	Port            int    `json:"port"`
-	Listen          string `json:"listen"`
-	PublishAddress  string `json:"publishAddress"`
-	Method          string `json:"method"`
-	SnellVersion    int    `json:"snellVersion"`
+	ID             string `json:"id"`
+	ServerID       string `json:"serverId"`
+	Name           string `json:"name"`
+	Protocol       string `json:"protocol"`
+	Port           int    `json:"port"`
+	Listen         string `json:"listen"`
+	PublishAddress string `json:"publishAddress"`
+	Method         string `json:"method"`
+	SnellVersion   int    `json:"snellVersion"`
+	// omitempty: a node without an inner Snell port encodes exactly as it
+	// did before the field existed.
+	SnellPort       int    `json:"snellPort,omitempty"`
 	Obfs            string `json:"obfs"`
 	ShadowTLSHost   string `json:"shadowTlsHost"`
 	TLSName         string `json:"tlsName"`
@@ -92,6 +105,7 @@ type NodeTemplate struct {
 	Listen        string `json:"listen"`
 	Method        string `json:"method"`
 	SnellVersion  int    `json:"snellVersion"`
+	SnellPort     int    `json:"snellPort"`
 	Obfs          string `json:"obfs"`
 	ShadowTLSHost string `json:"shadowTlsHost"`
 	TLSName       string `json:"tlsName"`
@@ -99,7 +113,6 @@ type NodeTemplate struct {
 
 type Certificate struct {
 	ID        string    `json:"id"`
-	ServerID  string    `json:"serverId"`
 	Name      string    `json:"name"`
 	Domain    string    `json:"domain"`
 	PEM       string    `json:"pem,omitempty"`
@@ -118,6 +131,9 @@ type FirewallRule struct {
 	PortTo   int    `json:"portTo"`
 	Network  string `json:"network"`
 	Source   string `json:"source"`
+	// Family limits a rule to "ipv4" or "ipv6"; empty means both. With a
+	// source, the source decides. omitempty keeps older agents verifying.
+	Family   string `json:"family,omitempty"`
 	Action   string `json:"action"`
 	Comment  string `json:"comment"`
 	Owner    string `json:"owner"`
@@ -144,7 +160,8 @@ type ForwardRule struct {
 	Port     int             `json:"port"`
 	Targets  []ForwardTarget `json:"targets"`
 	Balance  string          `json:"balance"`
-	// Empty defaults to TCP probing for TCP rules and passive errors for UDP.
+	// Empty uses protocol defaults for each socket: TCP probing for TCP,
+	// passive errors for UDP, including tcp+udp rules.
 	HealthCheck string `json:"healthCheck,omitempty"`
 	// RouteID marks a forward the panel generated for a route; it is edited
 	// through the route, never directly.
@@ -207,10 +224,13 @@ type Route struct {
 	NodeID        string     `json:"nodeId"`
 	// NodeInternal makes the last hop reach the exit server by its internal
 	// address instead of its public one.
-	NodeInternal bool   `json:"nodeInternal"`
-	Port         int    `json:"port"`
-	Enabled      bool   `json:"enabled"`
-	Notes        string `json:"notes"`
+	NodeInternal bool `json:"nodeInternal"`
+	// NodeSourceMode selects the last hop's address used by the exit UFW
+	// allowlist, independently of the destination address selection.
+	NodeSourceMode string `json:"nodeSourceMode,omitempty"`
+	Port           int    `json:"port"`
+	Enabled        bool   `json:"enabled"`
+	Notes          string `json:"notes"`
 	// Filled in for the list view: whether every hop has applied its forward.
 	Status string `json:"status,omitempty"`
 }
@@ -223,6 +243,9 @@ type RouteHop struct {
 	// Internal makes the previous hop reach these servers by their internal
 	// addresses.
 	Internal bool `json:"internal"`
+	// SourceMode selects the previous hop's UFW source: auto, public or
+	// internal. It does not bind the outgoing connection to an interface.
+	SourceMode string `json:"sourceMode,omitempty"`
 }
 
 type Customer struct {
@@ -301,6 +324,7 @@ type NodeUser struct {
 }
 
 type DesiredState struct {
+	FirewallMode      string         `json:"firewallMode,omitempty"`
 	Revision          int64          `json:"revision"`
 	ProtocolVersion   int            `json:"protocolVersion"`
 	Signature         string         `json:"signature"`
@@ -309,6 +333,9 @@ type DesiredState struct {
 	Nodes             []ManagedNode  `json:"nodes"`
 	Rules             []FirewallRule `json:"rules"`
 	Forwards          []ForwardRule  `json:"forwards"`
+	// HostRules are the rule lines (as `ufw status numbered` prints them,
+	// without the number) a "ufw.delete" job removes, each on its own.
+	HostRules []string `json:"hostRules,omitempty"`
 }
 
 type Job struct {
@@ -317,6 +344,34 @@ type Job struct {
 	Kind         string       `json:"kind"`
 	FencingToken string       `json:"fencingToken"`
 	State        DesiredState `json:"state"`
+	// StateRaw is State exactly as the panel sent it, kept by the agent when
+	// it decodes a job; the panel's signature covers these bytes. It is
+	// written out only by the agent, so a saved job keeps them.
+	StateRaw json.RawMessage `json:"stateRaw,omitempty"`
+}
+
+// UnmarshalJSON keeps the state's bytes as received next to the decoded
+// state. A job the agent saved itself carries them as stateRaw.
+func (j *Job) UnmarshalJSON(data []byte) error {
+	type plain Job
+	var aux struct {
+		plain
+		State json.RawMessage `json:"state"`
+	}
+	if err := json.Unmarshal(data, &aux); err != nil {
+		return err
+	}
+	*j = Job(aux.plain)
+	raw := aux.StateRaw
+	if len(raw) == 0 {
+		raw = aux.State
+	}
+	if len(raw) == 0 || string(raw) == "null" {
+		j.StateRaw = nil
+		return nil
+	}
+	j.StateRaw = append(json.RawMessage(nil), raw...)
+	return json.Unmarshal(raw, &j.State)
 }
 
 type TrafficPoint struct {
@@ -356,35 +411,38 @@ type ServerTrafficPoint struct {
 }
 
 type AgentReport struct {
-	JobID                string                `json:"jobId,omitempty"`
-	JobKind              string                `json:"jobKind,omitempty"`
-	JobStatus            string                `json:"jobStatus,omitempty"`
-	JobError             string                `json:"jobError,omitempty"`
-	FencingToken         string                `json:"fencingToken,omitempty"`
-	OS                   string                `json:"os,omitempty"`
-	Arch                 string                `json:"arch,omitempty"`
-	AgentVersion         string                `json:"agentVersion,omitempty"`
-	AgentBuild           string                `json:"agentBuild,omitempty"`
-	AgentSelfUpdate      bool                  `json:"agentSelfUpdate,omitempty"`
-	NodeFirewallPolicies bool                  `json:"nodeFirewallPolicies,omitempty"`
-	MultiUserStats       bool                  `json:"multiUserStats,omitempty"`
-	ForwardSupport       bool                  `json:"forwardSupport,omitempty"`
-	ShadowTLSAuth        bool                  `json:"shadowTlsAuth,omitempty"`
-	ReleaseKeyPinned     bool                  `json:"releaseKeyPinned,omitempty"`
-	CoreVersion          string                `json:"coreVersion,omitempty"`
-	CoreBuild            string                `json:"coreBuild,omitempty"`
-	BuildDigest          string                `json:"buildDigest,omitempty"`
-	CoreDigest           string                `json:"coreDigest,omitempty"`
-	CoreSelfUpdate       bool                  `json:"coreSelfUpdate,omitempty"`
-	UFWStatus            string                `json:"ufwStatus,omitempty"`
-	StatsStatus          string                `json:"statsStatus,omitempty"`
-	IPv4                 string                `json:"ipv4,omitempty"`
-	IPv6                 string                `json:"ipv6,omitempty"`
-	Traffic              []TrafficPoint        `json:"traffic,omitempty"`
-	UserTraffic          []UserTrafficPoint    `json:"userTraffic,omitempty"`
-	ForwardTraffic       []ForwardTrafficPoint `json:"forwardTraffic,omitempty"`
-	ServerTraffic        []ServerTrafficPoint  `json:"serverTraffic,omitempty"`
-	Connections          []ConnectionPoint     `json:"connections,omitempty"`
+	ManualFirewallSupport bool                  `json:"manualFirewallSupport,omitempty"`
+	JobID                 string                `json:"jobId,omitempty"`
+	JobKind               string                `json:"jobKind,omitempty"`
+	JobStatus             string                `json:"jobStatus,omitempty"`
+	JobError              string                `json:"jobError,omitempty"`
+	FencingToken          string                `json:"fencingToken,omitempty"`
+	OS                    string                `json:"os,omitempty"`
+	Arch                  string                `json:"arch,omitempty"`
+	AgentVersion          string                `json:"agentVersion,omitempty"`
+	AgentBuild            string                `json:"agentBuild,omitempty"`
+	AgentSelfUpdate       bool                  `json:"agentSelfUpdate,omitempty"`
+	NodeFirewallPolicies  bool                  `json:"nodeFirewallPolicies,omitempty"`
+	MultiUserStats        bool                  `json:"multiUserStats,omitempty"`
+	ForwardSupport        bool                  `json:"forwardSupport,omitempty"`
+	ForwardTCPUDP         bool                  `json:"forwardTcpUdp,omitempty"`
+	ShadowTLSAuth         bool                  `json:"shadowTlsAuth,omitempty"`
+	SnellFixedPort        bool                  `json:"snellFixedPort,omitempty"`
+	ReleaseKeyPinned      bool                  `json:"releaseKeyPinned,omitempty"`
+	CoreVersion           string                `json:"coreVersion,omitempty"`
+	CoreBuild             string                `json:"coreBuild,omitempty"`
+	BuildDigest           string                `json:"buildDigest,omitempty"`
+	CoreDigest            string                `json:"coreDigest,omitempty"`
+	CoreSelfUpdate        bool                  `json:"coreSelfUpdate,omitempty"`
+	UFWStatus             string                `json:"ufwStatus,omitempty"`
+	StatsStatus           string                `json:"statsStatus,omitempty"`
+	IPv4                  string                `json:"ipv4,omitempty"`
+	IPv6                  string                `json:"ipv6,omitempty"`
+	Traffic               []TrafficPoint        `json:"traffic,omitempty"`
+	UserTraffic           []UserTrafficPoint    `json:"userTraffic,omitempty"`
+	ForwardTraffic        []ForwardTrafficPoint `json:"forwardTraffic,omitempty"`
+	ServerTraffic         []ServerTrafficPoint  `json:"serverTraffic,omitempty"`
+	Connections           []ConnectionPoint     `json:"connections,omitempty"`
 	// HostReported marks a report that carries the host firewall fields below,
 	// so that empty values mean "none" rather than "not sampled".
 	HostReported     bool       `json:"hostReported,omitempty"`

@@ -56,10 +56,10 @@ func TestSubscriptionUsersAndTraffic(t *testing.T) {
 		return sub
 	}
 	a, b := create("Alice"), create("Bob")
-	node["method"] = "aes-128-gcm"
+	node["method"] = "invalid-method"
 	code, out, _ = p.do("PATCH", "/api/nodes/"+nodeID, node, nil)
 	if code != 400 {
-		t.Fatalf("subscribed node changed to single-user SS: %d %v", code, out)
+		t.Fatalf("subscribed node accepted invalid SS method: %d %v", code, out)
 	}
 	job := p.applyNext(agent, "success")
 	state := job["state"].(map[string]any)
@@ -149,7 +149,7 @@ func TestSubscriptionUsersAndTraffic(t *testing.T) {
 func TestSurgeSubscriptionProtocolSupport(t *testing.T) {
 	p := newTestMui(t)
 	serverID, agent := p.enroll("snell")
-	code, out, _ := p.do("POST", "/agent/report", map[string]any{"agentVersion": "test", "multiUserStats": true, "nodeFirewallPolicies": true, "ufwStatus": "active"}, agent)
+	code, out, _ := p.do("POST", "/agent/report", map[string]any{"agentVersion": "test", "multiUserStats": true, "nodeFirewallPolicies": true, "snellFixedPort": true, "ufwStatus": "active"}, agent)
 	if code != 200 {
 		t.Fatalf("capability: %d %v", code, out)
 	}

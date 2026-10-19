@@ -2,12 +2,28 @@
 // nodes; entry and line servers can be the first hop of a route, transit and
 // line servers a middle hop.
 export type Role = "entry" | "line" | "transit" | "exit";
+export type OfflineInstallGuide = {
+    command: string;
+    signed: boolean;
+    exampleConfig?: string;
+    downloads: { arch: string; command: string; files: { name: string; url: string }[] }[];
+};
+export type InstallGuide = {
+  installCommand: string;
+  offlineInstall: OfflineInstallGuide;
+  standaloneInstall: OfflineInstallGuide;
+};
 export const roleLabels: Record<Role, string> = { entry: "入口", line: "线路", transit: "中转", exit: "落地" };
 export type Server = {
+  managementMode?: "online" | "offline";
+  offlineExportedRevision?: number;
+  offlineExportedAt?: string;
   id: string;
   name: string;
   roles: Role[];
   internalAddress: string;
+  firewallMode?: "ufw" | "manual";
+  manualFirewallSupport?: boolean;
   country: string;
   region: string;
   city: string;
@@ -26,7 +42,9 @@ export type Server = {
   nodeFirewallPolicies: boolean;
   multiUserStats: boolean;
   forwardSupport: boolean;
+  forwardTcpUdp?: boolean;
   shadowTlsAuth?: boolean;
+  snellFixedPort?: boolean;
   releaseKeyPinned?: boolean;
   appliedRevision: number;
   coreVersion: string;
@@ -55,6 +73,7 @@ export type Node = {
   publishAddress: string;
   method: string;
   snellVersion: number;
+  snellPort?: number;
   obfs: string;
   shadowTlsHost: string;
   tlsName: string;
@@ -81,13 +100,13 @@ export type NodeTemplate = {
   listen: string;
   method: string;
   snellVersion: number;
+  snellPort?: number;
   obfs: string;
   shadowTlsHost: string;
   tlsName: string;
 };
 export type Certificate = {
   id: string;
-  serverId: string;
   name: string;
   domain: string;
   pem: string;
@@ -105,6 +124,8 @@ export type FirewallRule = {
   portTo: number;
   network: string;
   source: string;
+  // Empty applies to IPv4 and IPv6; with a source, the source decides.
+  family?: "" | "ipv4" | "ipv6";
   action: string;
   comment: string;
   owner: string;
@@ -115,7 +136,7 @@ export type ForwardRule = {
   id: string;
   serverId: string;
   name: string;
-  network: "tcp" | "udp";
+  network: "tcp" | "udp" | "tcp+udp";
   listen: string;
   port: number;
   targets: { host: string; port: number }[];
@@ -148,7 +169,8 @@ export type Subscription = {
   pendingRouteIds?: string[];
   linkAvailable?: boolean;
 };
-export type RouteHop = { serverIds: string[]; balance: "failover" | "round-robin"; internal: boolean };
+export type RouteSourceMode = "auto" | "public" | "internal";
+export type RouteHop = { serverIds: string[]; balance: "failover" | "round-robin"; internal: boolean; sourceMode?: RouteSourceMode };
 export type Route = {
   id: string;
   name: string;
@@ -156,6 +178,7 @@ export type Route = {
   hops: RouteHop[];
   nodeId: string;
   nodeInternal: boolean;
+  nodeSourceMode?: RouteSourceMode;
   port: number;
   enabled: boolean;
   notes: string;

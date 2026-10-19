@@ -258,10 +258,20 @@ func TestHostNameTargetFollowsDNS(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer service.Close()
-	old, name := greet(t, tcpPort)
-	if name != "4" {
-		t.Fatalf("TCP reached %q before the change", name)
-	}
+	// The name resolves in the background; a connection before the first
+	// answer is refused by design.
+	var old net.Conn
+	eventually(t, "the first resolution", func() bool {
+		conn, name := greet(t, tcpPort)
+		if name == "4" {
+			old = conn
+			return true
+		}
+		if conn != nil {
+			conn.Close()
+		}
+		return false
+	})
 	defer old.Close()
 	client, err := net.Dial("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(udpPort)))
 	if err != nil {

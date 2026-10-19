@@ -73,6 +73,9 @@ func validateFirewallRule(rule shared.FirewallRule) error {
 	if !validSource(rule.Source) {
 		return fmt.Errorf("firewall rule %q: invalid source %q", rule.ID, rule.Source)
 	}
+	if err := shared.RuleFamilyError(rule); err != nil {
+		return fmt.Errorf("firewall rule %q: %w", rule.ID, err)
+	}
 	return nil
 }
 
@@ -106,7 +109,7 @@ func validateForwardFirewall(forward shared.ForwardRule) error {
 	if !validPort(forward.Port) {
 		return fmt.Errorf("forward %q: port %d out of 1-65535", forward.ID, forward.Port)
 	}
-	if !validNetwork(forward.Network) {
+	if len(shared.ForwardNetworks(forward.Network)) == 0 {
 		return fmt.Errorf("forward %q: unknown network %q", forward.ID, forward.Network)
 	}
 	if forward.FirewallPolicy == "restricted" {
@@ -209,7 +212,7 @@ func ownedRules(state shared.DesiredState) []shared.FirewallRule {
 		if !forward.Enabled || forward.FirewallPolicy == "manual" || forward.FirewallPolicy == "closed" {
 			continue
 		}
-		if !validFirewallPolicy(forward.FirewallPolicy) || !validRuleID.MatchString(forward.ID) || !validPort(forward.Port) || !validNetwork(forward.Network) {
+		if !validFirewallPolicy(forward.FirewallPolicy) || !validRuleID.MatchString(forward.ID) || !validPort(forward.Port) || len(shared.ForwardNetworks(forward.Network)) == 0 {
 			continue
 		}
 		sources := []string{""}
@@ -231,8 +234,10 @@ func ownedRules(state shared.DesiredState) []shared.FirewallRule {
 				digest := sha256.Sum256([]byte(source))
 				suffix = "-" + hex.EncodeToString(digest[:8])
 			}
-			id := fmt.Sprintf("forward-%s-%s-%d%s", forward.ID, forward.Network, forward.Port, suffix)
-			allows = add(allows, id, shared.FirewallRule{ID: id, PortFrom: forward.Port, PortTo: forward.Port, Network: forward.Network, Source: source, Action: "allow", Owner: "forward"})
+			for _, network := range shared.ForwardNetworks(forward.Network) {
+				id := fmt.Sprintf("forward-%s-%s-%d%s", forward.ID, network, forward.Port, suffix)
+				allows = add(allows, id, shared.FirewallRule{ID: id, PortFrom: forward.Port, PortTo: forward.Port, Network: network, Source: source, Action: "allow", Owner: "forward"})
+			}
 		}
 	}
 	sort.SliceStable(denies, func(i, j int) bool { return denies[i].key < denies[j].key })

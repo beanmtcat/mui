@@ -345,7 +345,7 @@ func Run(ctx context.Context) error {
 	// result before attempting to report it.
 	executeJob := func(job shared.Job) shared.AgentReport {
 		result := shared.AgentReport{JobID: job.ID, JobKind: job.Kind, JobStatus: "success", FencingToken: job.FencingToken}
-		if err := CallHelper(job.Kind, job.State); err != nil {
+		if err := CallHelperJob(job); err != nil {
 			result.JobStatus = "failed"
 			result.JobError = err.Error()
 		}
@@ -389,6 +389,13 @@ func Run(ctx context.Context) error {
 				statsStatus = "active"
 			}
 			host = QueryHostStatus()
+			if host.UFW == "active" {
+				// Keep SSH reachable when sshd moved to another port since
+				// UFW was initialised; see ensureSSHAllowed.
+				if err := CallHelper("ufw.ssh", shared.DesiredState{}); err != nil {
+					fmt.Fprintln(os.Stderr, "ssh firewall:", err)
+				}
+			}
 			if !host.Supported && !supportedWarned {
 				fmt.Fprintln(os.Stderr, "warning: host status reports unsupported; capability bits may be incomplete")
 				supportedWarned = true
@@ -430,7 +437,7 @@ func Run(ctx context.Context) error {
 			}
 			now := time.Now()
 			report := shared.AgentReport{OS: osRelease(), Arch: runtime.GOARCH, AgentVersion: Version, AgentBuild: build, BuildDigest: build,
-				AgentSelfUpdate: host.AgentSelfUpdate, NodeFirewallPolicies: host.NodeFirewallPolicies, MultiUserStats: host.MultiUserStats, ForwardSupport: host.ForwardSupport, ShadowTLSAuth: host.ShadowTLSAuth, ReleaseKeyPinned: host.ReleaseKeyPinned,
+				ManualFirewallSupport: host.ManualFirewallSupport, AgentSelfUpdate: host.AgentSelfUpdate, NodeFirewallPolicies: host.NodeFirewallPolicies, MultiUserStats: host.MultiUserStats, ForwardSupport: host.ForwardSupport, ForwardTCPUDP: host.ForwardTCPUDP, ShadowTLSAuth: host.ShadowTLSAuth, SnellFixedPort: host.SnellFixedPort, ReleaseKeyPinned: host.ReleaseKeyPinned,
 				CoreVersion: coreVersions.get(), CoreBuild: coreBuild, CoreDigest: coreBuild, CoreSelfUpdate: host.CoreSelfUpdate,
 				UFWStatus: host.UFW, StatsStatus: statsStatus, Traffic: state.Pending[:batchSize], UserTraffic: state.UserPending[:userBatch], ForwardTraffic: host.ForwardTraffic, ServerTraffic: state.NetworkPending[:networkBatch], Connections: pendingConnections,
 				IPv4: ipv4, IPv6: ipv6, AgentTime: &now, HostReported: true, SSHPorts: host.SSHPorts, FirewallConflict: host.Conflict, UFWRules: host.Rules}
@@ -816,4 +823,10 @@ func coreInstanceID() string {
 		return pid + "-" + parts[21]
 	}
 	return pid
+}
+
+// CheckConfigURL validates the saved URL without contacting the panel.
+func CheckConfigURL(raw string) error {
+	_, err := checkPanelURL(raw)
+	return err
 }

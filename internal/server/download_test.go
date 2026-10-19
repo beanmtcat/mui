@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"mui/internal/shared"
 )
 
 func TestPanelServesAgentInstallerAndArtifacts(t *testing.T) {
@@ -19,22 +21,29 @@ func TestPanelServesAgentInstallerAndArtifacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, content := range map[string]string{
-		"mui-agent": "agent-binary", "sing-box": "core-binary", "SHA256SUMS": "test-checksums",
+		"mui-agent": "agent-binary", "sing-box": "core-binary", "SHA256SUMS": "test-checksums", "SHA256SUMS.sig": "test-signature",
 	} {
 		if err := os.WriteFile(filepath.Join(archDir, name), []byte(content), 0644); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for path, want := range map[string]string{
-		"/download/install.sh":       "sha256sum --check",
-		"/download/amd64/mui-agent":  "agent-binary",
-		"/download/amd64/sing-box":   "core-binary",
-		"/download/amd64/SHA256SUMS": "test-checksums",
+		"/download/install.sh":           "sha256sum --check",
+		"/download/amd64/mui-agent":      "agent-binary",
+		"/download/amd64/sing-box":       "core-binary",
+		"/download/amd64/SHA256SUMS":     "test-checksums",
+		"/download/amd64/SHA256SUMS.sig": "test-signature",
 	} {
 		rec := httptest.NewRecorder()
 		p.handler.ServeHTTP(rec, httptest.NewRequest("GET", path, nil))
 		if rec.Code != 200 || !bytes.Contains(rec.Body.Bytes(), []byte(want)) {
 			t.Fatalf("%s: %d %q", path, rec.Code, rec.Body.String())
+		}
+		if path != "/download/install.sh" {
+			filename := filepath.Base(path)
+			if rec.Header().Get("Content-Disposition") != "attachment; filename=\""+filename+"\"" || rec.Header().Get("Content-Type") != "application/octet-stream" {
+				t.Fatalf("release filename is not preserved: %s %v", path, rec.Header())
+			}
 		}
 	}
 	for _, path := range []string{"/download/arm64/mui-agent", "/download/amd64/secret", "/download/other/mui-agent"} {
@@ -61,26 +70,130 @@ func TestPanelServesAgentInstallerAndArtifacts(t *testing.T) {
 	}
 	id := out["server"].(map[string]any)["id"].(string)
 	command := out["installCommand"].(string)
-	if !strings.Contains(command, "https://mui.example.test/download/install.sh") || !strings.Contains(command, " | sudo sh -s -- ") || !strings.HasPrefix(command, "bash -o pipefail -c ") || strings.Contains(command, "MUI_ENROLL_TOKEN=") || strings.Contains(command, "./mui-agent install") {
+	if !strings.Contains(command, "https://mui.example.test/download/install.sh") || !strings.Contains(command, "\"$@\" \"$mui_installer\"") || !strings.HasPrefix(command, "(\n") || strings.Contains(command, "bash -o pipefail -c") || strings.Contains(command, "MUI_ENROLL_TOKEN=") || strings.Contains(command, "./mui-agent install") {
 		t.Fatalf("invalid install command: %q", command)
 	}
 	fakeTools := t.TempDir()
 	for name, content := range map[string]string{
-		"curl": "#!/bin/sh\nprintf '%s\\n' 'test \"$#\" -eq 4 && test \"$1\" = \"https://mui.example.test\" && test -n \"$2\" && test -n \"$3\" && test \"$4\" = node'\n",
-		"sudo": "#!/bin/sh\nexec \"$@\"\n",
+		"id": "#!/bin/sh\nprintf '1000\\n'\n",
+		"curl": `#!/bin/sh
+set -eu
+test "$1" = -fsSL
+test "$2" = https://mui.example.test/download/install.sh
+test "$3" = -o
+printf '%s\n' "$4" > "$INSTALLER_PATH_LOG"
+cat > "$4" <<'SCRIPT'
+set -eu
+test "$#" -eq 4
+test "$1" = https://mui.example.test
+test -n "$2"
+test "$3" = -
+test "$4" = node
+IFS= read -r token
+test "$token" = "$EXPECTED_ENROLL_TOKEN"
+SCRIPT
+`,
+		"sudo": `#!/bin/sh
+set -eu
+for arg do
+  case "$arg" in *"$EXPECTED_ENROLL_TOKEN"*) exit 77;; esac
+done
+exec "$@"
+`,
 	} {
 		if err := os.WriteFile(filepath.Join(fakeTools, name), []byte(content), 0755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	cmd := exec.Command("bash", "-c", command)
-	cmd.Env = append(os.Environ(), "PATH="+fakeTools+":"+os.Getenv("PATH"))
+	installerPathLog := filepath.Join(t.TempDir(), "installer-path")
+	cmd := exec.Command("bash")
+	cmd.Stdin = strings.NewReader(command)
+	cmd.Env = append(os.Environ(), "PATH="+fakeTools+":"+os.Getenv("PATH"), "EXPECTED_ENROLL_TOKEN="+out["enrollToken"].(string), "INSTALLER_PATH_LOG="+installerPathLog)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("install command failed with stub downloader: %v %s", err, output)
+	}
+	installerPath, err := os.ReadFile(installerPathLog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(strings.TrimSpace(string(installerPath))); !os.IsNotExist(err) {
+		t.Fatalf("temporary installer was not removed: %v", err)
 	}
 	code, renewed, _ := p.do("POST", "/api/servers/"+id+"/enrollment", nil, nil)
 	if code != 200 || !strings.Contains(renewed["installCommand"].(string), "/download/install.sh") {
 		t.Fatalf("renewed install command: %d %v", code, renewed)
+	}
+}
+
+func TestInstallCommandRootAndSudoSelection(t *testing.T) {
+	app := &App{PublicURL: "https://mui.example.test"}
+	command := app.installCommand("test-server", "test-token", shared.Server{})
+	for _, tc := range []struct {
+		name     string
+		uid      string
+		sudo     bool
+		wantOK   bool
+		wantSudo bool
+	}{
+		{"root without sudo", "0", false, true, false},
+		{"root skips sudo", "0", true, true, false},
+		{"user with sudo", "1000", true, true, true},
+		{"user without sudo", "1000", false, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tools := t.TempDir()
+			// An isolated PATH ensures a host-installed sudo cannot hide a bug.
+			for _, name := range []string{"sh", "mktemp", "rm", "cat"} {
+				path, err := exec.LookPath(name)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(path, filepath.Join(tools, name)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			scripts := map[string]string{
+				"id": "#!/bin/sh\nprintf '%s\\n' \"$TEST_UID\"\n",
+				"curl": `#!/bin/sh
+set -eu
+cat > "$4" <<'SCRIPT'
+set -eu
+test "$#" -eq 4
+test "$1" = https://mui.example.test
+test "$2" = test-server
+test "$3" = -
+test "$4" = relay
+IFS= read -r token
+test "$token" = test-token
+printf done > "$INSTALL_MARKER"
+SCRIPT
+`,
+			}
+			if tc.sudo {
+				scripts["sudo"] = "#!/bin/sh\nprintf used > \"$SUDO_MARKER\"\nexec \"$@\"\n"
+			}
+			for name, script := range scripts {
+				if err := os.WriteFile(filepath.Join(tools, name), []byte(script), 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			marker, sudoMarker := filepath.Join(t.TempDir(), "installed"), filepath.Join(t.TempDir(), "sudo")
+			cmd := exec.Command("sh")
+			cmd.Stdin = strings.NewReader(command)
+			cmd.Env = append(os.Environ(), "PATH="+tools, "TEST_UID="+tc.uid, "INSTALL_MARKER="+marker, "SUDO_MARKER="+sudoMarker)
+			output, err := cmd.CombinedOutput()
+			if (err == nil) != tc.wantOK {
+				t.Fatalf("unexpected command result: %v %s", err, output)
+			}
+			if !tc.wantOK && !strings.Contains(string(output), "请切换到 root") {
+				t.Fatalf("missing actionable error: %s", output)
+			}
+			_, installErr := os.Stat(marker)
+			_, sudoErr := os.Stat(sudoMarker)
+			if (installErr == nil) != tc.wantOK || (sudoErr == nil) != tc.wantSudo {
+				t.Fatalf("wrong installation or elevation path: installed=%v sudo=%v", installErr, sudoErr)
+			}
+		})
 	}
 }
 
@@ -98,7 +211,7 @@ func TestInstallerChecksDownloadsBeforeExecutingAgent(t *testing.T) {
 		}
 	}
 	for name, content := range map[string]string{
-		"mui-agent":      "#!/bin/sh\ntest \"$1\" = install && test \"$2\" = \"https://mui.example.test\" && test \"$3\" = test-server && test \"$4\" = test-token && test \"$#\" -eq 6 && { test \"$5\" = - || test -f \"$5\"; } && test \"$6\" = \"${EXPECTED_RELEASE_KEY:-}\" && touch \"$INSTALL_MARKER\"\n",
+		"mui-agent":      "#!/bin/sh\ntest \"$1\" = install && test \"$2\" = \"https://mui.example.test\" && test \"$3\" = test-server && test \"$4\" = - && test \"$#\" -eq 7 && { test \"$5\" = - || test -f \"$5\"; } && test \"$6\" = \"${EXPECTED_RELEASE_KEY:-}\" && test \"$7\" = --token-stdin && IFS= read -r token && test \"$token\" = test-token && touch \"$INSTALL_MARKER\"\n",
 		"sing-box":       "core-binary",
 		"SHA256SUMS":     "aaaa  mui-agent\nbbbb  sing-box\n",
 		"SHA256SUMS.sig": "test-signature",
@@ -106,6 +219,10 @@ func TestInstallerChecksDownloadsBeforeExecutingAgent(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(artifacts, name), []byte(content), 0644); err != nil {
 			t.Fatal(err)
 		}
+	}
+	installer := filepath.Join(t.TempDir(), "install.sh")
+	if err := os.WriteFile(installer, installAgentScript, 0644); err != nil {
+		t.Fatal(err)
 	}
 	for _, run := range []struct {
 		checksumExit string
@@ -115,11 +232,15 @@ func TestInstallerChecksDownloadsBeforeExecutingAgent(t *testing.T) {
 		{"1", []string{"https://mui.example.test", "test-server", "test-token", "node"}, ""},
 		{"0", []string{"https://mui.example.test", "test-server", "test-token", "node"}, ""},
 		{"0", []string{"https://mui.example.test", "test-server", "test-token", "node", "test-release-key"}, "test-release-key"},
+		{"0", []string{"https://mui.example.test", "test-server", "-", "node"}, ""},
+		{"0", []string{"https://mui.example.test", "test-server", "-", "node", "test-release-key"}, "test-release-key"},
 	} {
 		checksumExit := run.checksumExit
 		_ = os.Remove(marker)
-		cmd := exec.Command("sh", append([]string{"-s", "--"}, run.args...)...)
-		cmd.Stdin = bytes.NewReader(installAgentScript)
+		cmd := exec.Command("sh", append([]string{installer}, run.args...)...)
+		if run.args[2] == "-" {
+			cmd.Stdin = strings.NewReader("test-token\n")
+		}
 		cmd.Env = append(os.Environ(),
 			"PATH="+toolsDir+":"+os.Getenv("PATH"),
 			"FIXTURE_DIR="+artifacts, "INSTALL_MARKER="+marker, "CHECKSUM_EXIT="+checksumExit, "EXPECTED_RELEASE_KEY="+run.releaseKey,
@@ -137,8 +258,8 @@ func TestInstallerChecksDownloadsBeforeExecutingAgent(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = os.Remove(marker)
-	cmd := exec.Command("sh", "-s", "--", "https://mui.example.test", "test-server", "test-token", "relay")
-	cmd.Stdin = bytes.NewReader(installAgentScript)
+	cmd := exec.Command("sh", installer, "https://mui.example.test", "test-server", "-", "relay")
+	cmd.Stdin = strings.NewReader("test-token\n")
 	cmd.Env = append(os.Environ(), "PATH="+toolsDir+":"+os.Getenv("PATH"), "FIXTURE_DIR="+artifacts, "INSTALL_MARKER="+marker, "CHECKSUM_EXIT=0")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("relay installer required sing-box: %v %s", err, output)

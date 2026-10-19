@@ -130,8 +130,8 @@ func TestSnellShadowTLSInboundAndStats(t *testing.T) {
 	if users[0].(map[string]any)["password"] != "outer-secret" || outer["handshake"].(map[string]any)["server"] != "www.example.com" {
 		t.Fatalf("invalid ShadowTLS credentials or handshake: %#v", outer)
 	}
-	if inner["type"] != "snell" || inner["psk"] != "snell-secret" || inner["tag"] != "node-snell1" || inner["listen"] != nil || inner["listen_port"] != nil {
-		t.Fatalf("inner Snell must only be injectable: %#v", inner)
+	if inner["type"] != "snell" || inner["psk"] != "snell-secret" || inner["tag"] != "node-snell1" || inner["listen"] != "127.0.0.1" || inner["listen_port"] != float64(24321) {
+		t.Fatalf("inner Snell must use a fixed loopback port: %#v", inner)
 	}
 	stats := doc.Experimental["v2ray_api"].(map[string]any)["stats"].(map[string]any)["inbounds"].([]any)
 	if len(stats) != 1 || stats[0] != "node-snell1" {
@@ -175,7 +175,54 @@ func TestAnyTLSCertificateValidation(t *testing.T) {
 		t.Fatal("wildcard certificate coverage incorrect")
 	}
 	node := Node{Name: "AnyTLS", Protocol: "anytls", Port: 8443, Listen: "0.0.0.0", TLSName: "node.example.com"}
-	if err := ValidateNode(node, &Certificate{Domain: "node.example.com", ExpiresAt: expiry}, false); err != nil {
+	cert := &Certificate{Domain: "another.example.com", PEM: certPEM, ExpiresAt: expiry}
+	if err := ValidateNode(node, cert, false); err != nil {
 		t.Fatal(err)
+	}
+	node.TLSName = "example.com"
+	cert.Domain = node.TLSName
+	if err := ValidateNode(node, cert, false); err == nil {
+		t.Fatal("certificate label must not override actual wildcard coverage")
+	}
+}
+
+func TestSnellFixedInnerPortAndConflicts(t *testing.T) {
+	n := Node{ID: "snell", ServerID: "host", Name: "Snell", Protocol: "snell", Port: 54321, SnellPort: 23456, ShadowTLSHost: "example.com", Enabled: true}
+	if err := ValidateNode(n, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := SingBoxConfig([]ManagedNode{{Node: n, Password: "snell-secret", ShadowTLSPassword: "outer-secret"}}, "/tmp/certs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Inbounds []map[string]any `json:"inbounds"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	if inner := config.Inbounds[1]; inner["listen"] != "127.0.0.1" || inner["listen_port"] != float64(23456) {
+		t.Fatalf("wrong inner listener: %s", raw)
+	}
+	for _, port := range []int{-1, 65536, n.Port, StatsAPIPort, ConnectionsAPIPort} {
+		invalid := n
+		invalid.SnellPort = port
+		if ValidateNode(invalid, nil, false) == nil {
+			t.Errorf("accepted inner port %d", port)
+		}
+	}
+	other := Node{ID: "ss", ServerID: n.ServerID, Protocol: "ss", Port: n.SnellPort, Listen: "0.0.0.0"}
+	if !PortConflict(n, other) || !PortConflict(other, n) {
+		t.Fatal("inner/external collision not detected")
+	}
+	other.Listen = "192.0.2.1"
+	if PortConflict(n, other) {
+		t.Fatal("nonoverlapping listen addresses conflict")
+	}
+	other = n
+	other.ID = "second"
+	other.Port++
+	if !PortConflict(n, other) {
+		t.Fatal("two Snell inner listeners accepted on same port")
 	}
 }

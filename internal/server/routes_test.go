@@ -118,7 +118,7 @@ func TestRouteGeneratesForwardsOnEveryHop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n := state.Nodes[0].Node; n.FirewallPolicy != "restricted" || n.FirewallSources != node.RouteSources {
+	if n := state.Nodes[0].Node; n.FirewallPolicy != "restricted" || n.FirewallSources != "198.51.100.2/32,198.51.100.3/32" {
 		t.Fatalf("a node without direct access gets the route sources as its firewall: %+v", n)
 	}
 
@@ -249,7 +249,7 @@ func TestRouteSubscriptionServesEntryAddress(t *testing.T) {
 		t.Fatalf("config: %v %s", err, body)
 	}
 	out := config.Outbounds[0]
-	if out["server"] != "entry.example.com" || out["server_port"] != float64(50010) || !strings.HasPrefix(out["tag"].(string), "hk-") {
+	if out["server"] != "entry.example.com" || out["server_port"] != float64(50010) || out["tag"] != "hk" {
 		t.Fatalf("clients must dial the entry on the route port: %v", out)
 	}
 	if !strings.Contains(out["password"].(string), ":") {
