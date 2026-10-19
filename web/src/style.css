@@ -1207,6 +1207,34 @@ th.num {
   gap: 8px 12px;
   margin-bottom: 8px;
 }
+.routeConnection {
+  min-width: 0;
+  width: 100%;
+  margin: 14px 0 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.routeConnection legend {
+  max-width: 100%;
+  padding: 0 6px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.routeConnection .connectionAddress {
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+.routeConnection .field {
+  align-content: start;
+}
+.routeConnection .hint {
+  margin-bottom: 0;
+}
+.routeExitTitle {
+  margin: 18px 0 0;
+  font-size: 14px;
+}
 
 .headerRefreshStatus { font-size: .8rem; color: var(--muted); }
 .headerActions .iconButton[aria-pressed="true"] { color: var(--accent); background: var(--code-bg); border-color: currentColor; }
@@ -1232,3 +1260,5 @@ th.num {
 .agentDownloadRow small { font-size: 12px; color: var(--muted); margin-top: 3px; }
 .agentDownloadRow a { color: var(--accent); white-space: nowrap; }
 .agentDownloadRow > .hint { max-width: 45%; text-align: right; }
+
+.formGrid > .hint { grid-column: 1 / -1; margin: 0; }

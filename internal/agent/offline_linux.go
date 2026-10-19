@@ -114,8 +114,8 @@ func InstallOffline(config, releaseKey string) error {
 	if err := checkOfflineIdentity(bundle); err != nil {
 		return err
 	}
-	if _, err := exec.LookPath("systemctl"); err != nil {
-		return errors.New("离线服务安装需要 systemd 和 systemctl")
+	if err := checkServiceTools(); err != nil {
+		return err
 	}
 	self, err := os.Executable()
 	if err != nil {
@@ -130,8 +130,8 @@ func InstallOffline(config, releaseKey string) error {
 	}
 	rb := &installRollback{}
 	wasActive, wasEnabled := forwardActive(), forwardEnabled()
-	unitPath := "/etc/systemd/system/mui-forward.service"
-	for path, mode := range map[string]os.FileMode{"/usr/local/bin/mui-agent": 0755, ForwardConfig: 0640, unitPath: 0644, OfflineModePath: 0640, OfflineReleaseKeyPath: 0644, OfflineBundlePath: 0600} {
+	unitPath, _, unitMode := serviceFile("mui-forward.service", forwardUnit)
+	for path, mode := range map[string]os.FileMode{"/usr/local/bin/mui-agent": 0755, ForwardConfig: 0640, unitPath: unitMode, OfflineModePath: 0640, OfflineReleaseKeyPath: 0644, OfflineBundlePath: 0600} {
 		if err := rb.backup(path, mode); err != nil {
 			rb.rollback()
 			_ = chownRootGroup(ForwardConfig, forwardUser)
@@ -143,21 +143,21 @@ func InstallOffline(config, releaseKey string) error {
 		// Remove any newly created enable symlink before restoring/removing
 		// the unit file; systemctl cannot disable a unit after it disappears.
 		if !wasEnabled && fileExists(unitPath) {
-			_, restoreErr = command("systemctl", "disable", "mui-forward.service")
+			_, restoreErr = serviceCommand("disable", "mui-forward.service")
 		}
 		if !wasActive && forwardActive() {
-			_, err := command("systemctl", "stop", "mui-forward.service")
+			_, err := serviceCommand("stop", "mui-forward.service")
 			restoreErr = errors.Join(restoreErr, err)
 		}
 		rb.rollback()
 		_ = chownRootGroup(ForwardConfig, forwardUser)
-		_, _ = command("systemctl", "daemon-reload")
+		_, _ = serviceCommand("daemon-reload")
 		if wasEnabled {
-			_, err := command("systemctl", "enable", "mui-forward.service")
+			_, err := serviceCommand("enable", "mui-forward.service")
 			restoreErr = errors.Join(restoreErr, err)
 		}
 		if wasActive {
-			_, err := command("systemctl", "restart", "mui-forward.service")
+			_, err := serviceCommand("restart", "mui-forward.service")
 			restoreErr = errors.Join(restoreErr, err)
 			if err == nil {
 				previous, readErr := os.ReadFile(ForwardConfig)
@@ -190,10 +190,10 @@ func InstallOffline(config, releaseKey string) error {
 		return fail(err)
 	}
 	_ = os.Remove(ForwardReady)
-	if _, err := command("systemctl", "enable", "mui-forward.service"); err != nil {
+	if _, err := serviceCommand("enable", "mui-forward.service"); err != nil {
 		return fail(err)
 	}
-	if _, err := command("systemctl", "restart", "mui-forward.service"); err != nil {
+	if _, err := serviceCommand("restart", "mui-forward.service"); err != nil {
 		return fail(err)
 	}
 	if err := waitForwardReady(raw); err != nil {
@@ -247,14 +247,14 @@ func ApplyOfflineForwards(config string) error {
 	}
 	activate := func(data []byte, reload bool) error {
 		_ = os.Remove(ForwardReady)
-		if _, err := command("systemctl", "enable", "mui-forward.service"); err != nil {
+		if _, err := serviceCommand("enable", "mui-forward.service"); err != nil {
 			return err
 		}
 		verb := "restart"
 		if reload {
 			verb = "reload"
 		}
-		if _, err := command("systemctl", verb, "mui-forward.service"); err != nil {
+		if _, err := serviceCommand(verb, "mui-forward.service"); err != nil {
 			return err
 		}
 		return waitForwardReady(data)
@@ -269,11 +269,11 @@ func ApplyOfflineForwards(config string) error {
 			if wasActive {
 				restoreErr = activate(old, forwardActive())
 			} else {
-				_, restoreErr = command("systemctl", "stop", "mui-forward.service")
+				_, restoreErr = serviceCommand("stop", "mui-forward.service")
 			}
 		}
 		if !wasEnabled {
-			_, enableErr := command("systemctl", "disable", "mui-forward.service")
+			_, enableErr := serviceCommand("disable", "mui-forward.service")
 			restoreErr = errors.Join(restoreErr, enableErr)
 		}
 		if restoreErr != nil {

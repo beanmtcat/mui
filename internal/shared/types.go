@@ -25,32 +25,39 @@ type Server struct {
 	Domain   string   `json:"domain"`
 	// InternalAddress is how other servers on the same private network or
 	// dedicated line (IPLC/IEPL) reach this one; a route hop can use it.
-	InternalAddress       string     `json:"internalAddress"`
-	FirewallMode          string     `json:"firewallMode"`
-	ManualFirewallSupport bool       `json:"manualFirewallSupport"`
-	Status                string     `json:"status"`
-	OS                    string     `json:"os"`
-	Arch                  string     `json:"arch"`
-	AgentVersion          string     `json:"agentVersion"`
-	AgentBuild            string     `json:"agentBuild"`
-	AgentSelfUpdate       bool       `json:"agentSelfUpdate"`
-	NodeFirewallPolicies  bool       `json:"nodeFirewallPolicies"`
-	MultiUserStats        bool       `json:"multiUserStats"`
-	ForwardTCPUDP         bool       `json:"forwardTcpUdp"`
-	ForwardSupport        bool       `json:"forwardSupport"`
-	ShadowTLSAuth         bool       `json:"shadowTlsAuth"`
-	SnellFixedPort        bool       `json:"snellFixedPort"`
-	ReleaseKeyPinned      bool       `json:"releaseKeyPinned"`
-	AppliedRevision       int64      `json:"appliedRevision"`
-	CoreVersion           string     `json:"coreVersion"`
-	CoreBuild             string     `json:"coreBuild"`
-	CoreSelfUpdate        bool       `json:"coreSelfUpdate"`
-	UFWStatus             string     `json:"ufwStatus"`
-	StatsStatus           string     `json:"statsStatus"`
-	NetworkRx             int64      `json:"networkRx"`
-	NetworkTx             int64      `json:"networkTx"`
-	LastSeen              *time.Time `json:"lastSeen"`
-	Revision              int64      `json:"revision"`
+	InternalAddress            string     `json:"internalAddress"`
+	AgentProxySwitchPending    bool       `json:"agentProxySwitchPending,omitempty"`
+	AgentProxyPreviousInternal bool       `json:"agentProxyPreviousInternal,omitempty"`
+	AgentProxyPreviousNodeID   string     `json:"agentProxyPreviousNodeId,omitempty"`
+	AgentProxyNodeID           string     `json:"agentProxyNodeId,omitempty"`
+	AgentProxyInternal         bool       `json:"agentProxyInternal,omitempty"`
+	AgentProxySupport          bool       `json:"agentProxySupport,omitempty"`
+	FirewallMode               string     `json:"firewallMode"`
+	ManualFirewallSupport      bool       `json:"manualFirewallSupport"`
+	Status                     string     `json:"status"`
+	OS                         string     `json:"os"`
+	Arch                       string     `json:"arch"`
+	AgentVersion               string     `json:"agentVersion"`
+	AgentBuild                 string     `json:"agentBuild"`
+	AgentSelfUpdate            bool       `json:"agentSelfUpdate"`
+	NodeFirewallPolicies       bool       `json:"nodeFirewallPolicies"`
+	MultiUserStats             bool       `json:"multiUserStats"`
+	ForwardTCPUDP              bool       `json:"forwardTcpUdp"`
+	ForwardSupport             bool       `json:"forwardSupport"`
+	ShadowTLSAuth              bool       `json:"shadowTlsAuth"`
+	SnellFixedPort             bool       `json:"snellFixedPort"`
+	SnellV6                    bool       `json:"snellV6"`
+	ReleaseKeyPinned           bool       `json:"releaseKeyPinned"`
+	AppliedRevision            int64      `json:"appliedRevision"`
+	CoreVersion                string     `json:"coreVersion"`
+	CoreBuild                  string     `json:"coreBuild"`
+	CoreSelfUpdate             bool       `json:"coreSelfUpdate"`
+	UFWStatus                  string     `json:"ufwStatus"`
+	StatsStatus                string     `json:"statsStatus"`
+	NetworkRx                  int64      `json:"networkRx"`
+	NetworkTx                  int64      `json:"networkTx"`
+	LastSeen                   *time.Time `json:"lastSeen"`
+	Revision                   int64      `json:"revision"`
 	// Reported by the agent; never edited by the administrator.
 	DetectedIPv4     string   `json:"detectedIpv4"`
 	DetectedIPv6     string   `json:"detectedIpv6"`
@@ -65,6 +72,7 @@ type Node struct {
 	ServerID       string `json:"serverId"`
 	Name           string `json:"name"`
 	Protocol       string `json:"protocol"`
+	Username       string `json:"username,omitempty"`
 	Port           int    `json:"port"`
 	Listen         string `json:"listen"`
 	PublishAddress string `json:"publishAddress"`
@@ -101,6 +109,7 @@ type NodeTemplate struct {
 	ID            string `json:"id"`
 	Name          string `json:"name"`
 	Protocol      string `json:"protocol"`
+	Username      string `json:"username,omitempty"`
 	Port          int    `json:"port"`
 	Listen        string `json:"listen"`
 	Method        string `json:"method"`
@@ -323,7 +332,15 @@ type NodeUser struct {
 	ShadowTLSPassword string `json:"shadowTlsPassword,omitempty"`
 }
 
+type SOCKS5Proxy struct {
+	Host     string `json:"host"`
+	Port     int    `json:"port"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+}
+
 type DesiredState struct {
+	AgentProxy        *SOCKS5Proxy   `json:"agentProxy,omitempty"`
 	FirewallMode      string         `json:"firewallMode,omitempty"`
 	Revision          int64          `json:"revision"`
 	ProtocolVersion   int            `json:"protocolVersion"`
@@ -428,6 +445,8 @@ type AgentReport struct {
 	ForwardTCPUDP         bool                  `json:"forwardTcpUdp,omitempty"`
 	ShadowTLSAuth         bool                  `json:"shadowTlsAuth,omitempty"`
 	SnellFixedPort        bool                  `json:"snellFixedPort,omitempty"`
+	SnellV6               bool                  `json:"snellV6,omitempty"`
+	AgentProxySupport     bool                  `json:"agentProxySupport,omitempty"`
 	ReleaseKeyPinned      bool                  `json:"releaseKeyPinned,omitempty"`
 	CoreVersion           string                `json:"coreVersion,omitempty"`
 	CoreBuild             string                `json:"coreBuild,omitempty"`

@@ -1,6 +1,9 @@
 package server
 
 import (
+	"fmt"
+	"net"
+	"strconv"
 	"strings"
 
 	"mui/internal/shared"
@@ -43,8 +46,13 @@ func (a *App) offlineInstallAt(publicURL, serverID, token string, server shared.
 	}
 	guide := offlineInstallGuide{Downloads: []installDownload{}, Signed: a.releaseKeyB64 != ""}
 	guide.Downloads = installDownloads(publicURL, files)
-	guide.Command = localInstallPrelude(files, binaries) +
-		"\"$@\" ./mui-agent install " + shellQuote(publicURL) + " " + shellQuote(serverID) + " - " + shellQuote(core) + " " + shellQuote(a.releaseKeyB64) + " --token-stdin <<'MUI_ENROLLMENT_TOKEN'\n" + token + "\nMUI_ENROLLMENT_TOKEN\n" +
+	proxyPrelude, proxyFlag, proxyErr := a.installProxyPrelude(server, false)
+	if proxyErr != nil {
+		guide.Command = "printf '%s\\n' " + shellQuote(proxyErr.Error()) + " >&2; exit 1"
+		return guide
+	}
+	guide.Command = localInstallPrelude(files, binaries) + proxyPrelude +
+		"\"$@\" ./mui-agent install " + shellQuote(publicURL) + " " + shellQuote(serverID) + " - " + shellQuote(core) + " " + shellQuote(a.releaseKeyB64) + proxyFlag + " --token-stdin <<'MUI_ENROLLMENT_TOKEN'\n" + token + "\nMUI_ENROLLMENT_TOKEN\n" +
 		"printf '%s\\n' 'MUI Agent 安装完成。'\n)"
 	return guide
 }
@@ -105,11 +113,33 @@ func localInstallPrelude(files, binaries []string) string {
 	for _, name := range binaries {
 		cmd.WriteString("test \"$(grep -Ec " + shellQuote(" \\*?"+name+"$") + " SHA256SUMS)\" -eq 1 || { printf '%s\\n' " + shellQuote("SHA256SUMS 中的 "+name+" 条目缺失或重复，请重新下载同一版本文件。") + " >&2; exit 1; }\n")
 	}
-	cmd.WriteString("grep -E " + shellQuote(" \\*?("+strings.Join(binaries, "|")+")$") + " SHA256SUMS | sha256sum --check --status || { printf '%s\\n' '文件摘要校验失败，请重新上传同一发布版本的文件。' >&2; exit 1; }\n")
+	cmd.WriteString("grep -E " + shellQuote(" \\*?("+strings.Join(binaries, "|")+")$") + " SHA256SUMS | sha256sum -c >/dev/null || { printf '%s\\n' '文件摘要校验失败，请重新上传同一发布版本的文件。' >&2; exit 1; }\n")
 	cmd.WriteString("chmod 755 " + strings.Join(binaries, " ") + "\n")
 	// "$@" is the privilege prefix: nothing for root, sudo otherwise.
 	cmd.WriteString("if [ \"$(id -u)\" -eq 0 ]; then\n  set --\n")
 	cmd.WriteString("elif command -v sudo >/dev/null 2>&1; then\n  set -- sudo\n")
 	cmd.WriteString("else\n  printf '%s\\n' '当前用户不是 root，且未安装 sudo；请切换到 root 后重新执行安装命令。' >&2\n  exit 1\nfi\n")
 	return cmd.String()
+}
+
+// installProxyPrelude returns a shell fragment and the Agent install flag.
+// The Agent reads the proxy from a protected file, and so does curl when the
+// command downloads the installer itself (withCurl); secrets never appear in
+// child process arguments. Commands that run files the administrator uploaded
+// download nothing, so they get no curl configuration.
+func (a *App) installProxyPrelude(server shared.Server, withCurl bool) (string, string, error) {
+	if server.AgentProxyNodeID == "" {
+		return "", "", nil
+	}
+	proxy, err := a.agentProxy(server)
+	if err != nil {
+		return "", "", err
+	}
+	prelude := "mui_proxy_dir=$(mktemp -d)\ntrap 'rm -rf \"$mui_proxy_dir\"; rm -f \"${mui_installer:-}\"' EXIT HUP INT TERM\n" +
+		"printf '%s' " + shellQuote(Marshal(proxy)) + " > \"$mui_proxy_dir/proxy.json\"\n"
+	if withCurl {
+		curlConfig := fmt.Sprintf("proxy = %s\nproxy-user = %s\n", strconv.Quote("socks5h://"+net.JoinHostPort(proxy.Host, strconv.Itoa(proxy.Port))), strconv.Quote(proxy.Username+":"+proxy.Password))
+		prelude += "printf '%s' " + shellQuote(curlConfig) + " > \"$mui_proxy_dir/curl.conf\"\n"
+	}
+	return prelude, " --proxy-file \"$mui_proxy_dir/proxy.json\"", nil
 }

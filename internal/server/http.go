@@ -474,17 +474,28 @@ func (a *App) installCommandAt(publicURL, serverID, token string, server shared.
 	}
 	// Keep the token out of every child process's arguments, including the
 	// outer shell. Download the script first so its stdin can carry the token.
+	proxyPrelude, _, proxyErr := a.installProxyPrelude(server, true)
+	if proxyErr != nil {
+		return "printf '%s\\n' " + shellQuote(proxyErr.Error()) + " >&2; exit 1"
+	}
+	curlProxy := ""
+	if proxyPrelude != "" {
+		curlProxy = " --config \"$mui_proxy_dir/curl.conf\""
+	}
 	command := "(\nset -eu\numask 077\n" +
 		"if [ \"$(id -u)\" -eq 0 ]; then\n  set -- sh\n" +
 		"elif command -v sudo >/dev/null 2>&1; then\n  set -- sudo sh\n" +
 		"else\n  printf '%s\\n' '当前用户不是 root，且未安装 sudo；请切换到 root 后重新执行接入命令。' >&2\n  exit 1\nfi\n" +
 		"mui_installer=$(mktemp)\n" +
-		"trap 'rm -f \"$mui_installer\"' EXIT HUP INT TERM\n" +
-		"curl -fsSL " + shellQuote(publicURL+"/download/install.sh") + " -o \"$mui_installer\"\n" +
+		"trap 'rm -f \"$mui_installer\"' EXIT HUP INT TERM\n" + proxyPrelude +
+		"curl -fsSL" + curlProxy + " " + shellQuote(publicURL+"/download/install.sh") + " -o \"$mui_installer\"\n" +
 		"\"$@\" \"$mui_installer\" " + shellQuote(publicURL) +
 		" " + shellQuote(serverID) + " - " + shellQuote(purpose)
-	if a.releaseKeyB64 != "" {
+	if a.releaseKeyB64 != "" || proxyPrelude != "" {
 		command += " " + shellQuote(a.releaseKeyB64)
+	}
+	if proxyPrelude != "" {
+		command += " \"$mui_proxy_dir\""
 	}
 	return command + " <<'MUI_ENROLLMENT_TOKEN'\n" + token + "\nMUI_ENROLLMENT_TOKEN\n)"
 }
@@ -996,7 +1007,7 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		Provider: in.Provider, Tags: in.Tags, Notes: in.Notes,
 		IPv4: in.IPv4, IPv6: in.IPv6, Domain: in.Domain, InternalAddress: strings.TrimSpace(in.InternalAddress),
 		Status: "pending", UFWStatus: "unknown",
-		FirewallMode: in.FirewallMode, ManagementMode: in.ManagementMode,
+		FirewallMode: in.FirewallMode, ManagementMode: in.ManagementMode, AgentProxyNodeID: in.AgentProxyNodeID, AgentProxyInternal: in.AgentProxyInternal,
 	}
 	if err = validInternalAddress(srv.InternalAddress); err != nil {
 		errorJSON(w, 400, err.Error())
@@ -1012,6 +1023,10 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateManagement(srv); err != nil {
 		errorJSON(w, 400, err.Error())
+		return
+	}
+	if err := a.validateAgentProxySelection(srv); err != nil {
+		errorJSON(w, 409, err.Error())
 		return
 	}
 	token := Token()
@@ -1212,6 +1227,10 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "DELETE" {
+		if err := a.protectProxyHost(old, old, true); err != nil {
+			errorJSON(w, 409, err.Error())
+			return
+		}
 		if serverStatus(old) == "online" {
 			errorJSON(w, 409, "服务器仍在线；请先删除其节点与规则并停用 Agent，或吊销 Agent 凭据后再删除")
 			return
@@ -1272,6 +1291,20 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	modeChanged := shared.ManualFirewall(old.FirewallMode) != shared.ManualFirewall(in.FirewallMode)
+	if in.AgentProxyNodeID == "" {
+		in.AgentProxyInternal = false
+	}
+	proxyChanged := old.AgentProxyNodeID != in.AgentProxyNodeID || old.AgentProxyInternal != in.AgentProxyInternal
+	if proxyChanged && old.AgentProxySwitchPending && (in.AgentProxyNodeID != old.AgentProxyPreviousNodeID || in.AgentProxyInternal != old.AgentProxyPreviousInternal) {
+		errorJSON(w, 409, "Agent 代理切换尚未成功应用；请等待完成，或先改回之前的代理再重试")
+		return
+	}
+	before := old
+	if proxyChanged {
+		old.AgentProxyPreviousNodeID, old.AgentProxyPreviousInternal = old.AgentProxyNodeID, old.AgentProxyInternal
+		old.AgentProxySwitchPending = true
+	}
+	old.AgentProxyNodeID, old.AgentProxyInternal = in.AgentProxyNodeID, in.AgentProxyInternal
 	old.FirewallMode = in.FirewallMode
 	old.ManagementMode = in.ManagementMode
 	old.Name = in.Name
@@ -1324,6 +1357,14 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "IP 格式无效")
 		return
 	}
+	if err := a.validateAgentProxySelection(old); err != nil {
+		errorJSON(w, 409, err.Error())
+		return
+	}
+	if err := a.protectProxyHost(before, old, false); err != nil {
+		errorJSON(w, 409, err.Error())
+		return
+	}
 	world, err := a.loadRouteWorld()
 	if err != nil {
 		errorJSON(w, 500, err.Error())
@@ -1348,7 +1389,7 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if modeChanged || managementChanged {
+	if modeChanged || managementChanged || proxyChanged {
 		if err = a.queueApplyLocked(id, "nodes.apply"); err != nil {
 			errorJSON(w, 500, err.Error())
 			return
@@ -1401,7 +1442,7 @@ func normalizeNodeTemplate(t *shared.NodeTemplate) {
 		t.SnellVersion, t.Obfs, t.ShadowTLSHost, t.TLSName = 0, "", "", ""
 	case "snell":
 		if t.SnellVersion == 0 {
-			t.SnellVersion = 5
+			t.SnellVersion = 6
 		}
 		if t.SnellPort == 0 {
 			t.SnellPort = shared.SnellListenPort(shared.Node{Port: t.Port})
@@ -1410,6 +1451,8 @@ func normalizeNodeTemplate(t *shared.NodeTemplate) {
 			t.Obfs = "none"
 		}
 		t.Method, t.TLSName = "", ""
+	case "socks5":
+		t.Method, t.SnellVersion, t.Obfs, t.ShadowTLSHost, t.TLSName = "", 0, "", "", ""
 	case "anytls":
 		t.TLSName = strings.TrimSpace(t.TLSName)
 		t.Method, t.SnellVersion, t.Obfs, t.ShadowTLSHost = "", 0, "", ""
@@ -1449,7 +1492,7 @@ func (a *App) nodeTemplates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if in.Password != "" {
-		if err := validatePassword(shared.Node{Protocol: t.Protocol, Method: t.Method}, in.Password); err != nil {
+		if err := validatePassword(shared.Node{Protocol: t.Protocol, Username: t.Username, Method: t.Method, SnellVersion: t.SnellVersion}, in.Password); err != nil {
 			errorJSON(w, 400, err.Error())
 			return
 		}
@@ -1542,7 +1585,7 @@ func (a *App) nodeTemplateByID(w http.ResponseWriter, r *http.Request) {
 		shadowPassword = ""
 	}
 	if password != "" {
-		if err := validatePassword(shared.Node{Protocol: t.Protocol, Method: t.Method}, password); err != nil {
+		if err := validatePassword(shared.Node{Protocol: t.Protocol, Username: t.Username, Method: t.Method, SnellVersion: t.SnellVersion}, password); err != nil {
 			errorJSON(w, 400, err.Error())
 			return
 		}
@@ -1613,7 +1656,9 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 	}
 	n.FirewallPolicy, n.FirewallSources = policy, sources
 	if n.Protocol == "snell" {
-		n.SnellVersion = 5
+		if n.SnellVersion == 0 {
+			n.SnellVersion = 6
+		}
 		if n.SnellPort == 0 {
 			n.SnellPort = shared.SnellListenPort(n)
 		}
@@ -1637,6 +1682,10 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			cert = &v
 		}
+	}
+	if err := checkSOCKSFirewall(server, n); err != nil {
+		errorJSON(w, 409, err.Error())
+		return
 	}
 	if err := shared.ValidateNode(n, cert, false); err != nil {
 		errorJSON(w, 400, err.Error())
@@ -1740,6 +1789,12 @@ func base64Key(method string) string {
 	return base64.StdEncoding.EncodeToString(b)
 }
 func validatePassword(n shared.Node, password string) error {
+	if n.Protocol == "socks5" {
+		return shared.ValidateSOCKS5Credentials(n.Username, password)
+	}
+	if err := shared.ValidateSnellPSK(n, password); err != nil {
+		return err
+	}
 	if len(password) < 8 {
 		return errors.New("密码 / PSK 至少 8 字符")
 	}
@@ -1796,6 +1851,10 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == "DELETE" {
+		if err := a.protectProxyNode(old, old, "", true); err != nil {
+			errorJSON(w, 409, err.Error())
+			return
+		}
 		routes, err := a.Store.Routes()
 		if err != nil {
 			errorJSON(w, 500, err.Error())
@@ -1847,7 +1906,7 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		n.Method = old.Method
 	}
 	if n.SnellVersion == 0 && n.Protocol == "snell" {
-		n.SnellVersion = 5
+		n.SnellVersion = 6
 	}
 	policy, sources, accessErr := shared.NormalizeAdminFirewallAccess(n.FirewallPolicy, n.FirewallSources)
 	if accessErr != nil {
@@ -1855,6 +1914,10 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n.FirewallPolicy, n.FirewallSources = policy, sources
+	if err := a.protectProxyNode(old, n, in.Password, false); err != nil {
+		errorJSON(w, 409, err.Error())
+		return
+	}
 	if n.Protocol == "snell" && n.SnellPort == 0 {
 		n.SnellPort = shared.SnellListenPort(n)
 	}
@@ -1900,6 +1963,10 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 	server, err := a.Store.Server(n.ServerID)
 	if err != nil {
 		errorJSON(w, 404, "服务器不存在")
+		return
+	}
+	if err := checkSOCKSFirewall(server, n); err != nil {
+		errorJSON(w, 409, err.Error())
 		return
 	}
 	if n.Protocol == "snell" {
@@ -1991,7 +2058,7 @@ func (a *App) share(w http.ResponseWriter, r *http.Request) {
 		}
 		password += ":" + a.Store.SubscriptionUser(n, "direct").Password
 	}
-	uri, err := shared.ShareURI(shared.SubscriptionItem{Node: n, Server: server, Password: password})
+	uri, err := shared.ShareURI(shared.SubscriptionItem{Node: n, Server: server, Password: password, Username: n.Username})
 	if err != nil {
 		errorJSON(w, 400, err.Error())
 		return
@@ -2508,8 +2575,8 @@ func (a *App) queueSubscriptionsApply(subs ...shared.Subscription) error {
 }
 
 func validateSubscriptionNode(format string, n shared.Node) error {
-	if format == "v2rayn" && n.Protocol != "ss" && n.Protocol != "anytls" {
-		return errors.New("v2rayN 订阅仅支持 SS 和 AnyTLS 节点，不支持 Snell / ShadowTLS")
+	if format == "v2rayn" && n.Protocol != "ss" && n.Protocol != "anytls" && n.Protocol != "socks5" {
+		return errors.New("v2rayN 订阅仅支持 SS、AnyTLS 和 SOCKS5 节点，不支持 Snell / ShadowTLS")
 	}
 	if format == "surge" {
 		switch {
@@ -2990,6 +3057,12 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 		return shared.DesiredState{}, err
 	}
 	state := shared.DesiredState{FirewallMode: server.FirewallMode, Revision: server.Revision, ProtocolVersion: 1, Nodes: []shared.ManagedNode{}, Rules: []shared.FirewallRule{}, Forwards: []shared.ForwardRule{}}
+	if server.AgentProxySupport || server.AgentProxyNodeID != "" {
+		state.AgentProxy, err = a.agentProxy(server)
+		if err != nil {
+			return state, err
+		}
+	}
 	subscriptions, err := a.Store.Subscriptions()
 	if err != nil {
 		return state, err
@@ -3087,7 +3160,7 @@ func (a *App) subscriptionItem(sub shared.Subscription, n shared.Node, server sh
 	if err != nil {
 		return shared.SubscriptionItem{}, err
 	}
-	item := shared.SubscriptionItem{Node: n, Server: server, Password: password, ShadowTLSPassword: shadowPassword}
+	item := shared.SubscriptionItem{Node: n, Server: server, Password: password, Username: n.Username, ShadowTLSPassword: shadowPassword}
 	if shared.SharedSubscriptionPassword(n) {
 		// Legacy AEAD SS has one node password, not SS 2022's
 		// server-key:user-key pair. Do not invent a per-subscription key.
@@ -3107,6 +3180,8 @@ func (a *App) subscriptionItem(sub shared.Subscription, n shared.Node, server sh
 		if n.ShadowTLSHost == "" || !server.ShadowTLSAuth {
 			item.UserKey = user.Password
 		}
+	case "socks5":
+		item.Username, item.Password = user.Name, user.Password
 	case "anytls":
 		item.Password = user.Password
 	}
@@ -3179,7 +3254,14 @@ func (a *App) nodeFingerprint(server shared.Server, n shared.Node, password, sha
 	if n.Protocol == "snell" && n.ShadowTLSHost != "" && server.ShadowTLSAuth {
 		scheme = "shadowtls"
 	}
-	return a.Store.Fingerprint(n.Protocol, strconv.Itoa(n.Port), n.Method, n.Obfs, n.ShadowTLSHost, n.TLSName, password, shadowPassword, scheme)
+	fields := []string{n.Protocol, strconv.Itoa(n.Port), n.Method, n.Obfs, n.ShadowTLSHost, n.TLSName, password, shadowPassword, scheme}
+	if n.Protocol == "socks5" {
+		fields = append(fields, n.Username)
+	}
+	if n.Protocol == "snell" && shared.SnellVersion(n) == 6 {
+		fields = append(fields, "snell-v6")
+	}
+	return a.Store.Fingerprint(fields...)
 }
 
 func (a *App) deployment(server shared.Server, state shared.DesiredState) map[string]shared.NodeDeployment {
@@ -3411,6 +3493,21 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if !server.AgentProxySupport {
+		if server.AgentProxyNodeID != "" {
+			allowApply = false
+		}
+		nodes, err := a.Store.Nodes(id)
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		for _, n := range nodes {
+			if !n.Deleting && n.Protocol == "socks5" {
+				allowApply = false
+			}
+		}
+	}
 	if allowApply && !server.SnellFixedPort {
 		nodes, err := a.Store.Nodes(id)
 		if err != nil {
@@ -3421,6 +3518,21 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 			if node.Enabled && !node.Deleting && node.Protocol == "snell" && node.ShadowTLSHost != "" && node.SnellPort != 0 {
 				// An older helper silently ignores this field. Keep the apply
 				// queued, while still allowing its agent.upgrade job through.
+				allowApply = false
+				break
+			}
+		}
+	}
+	if allowApply && !server.SnellV6 {
+		nodes, err := a.Store.Nodes(id)
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		for _, node := range nodes {
+			// Older helpers validate disabled nodes too, so even an inactive
+			// v6 node must not be included in a state they cannot understand.
+			if !node.Deleting && node.Protocol == "snell" && shared.SnellVersion(node) == 6 {
 				allowApply = false
 				break
 			}
@@ -3546,6 +3658,8 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		server.ForwardTCPUDP = in.ForwardTCPUDP
 		server.ShadowTLSAuth = in.ShadowTLSAuth
 		server.SnellFixedPort = in.SnellFixedPort
+		server.SnellV6 = in.SnellV6
+		server.AgentProxySupport = in.AgentProxySupport
 		server.ReleaseKeyPinned = in.ReleaseKeyPinned
 		server.AgentSelfUpdate = in.AgentSelfUpdate
 		server.AgentBuild = in.AgentBuild
@@ -3657,6 +3771,15 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 				if err := a.queueApplyLocked(id, "nodes.apply"); err != nil {
 					log.Printf("ufw.init follow-up apply for %s: %v", id, err)
 				}
+			}
+		}
+		if strings.HasSuffix(op.Kind, ".apply") && in.JobStatus == "success" && op.Revision == server.Revision {
+			server.AgentProxyPreviousNodeID = ""
+			server.AgentProxyPreviousInternal = false
+			server.AgentProxySwitchPending = false
+			if err = a.Store.PutServer(server); err != nil {
+				errorJSON(w, 500, err.Error())
+				return
 			}
 		}
 		if strings.HasSuffix(op.Kind, ".apply") && in.JobStatus == "success" && op.Deployed != nil {

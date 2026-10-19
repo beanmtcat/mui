@@ -91,6 +91,8 @@ function tabFromHash(): Tab {
 }
 const emptyServer: Partial<Server> = {
   managementMode: "online",
+  agentProxyNodeId: "",
+  agentProxyInternal: false,
   firewallMode: "ufw",
   name: "",
   roles: ["exit"],
@@ -113,7 +115,7 @@ const emptyNode: Partial<Node> = {
   listen: "0.0.0.0",
   publishAddress: "",
   method: "2022-blake3-aes-128-gcm",
-  snellVersion: 5,
+  snellVersion: 6,
   snellPort: 20001,
   obfs: "none",
   shadowTlsHost: "",
@@ -130,7 +132,7 @@ const emptyTemplate: Partial<NodeTemplate> = {
   port: 50000,
   listen: "0.0.0.0",
   method: "2022-blake3-aes-128-gcm",
-  snellVersion: 5,
+  snellVersion: 6,
   snellPort: 20001,
   obfs: "none",
   shadowTlsHost: "",
@@ -146,7 +148,7 @@ function serverFilterValues(servers: Server[], field: ServerFilterField) {
     .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
 }
 function subscriptionNodeIssue(format: string | undefined, node: Node): string {
-  if (format === "v2rayn" && node.protocol !== "ss" && node.protocol !== "anytls") return "v2rayN 订阅不支持 Snell / ShadowTLS";
+  if (format === "v2rayn" && node.protocol !== "ss" && node.protocol !== "anytls" && node.protocol !== "socks5") return "v2rayN 订阅不支持 Snell / ShadowTLS";
   if (node.protocol === "ss") {
     if (format === "surge" && node.method === "2022-blake3-chacha20-poly1305") return "Surge 不支持 2022-blake3-chacha20-poly1305，请使用 AES 方式";
   }
@@ -865,6 +867,7 @@ function App() {
         serverId: selectedServer,
         name: detail.name,
         protocol: detail.protocol,
+        username: detail.username || "",
         port: detail.port,
         listen: detail.listen,
         method: detail.method,
@@ -906,6 +909,7 @@ function App() {
             id: "serverId" in source ? undefined : source.id,
             name: source.name,
             protocol: source.protocol,
+            username: source.username || "",
             port: source.port,
             listen: source.listen,
             method: source.method,
@@ -1729,7 +1733,7 @@ function App() {
             <div className="panelHead">
               <div>
                 <h2>节点列表</h2>
-                <p>SS、Snell 与 AnyTLS 节点配置及流量</p>
+                <p>SS、Snell、AnyTLS 与 SOCKS5 节点配置及流量</p>
               </div>
               <button className="primary" onClick={() => openNode()}>
                 新建节点
@@ -1755,6 +1759,7 @@ function App() {
                 <option value="ss">SS</option>
                 <option value="snell">Snell</option>
                 <option value="anytls">AnyTLS</option>
+                      <option value="socks5">SOCKS5</option>
               </select>
             </div>
             <div className="tableWrap">
@@ -1867,7 +1872,7 @@ function App() {
                       <td><span className="chip">{t.protocol.toUpperCase()}</span></td>
                       <td className="mono">{t.port}</td>
                       <td className="mono">
-                        {t.protocol === "ss" ? t.method : t.protocol === "snell" ? `ShadowTLS v3 · ${t.shadowTlsHost || "未配置"}` : t.tlsName}
+                        {t.protocol === "ss" ? t.method : t.protocol === "socks5" ? `用户名：${t.username || "未设置"}` : t.protocol === "snell" ? `ShadowTLS v3 · ${t.shadowTlsHost || "未配置"}` : t.tlsName}
                       </td>
                       <td>
                         <div className="actions">
@@ -2986,6 +2991,8 @@ function App() {
                           setServerForm({
                             ...serverForm,
                             managementMode: offline ? "offline" : "online",
+                            agentProxyNodeId: offline ? "" : serverForm.agentProxyNodeId,
+                            agentProxyInternal: offline ? false : serverForm.agentProxyInternal,
                             firewallMode: offline ? "manual" : serverForm.firewallMode,
                             roles: offline ? (roles.length ? roles : ["entry"]) : serverForm.roles,
                           });
@@ -3008,6 +3015,7 @@ function App() {
                                 checked={serverForm.roles?.includes(role) || false}
                                 onChange={(e) => setServerForm({
                                   ...serverForm,
+                                  agentProxyNodeId: role === "entry" && !e.target.checked ? "" : serverForm.agentProxyNodeId,
                                   roles: e.target.checked ? [...(serverForm.roles || []), role] : (serverForm.roles || []).filter((r) => r !== role),
                                 })}
                               />
@@ -3057,6 +3065,21 @@ function App() {
                         }
                       />
                     </Field>
+                    {serverForm.roles?.includes("entry") && serverForm.managementMode !== "offline" && <div className="serverFormWide">
+                      <Field label="Agent 连接面板的 SOCKS5 节点">
+                        <select value={serverForm.agentProxyNodeId || ""} onChange={(e) => setServerForm({ ...serverForm, agentProxyNodeId: e.target.value, agentProxyInternal: false })}>
+                          <option value="">直接连接面板</option>
+                          {nodes.filter((n) => n.id === serverForm.agentProxyNodeId || (n.protocol === "socks5" && n.enabled && n.direct && !n.deleting && n.status === "active" && n.serverId !== serverForm.id && servers.some((s) => s.id === n.serverId && !manualFirewall(s) && s.ufwStatus === "active"))).map((n) => <option value={n.id} key={n.id}>{n.name} · {servers.find((s) => s.id === n.serverId)?.name} :{n.port}</option>)}
+                        </select>
+                      </Field>
+                      {serverForm.agentProxyNodeId && <Field label="入口连接 SOCKS5 的地址">
+                        <select value={serverForm.agentProxyInternal ? "internal" : "public"} onChange={(e) => setServerForm({ ...serverForm, agentProxyInternal: e.target.value === "internal" })}>
+                          <option value="public">SOCKS5 节点发布地址（公网 / 域名）</option>
+                          <option value="internal" disabled={!servers.find((s) => s.id === nodes.find((n) => n.id === serverForm.agentProxyNodeId)?.serverId)?.internalAddress}>SOCKS5 所在服务器的内网地址</option>
+                        </select>
+                      </Field>}
+                      <p className="serverFieldHelp">用于 Agent 接入、上报、任务与升级下载。入口无法直连面板时，可经能访问面板的 SOCKS5 服务器联网。先创建已启用 UFW、允许直连的 SOCKS5 节点；内网互通时选择内网地址。已有入口须先升级 Agent 至 0.6.10。</p>
+                    </div>}
                     <div className="serverFormWide">
                       <Field label="防火墙管理">
                         <select disabled={serverForm.managementMode === "offline"} value={serverForm.firewallMode || "ufw"} onChange={(e) => setServerForm({ ...serverForm, firewallMode: e.target.value as "ufw" | "manual" })}>
@@ -3189,6 +3212,7 @@ function App() {
                         setNodeForm({
                           ...nodeForm,
                           protocol: e.target.value as Node["protocol"],
+                          snellVersion: e.target.value === "snell" ? 6 : 0,
                           password: "",
                           shadowTlsHost: "",
                           shadowTlsPassword: "",
@@ -3196,11 +3220,12 @@ function App() {
                       }}
                     >
                       <option value="ss">Shadowsocks</option>
-                      <option value="snell">Snell v5</option>
+                      <option value="snell">Snell</option>
                       <option value="anytls">AnyTLS</option>
+                      <option value="socks5">SOCKS5</option>
                     </select>
                   </Field>
-                  <Field label="端口 *">
+                  <Field label="端口 *（1–65535）">
                     <div className="inputWithAction">
                       <input
                         required
@@ -3246,7 +3271,7 @@ function App() {
                     >
                       <option value="all">自动放行所有来源</option>
                       <option value="restricted">仅自动放行指定 IP / CIDR</option>
-                      <option value="manual">不生成自动规则，手动管理</option>
+                      <option value="manual" disabled={nodeForm.protocol === "socks5"}>不生成自动规则，手动管理</option>
                     </select>
                   </Field>}
                   {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && !nodeForm.direct && <p className="hint">未开启直连：节点端口只放行以它为终点的链路最后一跳{nodeForm.routeSources ? `（当前 ${nodeForm.routeSources.split(",").join("、")}）` : "；还没有链路时端口不对外开放"}。</p>}
@@ -3261,6 +3286,9 @@ function App() {
                       />
                     </Field>
                   )}
+                  {nodeForm.protocol === "socks5" && <>
+                    <Field label="SOCKS5 用户名 *"><input required autoComplete="off" maxLength={255} value={nodeForm.username || ""} onChange={(e) => setNodeForm({ ...nodeForm, username: e.target.value })} /></Field>
+                  </>}
                   {nodeForm.protocol === "ss" && (
                     <Field label="加密方式">
                       <select
@@ -3285,6 +3313,13 @@ function App() {
                   )}
                   {nodeForm.protocol === "snell" && (
                     <>
+                      <Field label="Snell 版本">
+                        <select value={nodeForm.snellVersion || 5} onChange={(e) => setNodeForm({ ...nodeForm, snellVersion: Number(e.target.value) })}>
+                          <option value={6}>v6</option><option value={5}>v5</option>
+                        </select>
+                        {(nodeForm.snellVersion || 5) === 6 && <small>PSK 需要 12–255 字节；客户端须支持 Snell v6。</small>}
+                        {(nodeForm.snellVersion || 5) === 6 && nodeForm.serverId && !servers.find((s) => s.id === nodeForm.serverId)?.snellV6 && <small className="dangerText">需升级 Agent 至 0.6.9 后应用 v6 配置。</small>}
+                      </Field>
                       <Field label="Snell 内层端口 *">
                         <input required type="number" min={1} max={65535} value={nodeForm.snellPort || ""} onChange={(e) => setNodeForm({ ...nodeForm, snellPort: Number(e.target.value) })} />
                         <small>固定监听 127.0.0.1，不对公网开放；须与其他监听端口不同。</small>
@@ -3374,9 +3409,12 @@ function App() {
                 {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && nodeForm.firewallPolicy === "restricted" && <p className="hint">指定来源只约束节点自动规则；请检查主机上是否还有放行同一端口的其他规则。</p>}
                 {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && nodeForm.firewallPolicy === "manual" && <p className="hint">手动管理模式不会开放节点端口，请先在自定义规则中添加需要的允许来源。</p>}
                 {manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && <p className="hint">该服务器的防火墙由外部管理。允许直连开关仅决定能否加入直连订阅；实际端口放行、来源白名单和仅链路访问限制请自行配置。</p>}
+                {nodeForm.protocol === "socks5" && !!servers.find((s) => s.id === nodeForm.serverId)?.agentVersion && !servers.find((s) => s.id === nodeForm.serverId)?.agentProxySupport && <div className="banner warning" role="status">配置可以保存；请先将服务器 Agent 升级至 0.6.10，之后才会应用 SOCKS5 节点。</div>}
                 {nodeFirewallUnsupported && <div className="banner warning" role="status">可以保存配置，但该服务器的 Agent 尚未上报支持新规则。更新 Agent 前不会应用此配置，现有 UFW 放行规则仍然生效。</div>}
+                {nodeForm.protocol === "socks5" && <p className="hint">SOCKS5 支持 TCP，强制用户名密码认证，服务器必须启用 UFW。供入口 Agent 使用时需打开“允许直连”；如限制来源，请放行入口实际出口 IP。仅在可信网络中使用，SOCKS5 本身不加密。</p>}
+                {nodeForm.protocol === "socks5" && (manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) || servers.find((s) => s.id === nodeForm.serverId)?.ufwStatus !== "active") && <div className="banner warning" role="status">请先将该服务器设置为 UFW 托管，并在服务器列表安全初始化防火墙，再提交 SOCKS5 节点。</div>}
                 {templateLoading && <p className="hint">正在读取模板密码…</p>}
-                <button className="primary submit" disabled={templateLoading}>提交配置</button>
+                <button className="primary submit" disabled={templateLoading || (nodeForm.protocol === "socks5" && (manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) || servers.find((s) => s.id === nodeForm.serverId)?.ufwStatus !== "active"))}>提交配置</button>
               </form>
             )}
             {modal === "template" && (
@@ -3393,14 +3431,15 @@ function App() {
                   <Field label="协议">
                     <select
                       value={templateForm.protocol}
-                      onChange={(e) => setTemplateForm({ ...templateForm, protocol: e.target.value as Node["protocol"], password: "", shadowTlsHost: "", shadowTlsPassword: "" })}
+                      onChange={(e) => setTemplateForm({ ...templateForm, protocol: e.target.value as Node["protocol"], snellVersion: e.target.value === "snell" ? 6 : 0, password: "", shadowTlsHost: "", shadowTlsPassword: "" })}
                     >
                       <option value="ss">Shadowsocks</option>
-                      <option value="snell">Snell v5</option>
+                      <option value="snell">Snell</option>
                       <option value="anytls">AnyTLS</option>
+                      <option value="socks5">SOCKS5</option>
                     </select>
                   </Field>
-                  <Field label="端口 *">
+                  <Field label="端口 *（1–65535）">
                     <div className="inputWithAction">
                       <input
                         required
@@ -3419,6 +3458,7 @@ function App() {
                       onChange={(e) => setTemplateForm({ ...templateForm, listen: e.target.value })}
                     />
                   </Field>
+                  {templateForm.protocol === "socks5" && <Field label="SOCKS5 用户名 *"><input required autoComplete="off" maxLength={255} value={templateForm.username || ""} onChange={(e) => setTemplateForm({ ...templateForm, username: e.target.value })} /></Field>}
                   {templateForm.protocol === "ss" && (
                     <Field label="加密方式">
                       <select
@@ -3438,6 +3478,12 @@ function App() {
                   )}
                   {templateForm.protocol === "snell" && (
                     <>
+                      <Field label="Snell 版本">
+                        <select value={templateForm.snellVersion || 5} onChange={(e) => setTemplateForm({ ...templateForm, snellVersion: Number(e.target.value) })}>
+                          <option value={6}>v6</option><option value={5}>v5</option>
+                        </select>
+                        {(templateForm.snellVersion || 5) === 6 && <small>PSK 需要 12–255 字节；客户端须支持 Snell v6。</small>}
+                      </Field>
                       <Field label="Snell 内层端口 *">
                         <input required type="number" min={1} max={65535} value={templateForm.snellPort || ""} onChange={(e) => setTemplateForm({ ...templateForm, snellPort: Number(e.target.value) })} />
                         <small>仅监听 127.0.0.1；同一服务器上的节点不能共用。</small>
@@ -3527,6 +3573,44 @@ function App() {
                 node?.serverId || "",
                 ...hops.flatMap((h, j) => (j === i ? [] : h.serverIds)),
               ]);
+              const connectionSettings = (
+                senderIds: string[], receiverIds: string[], internal: boolean, sourceMode: RouteSourceMode | undefined,
+                setInternal: (value: boolean) => void, setSource: (value: RouteSourceMode) => void,
+              ) => {
+                const senders = servers.filter((s) => senderIds.includes(s.id));
+                const receivers = servers.filter((s) => receiverIds.includes(s.id));
+                const sourceInternal = sourceMode === "internal" || (!sourceMode || sourceMode === "auto") && internal;
+                const targetAddress = (s: Server) => internal ? s.internalAddress : s.ipv4 || s.ipv6 || s.domain;
+                const targets = receivers.map(targetAddress);
+                const useV4 = targets.some((v) => !v || !v.includes(":"));
+                const useV6 = targets.some((v) => !v || v.includes(":") || !/^\d+\.\d+\.\d+\.\d+$/.test(v));
+                const sourceAddresses = (s: Server) => sourceInternal ? s.internalAddress || "未填写内网 IP" :
+                  [...new Set([...(useV4 ? [s.ipv4, s.detectedIpv4] : []), ...(useV6 ? [s.ipv6, s.detectedIpv6] : [])].filter(Boolean))].join("、") || "未填写可用的公网 IP";
+                const managed = !receivers.length || receivers.some((s) => !manualFirewall(s));
+                return (
+                  <fieldset className="routeConnection">
+                    <legend>{senders.map((s) => s.name).join(" / ") || "请选择发送方"} → {receivers.map((s) => s.name).join(" / ") || "请选择接收方"}</legend>
+                    <div className="formGrid">
+                      <Field label="连接地址：接收方的哪个地址？">
+                        <select value={internal ? "internal" : "public"} onChange={(e) => setInternal(e.target.value === "internal")}>
+                          <option value="public">接收方公网地址</option>
+                          <option value="internal">接收方内网地址</option>
+                        </select>
+                        {receivers.map((s) => <small className="connectionAddress" key={s.id}>{s.name}：{targetAddress(s) || "未填写该地址"}</small>)}
+                      </Field>
+                      <Field label="防火墙来源：放行发送方的哪个 IP？">
+                        <select disabled={!managed} value={sourceMode || "auto"} onChange={(e) => setSource(e.target.value as RouteSourceMode)}>
+                          <option value="auto">自动（{internal ? "发送方内网 IP" : "发送方公网 IP"}）</option>
+                          <option value="public">发送方公网 IP</option>
+                          <option value="internal">发送方内网 IP</option>
+                        </select>
+                        {managed ? senders.map((s) => <small className="connectionAddress" key={s.id}>{s.name}：{sourceAddresses(s)}</small>) : <small className="connectionAddress">接收方防火墙为手动管理，请自行放行。</small>}
+                      </Field>
+                    </div>
+                    {managed && <p className="hint">按接收方实际看到的来源 IP 选择；此设置只生成放行规则，不改变发送方的出口或路由。</p>}
+                  </fieldset>
+                );
+              };
               return (
                 <form onSubmit={submitRoute}>
                   <div className="formGrid">
@@ -3547,24 +3631,17 @@ function App() {
                     <Field label="备注"><input maxLength={200} value={routeForm.notes || ""} onChange={(e) => setRouteForm({ ...routeForm, notes: e.target.value })} /></Field>
                     <Field label="状态"><label className="check"><input type="checkbox" checked={!!routeForm.enabled} onChange={(e) => setRouteForm({ ...routeForm, enabled: e.target.checked })} /> 启用链路</label></Field>
                   </div>
-                  <Field label="中间跳（按顺序，可为空）">
+                  <div className="field">
+                    <span>中间跳（按顺序，可为空）</span>
                     <div className="hopList">
                       {hops.map((hop, i) => (
                         <div className="hop" key={i}>
                           <div className="hopHead">
-                            <strong>第 {i + 1} 跳</strong>
+                            <strong>第 {i + 1} 个中转</strong>
                             <select aria-label={`第 ${i + 1} 跳的模式`} value={hop.balance} onChange={(e) => setHop(i, { balance: e.target.value as RouteHop["balance"] })}>
                               <option value="failover">主备</option>
                               <option value="round-robin">轮询</option>
                             </select>
-                            <label className="check"><input type="checkbox" checked={hop.internal} onChange={(e) => setHop(i, { internal: e.target.checked })} /> 上一跳走内网地址连过来</label>
-                            <label className="field">上一跳 UFW 来源
-                              <select aria-label={`第 ${i + 1} 跳 UFW 放行来源`} value={hop.sourceMode || "auto"} onChange={(e) => setHop(i, { sourceMode: e.target.value as RouteSourceMode })}>
-                                <option value="auto">按连接地址类型选择</option>
-                                <option value="public">上一跳公网 IP</option>
-                                <option value="internal">上一跳内网 IP</option>
-                              </select>
-                            </label>
                             <button type="button" onClick={() => setRouteForm({ ...routeForm, hops: hops.filter((_, j) => j !== i) })}>移除</button>
                           </div>
                           <div className="nodePicker">
@@ -3579,21 +3656,19 @@ function App() {
                               </label>
                             ))}
                           </div>
+                          {connectionSettings(i === 0 ? [routeForm.entryServerId || ""] : hops[i - 1].serverIds, hop.serverIds,
+                            !!hop.internal, hop.sourceMode, (internal) => setHop(i, { internal }), (sourceMode) => setHop(i, { sourceMode }))}
                         </div>
                       ))}
                       <button type="button" onClick={() => setRouteForm({ ...routeForm, hops: [...hops, { serverIds: [], balance: "failover", internal: false }] })}>添加一跳</button>
                     </div>
-                  </Field>
-                  <label className="check"><input type="checkbox" checked={!!routeForm.nodeInternal} onChange={(e) => setRouteForm({ ...routeForm, nodeInternal: e.target.checked })} /> 最后一跳走内网地址连接落地</label>
-                  <Field label="落地 UFW 放行来源">
-                    <select value={routeForm.nodeSourceMode || "auto"} onChange={(e) => setRouteForm({ ...routeForm, nodeSourceMode: e.target.value as RouteSourceMode })}>
-                      <option value="auto">按连接地址类型选择</option>
-                      <option value="public">最后一跳公网 IP</option>
-                      <option value="internal">最后一跳内网 IP</option>
-                    </select>
-                  </Field>
+                  </div>
+                  <h3 className="routeExitTitle">连接落地</h3>
+                  {connectionSettings(hops.length ? hops[hops.length - 1].serverIds : [routeForm.entryServerId || ""], node ? [node.serverId] : [],
+                    !!routeForm.nodeInternal, routeForm.nodeSourceMode,
+                    (nodeInternal) => setRouteForm({ ...routeForm, nodeInternal }), (nodeSourceMode) => setRouteForm({ ...routeForm, nodeSourceMode }))}
                   <p className="hint">一跳选多台服务器即为负载均衡组：主备优先用第一台可用的，轮询把新连接轮流分配；故障服务器自动停用，恢复后自动启用。</p>
-                  <p className="hint">UFW 来源可单独选择公网或内网 IP，与连接下一跳的目标地址分开设置。此选项只控制放行规则，不绑定转发连接的源地址；应选择下一跳实际看到的来源 IP。UFW 托管的中间跳只放行上一跳，落地未开启直连时只放行最后一跳；手动管理的服务器请自行配置。</p>
+                  <p className="hint">例如入口通过专线访问中转的公网地址：连接地址选“接收方公网地址”，防火墙来源选“发送方内网 IP”。普通公网互连保留“接收方公网地址 + 自动”即可。</p>
                   <button className="primary submit">保存链路</button>
                 </form>
               );

@@ -13,6 +13,7 @@ type SubscriptionItem struct {
 	Node              Node
 	Server            Server
 	Password          string
+	Username          string
 	UserKey           string
 	ShadowTLSPassword string
 }
@@ -37,6 +38,9 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 		outbounds := []map[string]any{}
 		for _, item := range items {
 			n := item.Node
+			if item.Username == "" {
+				item.Username = n.Username
+			}
 			if !n.Enabled || n.Status != "active" {
 				excluded = append(excluded, n.Name+": 节点未生效或已停用")
 				continue
@@ -55,7 +59,13 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 				out["password"] = item.Password
 			case "snell":
 				out["type"] = "snell"
-				out["version"] = 4
+				version := SnellVersion(n)
+				// The v5 TCP server uses the v4 client protocol. v6 has its own
+				// implementation and must never be emitted as a v4 outbound.
+				if version == 5 {
+					version = 4
+				}
+				out["version"] = version
 				out["psk"] = item.Password
 				if item.UserKey != "" {
 					out["userkey"] = item.UserKey
@@ -77,6 +87,9 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 						"tls": map[string]any{"enabled": true, "server_name": n.ShadowTLSHost},
 					}
 				}
+			case "socks5":
+				out["type"], out["version"], out["network"] = "socks", "5", "tcp"
+				out["username"], out["password"] = item.Username, item.Password
 			case "anytls":
 				out["type"] = "anytls"
 				out["password"] = item.Password
@@ -96,6 +109,9 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 		lines := []string{"[Proxy]"}
 		for _, item := range items {
 			n := item.Node
+			if item.Username == "" {
+				item.Username = n.Username
+			}
 			if !n.Enabled || n.Status != "active" {
 				excluded = append(excluded, n.Name+": 节点未生效或已停用")
 				continue
@@ -122,13 +138,15 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 					continue
 				}
 				lines = append(lines, fmt.Sprintf("%s = ss, %s, %d, encrypt-method=%s, password=%s", n.Name, address, n.Port, n.Method, item.Password))
+			case "socks5":
+				lines = append(lines, fmt.Sprintf("%s = socks5, %s, %d, username=%s, password=%s", n.Name, address, n.Port, item.Username, item.Password))
 			case "snell":
 				// A per-user Snell key is a sing-box extension Surge cannot send.
 				if n.ShadowTLSHost == "" || item.ShadowTLSPassword == "" || item.UserKey != "" {
 					excluded = append(excluded, n.Name+": Surge 订阅中的 Snell 节点需启用 ShadowTLS，且服务器 Agent 需为新版")
 					continue
 				}
-				line := fmt.Sprintf("%s = snell, %s, %d, psk=%s, version=4", n.Name, address, n.Port, item.Password)
+				line := fmt.Sprintf("%s = snell, %s, %d, psk=%s, version=%d", n.Name, address, n.Port, item.Password, SnellVersion(n))
 				if n.Obfs == "http" {
 					line += ", obfs=http"
 				}
@@ -142,12 +160,15 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 		lines := []string{}
 		for _, item := range items {
 			n := item.Node
+			if item.Username == "" {
+				item.Username = n.Username
+			}
 			if !n.Enabled || n.Status != "active" {
 				excluded = append(excluded, n.Name+": 节点未生效或已停用")
 				continue
 			}
-			if n.Protocol != "ss" && n.Protocol != "anytls" {
-				excluded = append(excluded, n.Name+": v2rayN 订阅仅支持 SS 和 AnyTLS 节点，不支持 Snell / ShadowTLS")
+			if n.Protocol != "ss" && n.Protocol != "anytls" && n.Protocol != "socks5" {
+				excluded = append(excluded, n.Name+": v2rayN 订阅仅支持 SS、AnyTLS 和 SOCKS5 节点，不支持 Snell / ShadowTLS")
 				continue
 			}
 			line, err := ShareURI(item)
@@ -166,6 +187,9 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 
 func ShareURI(item SubscriptionItem) (string, error) {
 	n := item.Node
+	if item.Username == "" {
+		item.Username = n.Username
+	}
 	a := PublishedAddress(item)
 	if a == "" {
 		return "", fmt.Errorf("缺少发布地址")
@@ -174,6 +198,8 @@ func ShareURI(item SubscriptionItem) (string, error) {
 	// URI fragments and userinfo use percent escapes, not form-style '+' spaces.
 	name := strings.ReplaceAll(url.QueryEscape(n.Name), "+", "%20")
 	switch n.Protocol {
+	case "socks5":
+		return "socks://" + base64.RawURLEncoding.EncodeToString([]byte(item.Username+":"+item.Password)) + "@" + address + "#" + name, nil
 	case "ss":
 		return "ss://" + base64.RawURLEncoding.EncodeToString([]byte(n.Method+":"+item.Password)) + "@" + address + "#" + name, nil
 	case "anytls":

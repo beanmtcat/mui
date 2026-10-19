@@ -75,10 +75,16 @@ func TestOfflineInstallCommand(t *testing.T) {
 		name       string
 		exit, sudo bool
 		standalone bool
+		proxy      bool
+		online     bool
 		textSuffix bool
 		breakFile  string
 	}{
 		{name: "relay root without sudo"},
+		{name: "proxy manual root", proxy: true},
+		{name: "proxy manual sudo", proxy: true, sudo: true},
+		{name: "proxy online root", proxy: true, online: true},
+		{name: "proxy online sudo", proxy: true, online: true, sudo: true},
 		{name: "exit with sudo", exit: true, sudo: true},
 		{name: "standalone root", standalone: true},
 		{name: "standalone sudo", standalone: true, sudo: true},
@@ -98,7 +104,7 @@ func TestOfflineInstallCommand(t *testing.T) {
 			if err := os.Mkdir(dir, 0700); err != nil {
 				t.Fatal(err)
 			}
-			for _, name := range []string{"grep", "chmod", "mv"} {
+			for _, name := range []string{"grep", "chmod", "mv", "mktemp", "rm", "sh", "wc", "cp"} {
 				path, err := exec.LookPath(name)
 				if err != nil {
 					t.Fatal(err)
@@ -141,8 +147,41 @@ func TestOfflineInstallCommand(t *testing.T) {
 				t.Fatal(err)
 			}
 			app := &App{PublicURL: "https://mui.example.test", releaseKeyB64: "release-key"}
-			guide := app.offlineInstall("server-id", "test-enroll-token", shared.Server{Roles: roles})
+			srv := shared.Server{Roles: roles}
+			if tc.proxy {
+				fixture := newTestMui(t)
+				hostID, _ := fixture.enroll("proxy-host")
+				host, _ := fixture.store.Server(hostID)
+				host.UFWStatus = "active"
+				fixture.store.PutServer(host)
+				n := shared.Node{ID: ID(), ServerID: hostID, Name: "proxy", Protocol: "socks5", Username: "entry", Port: 1080, Direct: true, Enabled: true, Status: "active"}
+				if err := fixture.store.PutNode(n, "proxy-password"); err != nil {
+					t.Fatal(err)
+				}
+				app.Store = fixture.store
+				srv.AgentProxyNodeID = n.ID
+			}
+			guide := app.offlineInstall("server-id", "test-enroll-token", srv)
+			if tc.online {
+				guide.Command = app.installCommand("server-id", "test-enroll-token", srv)
+			}
 			stub := "#!/bin/sh\nset -eu\ntest \"$#\" -eq 7\ntest \"$1\" = install\ntest \"$2\" = https://mui.example.test\ntest \"$3\" = server-id\ntest \"$4\" = -\ntest \"$5\" = " + shellQuote(core) + "\ntest \"$6\" = release-key\ntest \"$7\" = --token-stdin\nIFS= read -r token\ntest \"$token\" = test-enroll-token\nprintf ran > \"$INSTALL_LOG\"\n"
+			if tc.proxy {
+				stub = strings.Replace(stub, `test "$#" -eq 7`, `test "$#" -eq 9`, 1)
+				stub = strings.Replace(stub, "test \"$7\" = --token-stdin\n", `shift 6
+proxy_file=
+while [ "$#" -gt 0 ]; do
+ case "$1" in
+  --token-stdin) ;;
+  --proxy-file) shift; proxy_file=$1 ;;
+  *) exit 1 ;;
+ esac
+ shift
+done
+test -f "$proxy_file"
+grep -q '"password":"proxy-password"' "$proxy_file"
+`, 1)
+			}
 			if tc.standalone {
 				guide = app.standaloneInstallAt(app.PublicURL)
 				if strings.Contains(guide.Command, "test-enroll-token") || strings.Contains(guide.Command, "--token") || strings.Contains(guide.Command, "curl ") {
@@ -187,10 +226,33 @@ func TestOfflineInstallCommand(t *testing.T) {
 			case "missing-signature":
 				_ = os.Remove(filepath.Join(dir, "SHA256SUMS.sig"))
 			}
+			if tc.online {
+				os.WriteFile(filepath.Join(dir, "install.sh"), installAgentScript, 0600)
+				os.WriteFile(filepath.Join(tools, "uname"), []byte("#!/bin/sh\ncase \"$1\" in -s) echo Linux;; -m) echo x86_64;; esac\n"), 0755)
+				curl := `#!/bin/sh
+set -eu
+config=
+output=
+url=
+while [ "$#" -gt 0 ]; do
+ case "$1" in
+  --config) shift; config=$1 ;;
+  --output|-o) shift; output=$1 ;;
+  https://*) url=$1 ;;
+ esac
+ shift
+done
+test -f "$config"
+grep -q 'proxy-user = "entry:proxy-password"' "$config"
+name=${url##*/}
+cp "$INSTALL_FILES/$name" "$output"
+`
+				os.WriteFile(filepath.Join(tools, "curl"), []byte(curl), 0755)
+			}
 			log := filepath.Join(home, "installed")
 			cmd := exec.Command("/bin/sh")
 			cmd.Stdin = strings.NewReader(guide.Command)
-			cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+tools, "INSTALL_LOG="+log)
+			cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+tools, "INSTALL_LOG="+log, "INSTALL_FILES="+dir)
 			output, err := cmd.CombinedOutput()
 			_, logErr := os.Stat(log)
 			if tc.breakFile != "" {

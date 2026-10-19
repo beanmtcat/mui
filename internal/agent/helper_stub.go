@@ -14,3 +14,4 @@ func QueryHostStatus() HostStatus                  { return HostStatus{UFW: "uns
 func ReadCurrent() shared.DesiredState             { return shared.DesiredState{} }
 func CoreVersion() string                          { return "unavailable" }
 func CheckCoreBuild() error                        { return errors.New("Linux only") }
+func coreMainPID() string                          { return "" }

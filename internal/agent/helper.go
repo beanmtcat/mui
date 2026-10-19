@@ -292,7 +292,7 @@ func QueryHostStatus() HostStatus {
 }
 
 func hostStatus() HostStatus {
-	status := HostStatus{UFW: UFWStatus(), Conflict: firewallConflict(), ManualFirewallSupport: true, Supported: true, AgentSelfUpdate: true, ForwardSupport: true, ForwardTCPUDP: true, ShadowTLSAuth: true, SnellFixedPort: true, MultiUserStats: true, NodeFirewallPolicies: true, CoreSelfUpdate: true, ReleaseKeyPinned: fileExists(ReleaseKeyPath)}
+	status := HostStatus{UFW: UFWStatus(), Conflict: firewallConflict(), ManualFirewallSupport: true, Supported: true, AgentSelfUpdate: true, ForwardSupport: true, ForwardTCPUDP: true, ShadowTLSAuth: true, SnellFixedPort: true, SnellV6: true, AgentProxySupport: true, MultiUserStats: true, NodeFirewallPolicies: true, CoreSelfUpdate: true, ReleaseKeyPinned: fileExists(ReleaseKeyPath)}
 	if file, err := os.Open(ForwardStats); err == nil {
 		var traffic []shared.ForwardTrafficPoint
 		_ = json.NewDecoder(io.LimitReader(file, 1<<20)).Decode(&traffic)
@@ -360,7 +360,7 @@ func warnDirectFirewallRules() {
 // UFW rules next to it would leave the host in a state neither tool describes.
 func firewallConflict() string {
 	for _, unit := range []string{"firewalld", "nftables", "netfilter-persistent", "shorewall"} {
-		if _, err := command("systemctl", "is-active", "--quiet", unit+".service"); err == nil {
+		if _, err := serviceCommand("is-active", "--quiet", unit+".service"); err == nil {
 			return unit
 		}
 	}
@@ -435,7 +435,11 @@ func initUFW() error {
 		}
 	}
 	confirmUFW()
-	if _, err := command("systemd-run", "--unit=mui-ufw-rollback", "--on-active=2min", "/usr/sbin/ufw", "--force", "disable"); err != nil {
+	ufwPath, err := exec.LookPath("ufw")
+	if err != nil {
+		return err
+	}
+	if err := scheduleServiceJob("mui-ufw-rollback", 2*time.Minute, ufwPath, "--force", "disable"); err != nil {
 		return fmt.Errorf("cannot arm UFW rollback: %w", err)
 	}
 	if _, err := command("ufw", "--force", "enable"); err != nil {
@@ -447,14 +451,20 @@ func initUFW() error {
 		confirmUFW()
 		return errors.New("UFW did not become active")
 	}
+	if openRC() {
+		if _, err := serviceCommand("enable", "ufw"); err != nil {
+			_, _ = command("ufw", "--force", "disable")
+			confirmUFW()
+			return fmt.Errorf("enable UFW at boot: %w", err)
+		}
+	}
 	return nil
 }
 
 // confirmUFW cancels the pending rollback. It has nothing to report: if the timer
 // already fired, the unit is gone and the next status report shows UFW as inactive.
 func confirmUFW() {
-	_, _ = command("systemctl", "stop", "mui-ufw-rollback.timer")
-	_, _ = command("systemctl", "reset-failed", "mui-ufw-rollback.service")
+	cancelServiceJob("mui-ufw-rollback")
 }
 
 func sshPorts() (map[int]bool, error) {
@@ -462,7 +472,7 @@ func sshPorts() (map[int]bool, error) {
 }
 
 func coreActive() bool {
-	_, err := command("systemctl", "is-active", "--quiet", "mui-sing-box.service")
+	_, err := serviceCommand("is-active", "--quiet", "mui-sing-box.service")
 	return err == nil
 }
 
@@ -481,12 +491,12 @@ func needsCore(state shared.DesiredState) bool {
 }
 
 func forwardActive() bool {
-	_, err := command("systemctl", "is-active", "--quiet", "mui-forward.service")
+	_, err := serviceCommand("is-active", "--quiet", "mui-forward.service")
 	return err == nil
 }
 
 func forwardEnabled() bool {
-	_, err := command("systemctl", "is-enabled", "--quiet", "mui-forward.service")
+	_, err := serviceCommand("is-enabled", "--quiet", "mui-forward.service")
 	return err == nil
 }
 
@@ -512,6 +522,9 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 	if err := validateDesired(state); err != nil {
 		return err
 	}
+	if err := prepareAgentProxy(state, raw); err != nil {
+		return err
+	}
 	hasCore := coreInstalled()
 	if needsCore(state) && !hasCore {
 		return errors.New("该服务器未安装 sing-box；请先在服务器列表点击安装 sing-box")
@@ -528,7 +541,7 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 	}
 	if current.Revision == state.Revision && state.Revision > 0 {
 		forwardReady := (needsForward && wasForwardActive && wasForwardEnabled) || (!needsForward && !wasForwardActive && !wasForwardEnabled && forwardConfigEmpty)
-		if (shared.ManualFirewall(state.FirewallMode) || UFWStatus() == "active") && (!hasCore || coreActive()) && forwardReady && !driftDetected(state, hasCore) {
+		if (shared.ManualFirewall(state.FirewallMode) || UFWStatus() == "active") && (!hasCore || coreActive()) && forwardReady && !driftDetected(state, hasCore) && proxyMatches(state.AgentProxy) {
 			return nil
 		}
 	}
@@ -662,26 +675,26 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 		}
 		_ = os.Remove(ForwardReady)
 		if wasForwardEnabled {
-			if _, err := command("systemctl", "enable", "mui-forward.service"); err != nil {
+			if _, err := serviceCommand("enable", "mui-forward.service"); err != nil {
 				return err
 			}
-		} else if _, err := command("systemctl", "disable", "mui-forward.service"); err != nil {
+		} else if _, err := serviceCommand("disable", "mui-forward.service"); err != nil {
 			return err
 		}
 		if !wasForwardActive {
-			_, err := command("systemctl", "stop", "mui-forward.service")
+			_, err := serviceCommand("stop", "mui-forward.service")
 			return err
 		}
 		// A failed reload can leave some new rules running. Reload the old file
 		// in place first so rules that never changed keep their connections.
 		if forwardActive() && !forwardUnitChanged {
-			if _, err := command("systemctl", "reload", "mui-forward.service"); err == nil {
+			if _, err := serviceCommand("reload", "mui-forward.service"); err == nil {
 				if err = waitForwardReady(rollbackRaw); err == nil {
 					return nil
 				}
 			}
 		}
-		if _, err := command("systemctl", "restart", "mui-forward.service"); err != nil {
+		if _, err := serviceCommand("restart", "mui-forward.service"); err != nil {
 			return err
 		}
 		return waitForwardReady(rollbackRaw)
@@ -705,7 +718,7 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 		if err = os.Rename(tmp, CoreConfig); err != nil {
 			return fail(err)
 		}
-		if _, err = command("systemctl", "restart", "mui-sing-box.service"); err != nil {
+		if _, err = serviceCommand("restart", "mui-sing-box.service"); err != nil {
 			return fail(err)
 		}
 		if !coreActive() {
@@ -714,7 +727,7 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 		if err = verifyNodeListeners(state); err != nil {
 			return fail(err)
 		}
-		if _, err = command("systemctl", "enable", "mui-sing-box.service"); err != nil {
+		if _, err = serviceCommand("enable", "mui-sing-box.service"); err != nil {
 			return fail(err)
 		}
 	}
@@ -725,7 +738,7 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 				return fail(err)
 			}
 			_ = os.Remove(ForwardReady)
-			if _, err = command("systemctl", "enable", "mui-forward.service"); err != nil {
+			if _, err = serviceCommand("enable", "mui-forward.service"); err != nil {
 				return fail(err)
 			}
 			// A running forwarder applies the new rules in place, so connections of
@@ -735,7 +748,7 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 			if wasForwardActive && !forwardUnitChanged {
 				action = "reload"
 			}
-			if _, err = command("systemctl", action, "mui-forward.service"); err != nil {
+			if _, err = serviceCommand(action, "mui-forward.service"); err != nil {
 				return fail(err)
 			}
 			err = waitForwardReady(forwardRaw)
@@ -748,7 +761,7 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 					return fail(err)
 				}
 			}
-			if _, err = command("systemctl", "disable", "--now", "mui-forward.service"); err != nil {
+			if _, err = serviceCommand("disable", "--now", "mui-forward.service"); err != nil {
 				return fail(err)
 			}
 		}
@@ -757,7 +770,25 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 	if err != nil {
 		return fail(err)
 	}
+	// Commit the proxy before acknowledging this revision. If committing the
+	// revision fails, restore the previous connection settings atomically.
+	var oldAgentConfig []byte
+	proxyChanged := state.AgentProxy != nil && !proxyMatches(state.AgentProxy)
+	if proxyChanged {
+		oldAgentConfig, err = os.ReadFile(ConfigDir + "/config.json")
+		if err != nil {
+			return fail(err)
+		}
+		if err = saveAgentProxy(state.AgentProxy); err != nil {
+			return fail(err)
+		}
+	}
 	if err = writeOwned(CurrentState, []byte(currentJSON), 0640, agentUser); err != nil {
+		if proxyChanged {
+			if restoreErr := writeOwned(ConfigDir+"/config.json", oldAgentConfig, 0640, agentUser); restoreErr != nil {
+				err = fmt.Errorf("%w; restore Agent proxy: %v", err, restoreErr)
+			}
+		}
 		return fail(err)
 	}
 	_ = os.Remove(legacyCurrentState)
@@ -814,6 +845,7 @@ func panelPublicKey() (ed25519.PublicKey, error) {
 // can still be attributed to subscriptions.
 func sanitizeStateForStorage(state shared.DesiredState) shared.DesiredState {
 	out := state
+	out.AgentProxy = nil
 	out.Nodes = make([]shared.ManagedNode, len(state.Nodes))
 	for i, item := range state.Nodes {
 		item.Password = ""
@@ -1039,10 +1071,8 @@ func runtimeForwards(state shared.DesiredState) []shared.ForwardRule {
 }
 
 func ensureCoreUnit() error {
-	if _, err := exec.Command("id", "-u", coreUser).Output(); err != nil {
-		if _, err = command("useradd", "--system", "--home", CoreDir, "--shell", "/usr/sbin/nologin", coreUser); err != nil {
-			return err
-		}
+	if err := ensureServiceUser(coreUser, CoreDir); err != nil {
+		return err
 	}
 	for _, dir := range []string{CoreDir, CertDir} {
 		if err := os.MkdirAll(dir, 0750); err != nil {
@@ -1052,30 +1082,28 @@ func ensureCoreUnit() error {
 			return err
 		}
 	}
-	path := "/etc/systemd/system/mui-sing-box.service"
+	path, unit, mode := serviceFile("mui-sing-box.service", coreUnit)
 	content, err := os.ReadFile(path)
-	if err == nil && string(content) == coreUnit {
+	if err == nil && string(content) == unit {
 		return nil
 	}
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	if err := os.WriteFile(path, []byte(coreUnit), 0644); err != nil {
+	if err := writeFileAtomic(path, []byte(unit), mode); err != nil {
 		return err
 	}
-	if _, err := command("systemctl", "daemon-reload"); err != nil {
+	if _, err := serviceCommand("daemon-reload"); err != nil {
 		return err
 	}
-	_, err = command("systemctl", "enable", "mui-sing-box.service")
+	_, err = serviceCommand("enable", "mui-sing-box.service")
 	return err
 }
 
 // ensureForwardUnit reports whether it had to (re)write the unit file.
 func ensureForwardUnit() (bool, error) {
-	if _, err := exec.Command("id", "-u", forwardUser).Output(); err != nil {
-		if _, err = command("useradd", "--system", "--home", ForwardDir, "--shell", "/usr/sbin/nologin", forwardUser); err != nil {
-			return false, err
-		}
+	if err := ensureServiceUser(forwardUser, ForwardDir); err != nil {
+		return false, err
 	}
 	if err := makeDirectory(ForwardDir, 0750); err != nil {
 		return false, err
@@ -1090,18 +1118,18 @@ func ensureForwardUnit() (bool, error) {
 	} else if err != nil {
 		return false, err
 	}
-	path := "/etc/systemd/system/mui-forward.service"
+	path, unit, mode := serviceFile("mui-forward.service", forwardUnit)
 	content, err := os.ReadFile(path)
-	if err == nil && string(content) == forwardUnit {
+	if err == nil && string(content) == unit {
 		return false, nil
 	}
 	if err != nil && !os.IsNotExist(err) {
 		return false, err
 	}
-	if err := os.WriteFile(path, []byte(forwardUnit), 0644); err != nil {
+	if err := writeFileAtomic(path, []byte(unit), mode); err != nil {
 		return false, err
 	}
-	if _, err := command("systemctl", "daemon-reload"); err != nil {
+	if _, err := serviceCommand("daemon-reload"); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -1259,10 +1287,10 @@ func mustJSON(v any) (string, error) {
 func rollbackCore(previous []byte) {
 	if len(previous) > 0 {
 		_ = writeOwned(CoreConfig, previous, 0640, coreUser)
-		_, _ = command("systemctl", "restart", "mui-sing-box.service")
+		_, _ = serviceCommand("restart", "mui-sing-box.service")
 	} else {
-		_, _ = command("systemctl", "stop", "mui-sing-box.service")
-		_, _ = command("systemctl", "disable", "mui-sing-box.service")
+		_, _ = serviceCommand("stop", "mui-sing-box.service")
+		_, _ = serviceCommand("disable", "mui-sing-box.service")
 		_ = os.Remove(CoreConfig)
 	}
 }

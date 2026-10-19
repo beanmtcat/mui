@@ -28,7 +28,7 @@ func TestPanelServesAgentInstallerAndArtifacts(t *testing.T) {
 		}
 	}
 	for path, want := range map[string]string{
-		"/download/install.sh":           "sha256sum --check",
+		"/download/install.sh":           "sha256sum -c checked.txt >/dev/null",
 		"/download/amd64/mui-agent":      "agent-binary",
 		"/download/amd64/sing-box":       "core-binary",
 		"/download/amd64/SHA256SUMS":     "test-checksums",

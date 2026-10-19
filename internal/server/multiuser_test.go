@@ -149,7 +149,7 @@ func TestSubscriptionUsersAndTraffic(t *testing.T) {
 func TestSurgeSubscriptionProtocolSupport(t *testing.T) {
 	p := newTestMui(t)
 	serverID, agent := p.enroll("snell")
-	code, out, _ := p.do("POST", "/agent/report", map[string]any{"agentVersion": "test", "multiUserStats": true, "nodeFirewallPolicies": true, "snellFixedPort": true, "ufwStatus": "active"}, agent)
+	code, out, _ := p.do("POST", "/agent/report", map[string]any{"agentVersion": "test", "multiUserStats": true, "nodeFirewallPolicies": true, "snellFixedPort": true, "snellV6": true, "ufwStatus": "active"}, agent)
 	if code != 200 {
 		t.Fatalf("capability: %d %v", code, out)
 	}

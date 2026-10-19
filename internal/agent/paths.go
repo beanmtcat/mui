@@ -56,6 +56,8 @@ type HostStatus struct {
 	ForwardSupport        bool `json:"forwardSupport"`
 	ShadowTLSAuth         bool `json:"shadowTlsAuth"`
 	SnellFixedPort        bool `json:"snellFixedPort"`
+	AgentProxySupport     bool `json:"agentProxySupport"`
+	SnellV6               bool `json:"snellV6"`
 	MultiUserStats        bool `json:"multiUserStats"`
 	NodeFirewallPolicies  bool `json:"nodeFirewallPolicies"`
 	CoreSelfUpdate        bool `json:"coreSelfUpdate"`

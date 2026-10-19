@@ -23,6 +23,9 @@ export type Server = {
   roles: Role[];
   internalAddress: string;
   firewallMode?: "ufw" | "manual";
+  agentProxyNodeId?: string;
+  agentProxyInternal?: boolean;
+  agentProxySupport?: boolean;
   manualFirewallSupport?: boolean;
   country: string;
   region: string;
@@ -45,6 +48,7 @@ export type Server = {
   forwardTcpUdp?: boolean;
   shadowTlsAuth?: boolean;
   snellFixedPort?: boolean;
+  snellV6?: boolean;
   releaseKeyPinned?: boolean;
   appliedRevision: number;
   coreVersion: string;
@@ -67,7 +71,8 @@ export type Node = {
   id: string;
   serverId: string;
   name: string;
-  protocol: "ss" | "snell" | "anytls";
+  protocol: "ss" | "snell" | "anytls" | "socks5";
+  username?: string;
   port: number;
   listen: string;
   publishAddress: string;
@@ -96,6 +101,7 @@ export type NodeTemplate = {
   id: string;
   name: string;
   protocol: Node["protocol"];
+  username?: string;
   port: number;
   listen: string;
   method: string;

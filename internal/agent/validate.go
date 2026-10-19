@@ -63,6 +63,9 @@ func ValidateDesired(state shared.DesiredState) error {
 	if !shared.ValidFirewallMode(state.FirewallMode) {
 		return errors.New("invalid firewall management mode")
 	}
+	if err := shared.ValidateAgentProxy(state.AgentProxy); err != nil {
+		return err
+	}
 	if state.Revision <= 0 || len(state.Nodes) > 500 || len(state.Rules) > 2000 || len(state.Forwards) > 500 {
 		return errors.New("invalid desired state size or revision")
 	}
@@ -98,8 +101,24 @@ func ValidateDesired(state shared.DesiredState) error {
 		if err := shared.ValidateNode(item.Node, cert, true); err != nil {
 			return fmt.Errorf("节点 %q: %w", item.Node.Name, err)
 		}
+		if item.Node.Protocol == "socks5" {
+			if shared.ManualFirewall(state.FirewallMode) || item.Node.FirewallPolicy == "manual" {
+				return errors.New("SOCKS5 requires managed UFW")
+			}
+			if err := shared.ValidateSOCKS5Credentials(item.Node.Username, item.Password); err != nil {
+				return err
+			}
+			for _, user := range item.Users {
+				if err := shared.ValidateSOCKS5Credentials(user.Name, user.Password); err != nil {
+					return err
+				}
+			}
+		}
 		if len(item.Password) < 8 {
 			return errors.New("invalid node password")
+		}
+		if err := shared.ValidateSnellPSK(item.Node, item.Password); err != nil {
+			return err
 		}
 		if item.Node.Protocol == "snell" && item.Node.ShadowTLSHost != "" && len(item.ShadowTLSPassword) < 8 {
 			return errors.New("invalid ShadowTLS password")

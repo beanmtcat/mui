@@ -21,7 +21,7 @@ const ConnectionsAPIPort = 10086
 
 func ValidateNodeTemplate(t NodeTemplate) error {
 	n := Node{
-		Name: t.Name, Protocol: t.Protocol, Port: t.Port,
+		Name: t.Name, Protocol: t.Protocol, Username: t.Username, Port: t.Port,
 		Listen: t.Listen, Method: t.Method, SnellVersion: t.SnellVersion, SnellPort: t.SnellPort,
 		Obfs: t.Obfs, ShadowTLSHost: t.ShadowTLSHost, TLSName: t.TLSName,
 	}
@@ -75,14 +75,21 @@ func ValidateNode(n Node, cert *Certificate, allowExpired bool) error {
 				return errors.New("Snell 内层端口必须在 1–65535 之间，且不能与公网端口或统计接口端口相同")
 			}
 		}
-		if n.SnellVersion != 0 && n.SnellVersion != 5 {
-			return errors.New("首版仅支持 Snell v5")
+		if n.SnellVersion != 0 && n.SnellVersion != 5 && n.SnellVersion != 6 {
+			return errors.New("Snell 版本仅支持 v5 或 v6")
 		}
 		if n.Obfs != "" && n.Obfs != "none" && n.Obfs != "http" {
 			return errors.New("不支持的 Snell 混淆方式")
 		}
 		if n.ShadowTLSHost != "" && !validShadowTLSHost(n.ShadowTLSHost) {
 			return errors.New("ShadowTLS SNI 必须是有效的域名")
+		}
+	case "socks5":
+		if strings.HasPrefix(n.Username, "mui-") {
+			return errors.New("用户名 mui- 前缀保留给订阅独立凭据，请使用其他用户名")
+		}
+		if err := ValidateSOCKS5Credentials(n.Username, "placeholder"); err != nil {
+			return err
 		}
 	case "anytls":
 		if n.TLSName == "" || cert == nil {
@@ -104,6 +111,22 @@ func ValidateNode(n Node, cert *Certificate, allowExpired bool) error {
 	}
 	if n.Protocol != "snell" && n.ShadowTLSHost != "" {
 		return errors.New("只有 Snell 节点可以设置 ShadowTLS")
+	}
+	return nil
+}
+
+// Zero is the original persisted v5 setting. New nodes/templates explicitly
+// default to v6; reading an existing node must not change its wire protocol.
+func SnellVersion(n Node) int {
+	if n.SnellVersion == 0 {
+		return 5
+	}
+	return n.SnellVersion
+}
+
+func ValidateSnellPSK(n Node, password string) error {
+	if n.Protocol == "snell" && SnellVersion(n) == 6 && (len(password) < 12 || len(password) > 255) {
+		return errors.New("Snell v6 PSK 必须是 12–255 字节")
 	}
 	return nil
 }
@@ -300,7 +323,10 @@ func SingBoxConfig(nodes []ManagedNode, certDir string) ([]byte, error) {
 			}
 		case "snell":
 			base["type"] = "snell"
-			base["version"] = 5
+			base["version"] = SnellVersion(n)
+			if err := ValidateSnellPSK(n, item.Password); err != nil {
+				return nil, err
+			}
 			base["psk"] = item.Password
 			base["obfs_mode"] = n.Obfs
 			// Behind ShadowTLS each subscription is authenticated by its own
@@ -335,6 +361,20 @@ func SingBoxConfig(nodes []ManagedNode, certDir string) ([]byte, error) {
 					"strict_mode": true,
 				})
 			}
+		case "socks5":
+			if err := ValidateSOCKS5Credentials(n.Username, item.Password); err != nil {
+				return nil, err
+			}
+			base["type"] = "socks"
+			users := []map[string]string{{"username": n.Username, "password": item.Password}}
+			for _, user := range item.Users {
+				if err := ValidateSOCKS5Credentials(user.Name, user.Password); err != nil {
+					return nil, err
+				}
+				users = append(users, map[string]string{"username": user.Name, "password": user.Password})
+				userNames = append(userNames, user.Name)
+			}
+			base["users"] = users
 		case "anytls":
 			base["type"] = "anytls"
 			users := []map[string]string{{"name": n.ID, "password": item.Password}}

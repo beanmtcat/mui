@@ -149,7 +149,7 @@ func (p *testMui) enroll(name string) (string, map[string]string) {
 // newAgent reports the capabilities of a current agent.
 func (p *testMui) newAgent(agent map[string]string) {
 	p.t.Helper()
-	if code, out, _ := p.do("POST", "/agent/report", map[string]any{"agentVersion": "0.6.7", "forwardTcpUdp": true, "manualFirewallSupport": true, "multiUserStats": true, "nodeFirewallPolicies": true, "forwardSupport": true, "shadowTlsAuth": true, "snellFixedPort": true, "ufwStatus": "active"}, agent); code != 200 {
+	if code, out, _ := p.do("POST", "/agent/report", map[string]any{"agentVersion": "0.6.7", "forwardTcpUdp": true, "manualFirewallSupport": true, "multiUserStats": true, "nodeFirewallPolicies": true, "forwardSupport": true, "shadowTlsAuth": true, "snellFixedPort": true, "snellV6": true, "ufwStatus": "active"}, agent); code != 200 {
 		p.t.Fatalf("capabilities: %d %v", code, out)
 	}
 }
@@ -339,7 +339,7 @@ func TestNodeTemplateLifecycle(t *testing.T) {
 		t.Fatalf("update template: %d", code)
 	}
 	stored, err := p.store.NodeTemplate(id)
-	if err != nil || stored.Protocol != "snell" || stored.SnellVersion != 5 || stored.Obfs != "http" || stored.Method != "" {
+	if err != nil || stored.Protocol != "snell" || stored.SnellVersion != 6 || stored.Obfs != "http" || stored.Method != "" {
 		t.Fatalf("updated template: %+v %v", stored, err)
 	}
 	if code, _, _ = p.do("DELETE", "/api/node-templates/"+id, nil, nil); code != 200 {

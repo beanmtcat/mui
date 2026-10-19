@@ -163,7 +163,11 @@ func downloadUpgradeArtifact(name, expected string, maxSize int64) (string, erro
 	if err != nil {
 		return "", err
 	}
-	client := &http.Client{Timeout: 3 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	client, err := panelHTTPClient(c.AgentProxy, 3*time.Minute)
+	if err != nil {
+		return "", err
+	}
+	defer client.CloseIdleConnections()
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
@@ -291,12 +295,23 @@ func upgradeAgent(expected string) error {
 	// new one may be too broken to do it, and systemd owns it, so it outlives
 	// the helper replacing its own executable.
 	suffix := randomUnitSuffix()
-	if _, err = command("systemd-run", "--quiet", "--unit", "mui-agent-upgrade-"+suffix+"-watchdog", "--on-active=4m", backup, "rollback-if-unconfirmed", expected); err != nil {
+	if err = scheduleServiceJob("mui-agent-upgrade-"+suffix+"-watchdog", 4*time.Minute, backup, "rollback-if-unconfirmed", expected); err != nil {
 		return restore(fmt.Errorf("schedule upgrade watchdog: %w", err))
 	}
-	_, err = command("systemd-run", "--quiet", "--unit", "mui-agent-upgrade-"+suffix+"-restart", "--on-active=10s", "/bin/systemctl", "restart", "mui-agent-helper.service", "mui-agent.service")
+	if openRC() {
+		err = scheduleServiceJob("mui-agent-upgrade-"+suffix+"-restart", 10*time.Second, "/sbin/rc-service", "mui-agent-helper", "restart")
+		if err == nil {
+			err = scheduleServiceJob("mui-agent-upgrade-"+suffix+"-worker", 11*time.Second, "/sbin/rc-service", "mui-agent", "restart")
+		}
+	} else {
+		err = scheduleServiceJob("mui-agent-upgrade-"+suffix+"-restart", 10*time.Second, "/bin/systemctl", "restart", "mui-agent-helper.service", "mui-agent.service")
+	}
 	if err == nil && forwardActive() {
-		_, err = command("systemd-run", "--quiet", "--unit", "mui-agent-upgrade-"+suffix+"-forward", "--on-active=12s", "/bin/systemctl", "try-restart", "mui-forward.service")
+		if openRC() {
+			err = scheduleServiceJob("mui-agent-upgrade-"+suffix+"-forward", 12*time.Second, "/sbin/rc-service", "mui-forward", "restart")
+		} else {
+			err = scheduleServiceJob("mui-agent-upgrade-"+suffix+"-forward", 12*time.Second, "/bin/systemctl", "try-restart", "mui-forward.service")
+		}
 	}
 	if err != nil {
 		return restore(fmt.Errorf("schedule restart: %w", err))
@@ -383,11 +398,11 @@ func upgradeCore(expected string) error {
 			_ = os.Remove(dst)
 		}
 		if previouslyActive {
-			if _, restoreErr := command("systemctl", "restart", "mui-sing-box.service"); restoreErr != nil {
+			if _, restoreErr := serviceCommand("restart", "mui-sing-box.service"); restoreErr != nil {
 				return fmt.Errorf("%w; restart old sing-box: %v", cause, restoreErr)
 			}
 		} else {
-			_, _ = command("systemctl", "stop", "mui-sing-box.service")
+			_, _ = serviceCommand("stop", "mui-sing-box.service")
 		}
 		return cause
 	}
@@ -395,7 +410,7 @@ func upgradeCore(expected string) error {
 		return rollback(err)
 	}
 	if previouslyActive {
-		if _, err = command("systemctl", "restart", "mui-sing-box.service"); err != nil {
+		if _, err = serviceCommand("restart", "mui-sing-box.service"); err != nil {
 			return rollback(err)
 		}
 		if !coreActive() {
@@ -433,12 +448,12 @@ func RollbackIfUnconfirmed(expected string) error {
 	if err := copyFile(dst+".previous", dst, 0755); err != nil {
 		return fmt.Errorf("restore previous Agent: %w", err)
 	}
-	_, err = command("systemctl", "restart", "mui-agent-helper.service", "mui-agent.service")
+	_, err = serviceCommand("restart", "mui-agent-helper.service", "mui-agent.service")
 	if err != nil {
 		return err
 	}
 	if forwardActive() {
-		_, err = command("systemctl", "try-restart", "mui-forward.service")
+		_, err = serviceCommand("try-restart", "mui-forward.service")
 	}
 	return err
 }

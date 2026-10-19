@@ -15,7 +15,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -27,9 +26,10 @@ import (
 )
 
 type Config struct {
-	URL      string `json:"url"`
-	ServerID string `json:"serverId"`
-	Token    string `json:"token"`
+	URL        string              `json:"url"`
+	ServerID   string              `json:"serverId"`
+	Token      string              `json:"token"`
+	AgentProxy *shared.SOCKS5Proxy `json:"agentProxy,omitempty"`
 }
 type trafficState struct {
 	InstanceID        string                      `json:"instanceId"`
@@ -75,6 +75,9 @@ func ReadConfig() (Config, error) {
 	}
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("agent config incomplete: missing %s", strings.Join(missing, ", "))
+	}
+	if err := shared.ValidateAgentProxy(c.AgentProxy); err != nil {
+		return Config{}, err
 	}
 	return c, nil
 }
@@ -124,14 +127,21 @@ func signHeaders(method, rawURL string, body []byte, keyMaterial string) (map[st
 // client with a 30s timeout rather than http.DefaultClient, and signs the
 // request with the enrollment token as key material. The panel may also
 // return its public key, which the installer pins for upgrade verification.
-func Enroll(url, serverID, token string) (agentToken, panelPublicKey string, err error) {
+func Enroll(url, serverID, token string, proxies ...*shared.SOCKS5Proxy) (agentToken, panelPublicKey string, err error) {
 	var out struct {
 		AgentToken     string `json:"agentToken"`
 		PanelPublicKey string `json:"panelPublicKey"`
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	client := &http.Client{Timeout: 30 * time.Second}
+	var p *shared.SOCKS5Proxy
+	if len(proxies) > 0 {
+		p = proxies[0]
+	}
+	client, err := panelHTTPClient(p, 30*time.Second)
+	if err != nil {
+		return "", "", err
+	}
 	if err := sendJSON(ctx, client, "POST", strings.TrimRight(url, "/")+"/agent/enroll", map[string]string{"serverId": serverID, "token": token}, nil, &out, token); err != nil {
 		return "", "", err
 	}
@@ -289,7 +299,30 @@ func Run(ctx context.Context) error {
 	if _, err := checkPanelURL(c.URL); err != nil {
 		return err
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
+	client, err := panelHTTPClient(c.AgentProxy, 15*time.Second)
+	if err != nil {
+		return err
+	}
+	defer func() { client.CloseIdleConnections() }()
+	refreshClient := func() {
+		next, err := ReadConfig()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "reload agent config:", err)
+			return
+		}
+		if next.URL != c.URL || next.ServerID != c.ServerID || next.Token != c.Token {
+			return
+		}
+		if proxyEqual(next.AgentProxy, c.AgentProxy) {
+			return
+		}
+		replacement, err := panelHTTPClient(next.AgentProxy, 15*time.Second)
+		if err != nil {
+			return
+		}
+		client.CloseIdleConnections()
+		client, c = replacement, next
+	}
 	build, err := BinarySHA256E()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "agent build digest:", err)
@@ -349,6 +382,7 @@ func Run(ctx context.Context) error {
 			result.JobStatus = "failed"
 			result.JobError = err.Error()
 		}
+		refreshClient()
 		if job.Kind == "core.upgrade" {
 			coreVersions.invalidate()
 			if digest, err := CoreBuildE(); err == nil {
@@ -374,6 +408,7 @@ func Run(ctx context.Context) error {
 			return ctx.Err()
 		default:
 		}
+		refreshClient()
 		loopFailed := false
 		sampleDue := time.Since(lastSample) >= 30*time.Second
 		if sampleDue {
@@ -437,7 +472,7 @@ func Run(ctx context.Context) error {
 			}
 			now := time.Now()
 			report := shared.AgentReport{OS: osRelease(), Arch: runtime.GOARCH, AgentVersion: Version, AgentBuild: build, BuildDigest: build,
-				ManualFirewallSupport: host.ManualFirewallSupport, AgentSelfUpdate: host.AgentSelfUpdate, NodeFirewallPolicies: host.NodeFirewallPolicies, MultiUserStats: host.MultiUserStats, ForwardSupport: host.ForwardSupport, ForwardTCPUDP: host.ForwardTCPUDP, ShadowTLSAuth: host.ShadowTLSAuth, SnellFixedPort: host.SnellFixedPort, ReleaseKeyPinned: host.ReleaseKeyPinned,
+				ManualFirewallSupport: host.ManualFirewallSupport, AgentSelfUpdate: host.AgentSelfUpdate, NodeFirewallPolicies: host.NodeFirewallPolicies, MultiUserStats: host.MultiUserStats, ForwardSupport: host.ForwardSupport, ForwardTCPUDP: host.ForwardTCPUDP, ShadowTLSAuth: host.ShadowTLSAuth, SnellFixedPort: host.SnellFixedPort, SnellV6: host.SnellV6, AgentProxySupport: host.AgentProxySupport, ReleaseKeyPinned: host.ReleaseKeyPinned,
 				CoreVersion: coreVersions.get(), CoreBuild: coreBuild, CoreDigest: coreBuild, CoreSelfUpdate: host.CoreSelfUpdate,
 				UFWStatus: host.UFW, StatsStatus: statsStatus, Traffic: state.Pending[:batchSize], UserTraffic: state.UserPending[:userBatch], ForwardTraffic: host.ForwardTraffic, ServerTraffic: state.NetworkPending[:networkBatch], Connections: pendingConnections,
 				IPv4: ipv4, IPv6: ipv6, AgentTime: &now, HostReported: true, SSHPorts: host.SSHPorts, FirewallConflict: host.Conflict, UFWRules: host.Rules}
@@ -806,11 +841,7 @@ func sampleTraffic(ctx context.Context, state *trafficState) error {
 	return saveTraffic(*state)
 }
 func coreInstanceID() string {
-	out, err := exec.Command("systemctl", "show", "-p", "MainPID", "--value", "mui-sing-box.service").Output()
-	if err != nil {
-		return ""
-	}
-	pid := strings.TrimSpace(string(out))
+	pid := coreMainPID()
 	if pid == "" || pid == "0" {
 		return ""
 	}

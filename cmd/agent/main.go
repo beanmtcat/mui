@@ -11,13 +11,14 @@ import (
 	"syscall"
 
 	"mui/internal/agent"
+	"mui/internal/shared"
 )
 
 const usage = `usage: mui-agent <command> [args]
-  mui-agent install PANEL_URL SERVER_ID ENROLL_TOKEN [SING_BOX_BINARY|-] [RELEASE_PUBLIC_KEY] [--token-stdin | --token-file <path> | --token-file=<path>]
+  mui-agent install PANEL_URL SERVER_ID ENROLL_TOKEN [SING_BOX_BINARY|-] [RELEASE_PUBLIC_KEY] [--token-stdin | --token-file <path> | --token-file=<path>] [--proxy-file <path>]
   mui-agent run
   mui-agent forward
-  mui-agent offline <init|check|install|apply|receipt> [args]   (offline --help for details)
+  mui-agent offline <init|check|install|apply|upgrade> [args]   (offline --help for details)
   mui-agent helper
   mui-agent version
   mui-agent rollback-if-unconfirmed EXPECTED_SHA256
@@ -34,6 +35,7 @@ func main() {
 		return
 	}
 	var err error
+	agent.ConfigureMemory(os.Args[1])
 	switch os.Args[1] {
 	case "offline":
 		err = runOfflineCommand(os.Args[2:])
@@ -53,9 +55,19 @@ func main() {
 			break
 		}
 		var panel, serverID, token, core, releaseKey string
-		panel, serverID, token, core, releaseKey, err = parseInstallArgs(os.Args[2:])
+		args := os.Args[2:]
+		var proxyFile string
+		args, proxyFile, err = parseProxyFlag(args)
+		var p *shared.SOCKS5Proxy
+		if err == nil && proxyFile != "" {
+			p, err = agent.ReadProxyFile(proxyFile)
+		}
+		if err != nil {
+			break
+		}
+		panel, serverID, token, core, releaseKey, err = parseInstallArgs(args)
 		if err == nil {
-			err = agent.Install(panel, serverID, token, core, releaseKey)
+			err = agent.Install(panel, serverID, token, core, releaseKey, p)
 		}
 	case "helper":
 		if runtime.GOOS != "linux" {
@@ -178,4 +190,22 @@ func parseInstallArgs(args []string) (panel, serverID, token, core, releaseKey s
 		token = tokenArg
 	}
 	return panel, serverID, token, core, releaseKey, nil
+}
+
+// Proxy credentials are supplied in a protected JSON file, never argv.
+func parseProxyFlag(args []string) ([]string, string, error) {
+	var out []string
+	path := ""
+	for i := 0; i < len(args); i++ {
+		if args[i] == "--proxy-file" {
+			if path != "" || i+1 >= len(args) || args[i+1] == "" {
+				return nil, "", fmt.Errorf("--proxy-file requires exactly one path")
+			}
+			i++
+			path = args[i]
+		} else {
+			out = append(out, args[i])
+		}
+	}
+	return out, path, nil
 }

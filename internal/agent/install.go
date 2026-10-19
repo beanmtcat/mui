@@ -80,7 +80,14 @@ func (r *installRollback) commit() {
 // pinned key, binaries, config and units. Any failure after mutation starts
 // rolls the replaced/created files back. The enrollment token must already
 // be the final value: cmd/agent resolves --token-stdin / --token-file.
-func Install(url, serverID, enrollToken, core, releaseKey string) error {
+func Install(url, serverID, enrollToken, core, releaseKey string, proxies ...*shared.SOCKS5Proxy) error {
+	var proxyConfig *shared.SOCKS5Proxy
+	if len(proxies) > 0 {
+		proxyConfig = proxies[0]
+	}
+	if err := shared.ValidateAgentProxy(proxyConfig); err != nil {
+		return err
+	}
 	if runtime.GOOS != "linux" || os.Geteuid() != 0 {
 		return errors.New("install must run as root on Linux")
 	}
@@ -107,10 +114,13 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 			release[pair[0]] = strings.Trim(pair[1], "\"")
 		}
 	}
-	if !(release["ID"] == "ubuntu" && (release["VERSION_ID"] == "22.04" || release["VERSION_ID"] == "24.04" || release["VERSION_ID"] == "26.04")) && !(release["ID"] == "debian" && (release["VERSION_ID"] == "12" || release["VERSION_ID"] == "13")) {
+	if !supportedDistribution(release["ID"], release["VERSION_ID"]) {
 		return fmt.Errorf("unsupported distribution %s %s", release["ID"], release["VERSION_ID"])
 	}
-	for _, tool := range []string{"systemctl", "systemd-run", "sshd", "ss"} {
+	if err := checkServiceTools(); err != nil {
+		return err
+	}
+	for _, tool := range []string{"sshd", "ss"} {
 		if _, err = exec.LookPath(tool); err != nil {
 			return fmt.Errorf("%s is required: %w", tool, err)
 		}
@@ -173,7 +183,7 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 		}
 	}
 	// 5. Enroll.
-	agentToken, panelPublicKey, err := Enroll(url, serverID, enrollToken)
+	agentToken, panelPublicKey, err := Enroll(url, serverID, enrollToken, proxyConfig)
 	if err != nil {
 		return err
 	}
@@ -188,10 +198,8 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 		users[coreUser] = CoreDir
 	}
 	for name, home := range users {
-		if _, err := exec.Command("id", "-u", name).Output(); err != nil {
-			if _, err = command("useradd", "--system", "--home", home, "--shell", "/usr/sbin/nologin", name); err != nil {
-				return fail(err)
-			}
+		if err = ensureServiceUser(name, home); err != nil {
+			return fail(err)
 		}
 	}
 	if err = makeDirectory(ConfigDir, 0750); err != nil {
@@ -255,7 +263,7 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 	if err := migrateLegacyTraffic(); err != nil {
 		return fail(err)
 	}
-	config, _ := json.Marshal(Config{URL: url, ServerID: serverID, Token: agentToken})
+	config, _ := json.Marshal(Config{URL: url, ServerID: serverID, Token: agentToken, AgentProxy: proxyConfig})
 	if err = rb.backup(ConfigDir+"/config.json", 0640); err != nil {
 		return fail(err)
 	}
@@ -270,11 +278,11 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 		units["mui-sing-box.service"] = coreUnit
 	}
 	for name, content := range units {
-		path := filepath.Join("/etc/systemd/system", name)
-		if err = rb.backup(path, 0644); err != nil {
+		path, content, mode := serviceFile(name, content)
+		if err = rb.backup(path, mode); err != nil {
 			return fail(err)
 		}
-		if err = writeFileAtomic(path, []byte(content), 0644); err != nil {
+		if err = writeFileAtomic(path, []byte(content), mode); err != nil {
 			return fail(err)
 		}
 	}
@@ -284,15 +292,15 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 	if err = verifyInstalledConfig(); err != nil {
 		return fail(err)
 	}
-	if _, err = command("systemctl", "daemon-reload"); err != nil {
+	if _, err = serviceCommand("daemon-reload"); err != nil {
 		return fail(err)
 	}
 	// restart rather than start: a re-install must pick up the new binary and units.
 	for _, unit := range []string{"mui-agent-helper.service", "mui-agent.service"} {
-		if _, err = command("systemctl", "enable", unit); err != nil {
+		if _, err = serviceCommand("enable", unit); err != nil {
 			return fail(err)
 		}
-		if _, err = command("systemctl", "restart", unit); err != nil {
+		if _, err = serviceCommand("restart", unit); err != nil {
 			return fail(err)
 		}
 	}
@@ -304,17 +312,17 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 			return fail(readErr)
 		}
 		if len(config) == 0 || bytes.Equal(bytes.TrimSpace(config), []byte("[]")) {
-			if _, err = command("systemctl", "disable", "--now", "mui-forward.service"); err != nil {
+			if _, err = serviceCommand("disable", "--now", "mui-forward.service"); err != nil {
 				return fail(err)
 			}
 		} else if forwardActive() {
-			if _, err = command("systemctl", "try-restart", "mui-forward.service"); err != nil {
+			if _, err = serviceCommand("try-restart", "mui-forward.service"); err != nil {
 				return fail(err)
 			}
 		}
 	}
 	if core != "" {
-		_, _ = command("systemctl", "try-restart", "mui-sing-box.service")
+		_, _ = serviceCommand("try-restart", "mui-sing-box.service")
 	}
 	rb.commit()
 	return nil
@@ -323,7 +331,7 @@ func Install(url, serverID, enrollToken, core, releaseKey string) error {
 // An older installation used panel-* unit names. Stop it before starting the
 // renamed units so two sing-box instances cannot claim the same node ports.
 func stopLegacyServices() error {
-	_, _ = command("systemctl", "stop", "panel-ufw-rollback.timer")
+	_, _ = serviceCommand("stop", "panel-ufw-rollback.timer")
 	for _, unit := range []string{"panel-agent.service", "panel-agent-helper.service", "panel-sing-box.service"} {
 		path := filepath.Join("/etc/systemd/system", unit)
 		if _, err := os.Stat(path); os.IsNotExist(err) {
@@ -331,7 +339,7 @@ func stopLegacyServices() error {
 		} else if err != nil {
 			return err
 		}
-		if _, err := command("systemctl", "disable", "--now", unit); err != nil {
+		if _, err := serviceCommand("disable", "--now", unit); err != nil {
 			return fmt.Errorf("stop legacy service %s: %w", unit, err)
 		}
 		if err := os.Remove(path); err != nil {
