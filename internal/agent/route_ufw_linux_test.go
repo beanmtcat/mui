@@ -56,6 +56,32 @@ func TestRouteUFWRealIntegration(t *testing.T) {
 	if second := run("status", "numbered"); first != second {
 		t.Fatal("repeat apply duplicated or reordered rules", first, second)
 	}
+	// 0.6.14 left only the catch-all deny for all-source policies: UFW
+	// silently skipped the subsequent equivalent allow. Recover that state,
+	// and verify whole-family source lists do not have the same collision.
+	for _, policy := range []struct{ mode, sources string }{
+		{"closed", ""}, {"all", ""}, {"restricted", "0.0.0.0/0"},
+		{"restricted", "::/0"}, {"restricted", "0.0.0.0/0,::/0"},
+	} {
+		next := routeUFWFixture()
+		next.Forwards[0].FirewallPolicy, next.Forwards[0].FirewallSources = policy.mode, policy.sources
+		if err := syncUFW(next); err != nil {
+			t.Fatalf("policy %s %s: %v", policy.mode, policy.sources, err)
+		}
+		listed := run("status", "numbered")
+		if !routeUFWAtHead(listed, routeUFWRules(next), routeUFWIPv6()) {
+			t.Fatal("incorrect all-source policy", listed)
+		}
+		if err := syncUFW(next); err != nil {
+			t.Fatal("all-source policy is not idempotent", err)
+		}
+	}
+	if err := syncUFW(state); err != nil {
+		t.Fatal(err)
+	}
+	if restored := run("status", "numbered"); first != restored {
+		t.Fatal("switching back to restricted policy failed", restored)
+	}
 	// Changed sources replace the old allows, with no widening of policy.
 	old, _ := json.Marshal(state)
 	state.Forwards[0].FirewallSources = "192.0.2.2/32"

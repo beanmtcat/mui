@@ -2652,8 +2652,6 @@ func validateSubscriptionNode(format string, n shared.Node) error {
 			return errors.New("Surge 订阅不支持 2022-blake3-chacha20-poly1305")
 		case n.Protocol == "snell" && n.ShadowTLSHost == "":
 			return errors.New("Surge 订阅中的 Snell 节点需启用 ShadowTLS")
-		case n.Protocol == "anytls":
-			return errors.New("Surge 订阅暂不支持 AnyTLS 节点")
 		}
 	}
 	return nil
@@ -3757,7 +3755,8 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	becameClientIPs := in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.13") && !shared.VersionAtLeast(server.AgentVersion, "0.6.13")
-	becameRouteUFW := !shared.ManualFirewall(server.FirewallMode) && in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.14") && !shared.VersionAtLeast(server.AgentVersion, "0.6.14")
+	becameRouteUFW := !shared.ManualFirewall(server.FirewallMode) && in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.15") && !shared.VersionAtLeast(server.AgentVersion, "0.6.15")
+	becameShadowTLSDial := in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.16") && !shared.VersionAtLeast(server.AgentVersion, "0.6.16")
 	server.Status = "online"
 	becameMultiUser := !server.MultiUserStats && in.MultiUserStats
 	becameOutboundBinding := in.AgentVersion != "" && !server.OutboundBindingSupport && in.OutboundBindingSupport && shared.VersionAtLeast(in.AgentVersion, "0.6.12")
@@ -4052,13 +4051,22 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if becameMultiUser || schemeChanged {
+	if becameMultiUser || schemeChanged || becameShadowTLSDial {
 		nodes, e := a.Store.Nodes(id)
 		if e != nil {
 			errorJSON(w, 500, e.Error())
 			return
 		}
-		if len(nodes) > 0 {
+		needsApply := becameMultiUser || schemeChanged
+		if becameShadowTLSDial {
+			for _, node := range nodes {
+				if node.Enabled && !node.Deleting && node.Protocol == "snell" && node.ShadowTLSHost != "" && shared.EffectiveOutboundInterface(node, server.OutboundInterface) != "" {
+					needsApply = true
+					break
+				}
+			}
+		}
+		if len(nodes) > 0 && needsApply {
 			if err = a.queueApplyLocked(id, "subscriptions.apply"); err != nil {
 				errorJSON(w, 500, err.Error())
 				return

@@ -15,11 +15,11 @@ func TestRouteUFWUpgradeReappliesEntryAndLanding(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		server.AgentVersion = "0.6.13"
+		server.AgentVersion = "0.6.14"
 		if err = l.p.store.PutServer(server); err != nil {
 			t.Fatal(err)
 		}
-		report := map[string]any{"agentVersion": "0.6.14", "forwardSupport": server.ForwardSupport, "forwardTcpUdp": server.ForwardTCPUDP, "nodeFirewallPolicies": server.NodeFirewallPolicies, "multiUserStats": server.MultiUserStats, "shadowTlsAuth": server.ShadowTLSAuth, "snellFixedPort": server.SnellFixedPort, "snellV6": server.SnellV6, "manualFirewallSupport": server.ManualFirewallSupport, "ufwStatus": "active"}
+		report := map[string]any{"agentVersion": "0.6.15", "forwardSupport": server.ForwardSupport, "forwardTcpUdp": server.ForwardTCPUDP, "nodeFirewallPolicies": server.NodeFirewallPolicies, "multiUserStats": server.MultiUserStats, "shadowTlsAuth": server.ShadowTLSAuth, "snellFixedPort": server.SnellFixedPort, "snellV6": server.SnellV6, "manualFirewallSupport": server.ManualFirewallSupport, "ufwStatus": "active"}
 		if code, out, _ := l.p.do("POST", "/agent/report", report, headers); code != 200 {
 			t.Fatal(code, out)
 		}

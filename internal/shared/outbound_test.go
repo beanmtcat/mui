@@ -87,8 +87,8 @@ func TestOutboundDefaultOverridesAndShadowTLS(t *testing.T) {
 	for _, in := range cfg.Inbounds {
 		if in["type"] == "shadowtls" {
 			found = true
-			if in["detour"] != "node-e" || in["handshake"].(map[string]any)["bind_interface"] != "wg0" {
-				t.Fatalf("wrong ShadowTLS egress: %+v", in)
+			if in["detour"] != "node-e" || in["handshake"].(map[string]any)["bind_interface"] != nil {
+				t.Fatalf("ShadowTLS handshake must use system routing; Snell payload retains its selected outbound: %+v", in)
 			}
 		}
 	}

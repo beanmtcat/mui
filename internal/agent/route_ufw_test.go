@@ -115,3 +115,41 @@ func TestRouteUFWProfilesRetainOldDefinitionsForRollback(t *testing.T) {
 		t.Fatal("obsolete profile was not pruned")
 	}
 }
+
+func TestRouteUFWAllSourcesDoNotCollideWithDenyGuards(t *testing.T) {
+	for _, tc := range []struct {
+		name, policy, sources, guardFamily string
+		allows, guards                     int
+	}{
+		{name: "all", policy: "all", allows: 2},
+		{name: "default all", policy: "", allows: 2},
+		{name: "IPv4 any", policy: "restricted", sources: "0.0.0.0/0", guardFamily: "ipv6", allows: 2, guards: 2},
+		{name: "IPv6 any", policy: "restricted", sources: "::/0", guardFamily: "ipv4", allows: 2, guards: 2},
+		{name: "both any", policy: "restricted", sources: "0.0.0.0/0,::/0", allows: 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := routeUFWFixture()
+			state.Forwards[0].FirewallPolicy, state.Forwards[0].FirewallSources = tc.policy, tc.sources
+			rules := routeUFWRules(state)
+			allows, guards := 0, 0
+			for _, r := range rules {
+				if r.Action == "allow" {
+					allows++
+					continue
+				}
+				guards++
+				if r.Family != tc.guardFamily {
+					t.Fatal("guard overlaps an all-source allow", r)
+				}
+			}
+			if allows != tc.allows || guards != tc.guards {
+				t.Fatal("wrong allow/guard counts", rules)
+			}
+			// UFW displays a /0 source as Anywhere, scoped by (v6).
+			status := strings.ReplaceAll(strings.ReplaceAll(routeUFWStatus(rules, true), "0.0.0.0/0", "Anywhere"), "::/0", "Anywhere")
+			if !routeUFWAtHead(status, rules, true) {
+				t.Fatal("all-source prefix rejected", status)
+			}
+		})
+	}
+}

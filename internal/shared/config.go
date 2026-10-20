@@ -407,9 +407,9 @@ func SingBoxConfig(nodes []ManagedNode, certDir string, defaultInterface ...stri
 					userNames = append(userNames, user.Name)
 				}
 				handshake := map[string]any{"server": n.ShadowTLSHost, "server_port": 443}
-				if iface != "" {
-					handshake["bind_interface"] = iface
-				}
+				// Camouflage handshakes use system routing independently of the
+				// proxy payload's chosen egress. A PPP/VPN exit can reach the
+				// Internet but be unable to reach this particular TLS site.
 				inbounds = append(inbounds, map[string]any{
 					"type": "shadowtls", "tag": "shadowtls-" + n.ID,
 					"listen": n.Listen, "listen_port": n.Port, "detour": tag,

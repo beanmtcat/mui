@@ -63,8 +63,10 @@ func baseUFWRules(state shared.DesiredState) []shared.FirewallRule {
 	return out
 }
 
-// Per-port allows precede a catch-all deny. The latter prevents an existing
-// broad host allow from bypassing the chain's previous-hop source restriction.
+// Per-port allows precede a catch-all deny for each family they do not open
+// completely. UFW treats an identical allow/deny tuple as a duplicate even if
+// the action differs, so an all-source allow must never have the same guard.
+// Guards prevent a broad host allow from bypassing source restrictions.
 // Application profiles distinguish these rules from identical host port rules:
 // UFW otherwise skips a prepend when an equivalent rule already exists later.
 func routeUFWRules(state shared.DesiredState) []shared.FirewallRule {
@@ -92,17 +94,33 @@ func routeUFWRules(state shared.DesiredState) []shared.FirewallRule {
 	for _, pp := range ordered {
 		// Merge identical allows if multiple chain resources share a port.
 		seen := map[string]bool{}
+		open4, open6 := false, false
 		for _, r := range allows[pp] {
 			key := r.Source + "/" + r.Family
 			if seen[key] {
 				continue
 			}
 			seen[key] = true
+			if normalizedUFWSource(r.Source) == "any" {
+				open4 = open4 || routeUFWFamily(r, false)
+				open6 = open6 || routeUFWFamily(r, true)
+			}
 			// Stable identity depends on the policy, not which chain owns it.
 			r.ID = fmt.Sprintf("%s%s-%d-%x", routeUFWPrefix, pp.proto, pp.port, sha256.Sum256([]byte(key)))
 			rules = append(rules, r)
 		}
-		rules = append(rules, shared.FirewallRule{ID: fmt.Sprintf("%s%s-%d-deny", routeUFWPrefix, pp.proto, pp.port), Network: pp.proto, PortFrom: pp.port, PortTo: pp.port, Action: "deny"})
+		if !open4 || !open6 {
+			guard := shared.FirewallRule{ID: fmt.Sprintf("%s%s-%d-deny", routeUFWPrefix, pp.proto, pp.port), Network: pp.proto, PortFrom: pp.port, PortTo: pp.port, Action: "deny"}
+			if open4 {
+				guard.Family = "ipv6"
+			} else if open6 {
+				guard.Family = "ipv4"
+			}
+			if guard.Family != "" {
+				guard.ID += "-" + guard.Family
+			}
+			rules = append(rules, guard)
+		}
 	}
 	return rules
 }

@@ -158,9 +158,8 @@ function subscriptionNodeIssue(format: string | undefined, node: Node): string {
   if (node.protocol === "ss") {
     if (format === "surge" && node.method === "2022-blake3-chacha20-poly1305") return "Surge 不支持 2022-blake3-chacha20-poly1305，请使用 AES 方式";
   }
-  // Surge reaches Snell nodes through ShadowTLS; it has no AnyTLS support here.
+  // Surge reaches Snell nodes through ShadowTLS.
   if (format === "surge" && node.protocol === "snell" && !node.shadowTlsHost) return "Surge 的 Snell 节点需要启用 ShadowTLS";
-  if (format === "surge" && node.protocol === "anytls") return "Surge 订阅暂不支持 AnyTLS";
   return "";
 }
 function subscriptionNodeEligible(format: string | undefined, node: Node) {
@@ -4050,7 +4049,7 @@ function App() {
                   </div>
                   <p className="hint">待应用的节点可以先选入订阅，配置在服务器上生效后才会出现在订阅下载中。不兼容当前客户端格式的节点会显示具体原因。</p>
                 </Field>
-                {subForm.format === "surge" && <p className="hint">Surge 格式输出节点列表，支持传统 SS（如 aes-256-gcm）、AES-GCM 的 SS 2022 和 ShadowTLS Snell。请通过代理组的 policy-path 引用链接；把此链接当完整配置安装会报“规则必须以 FINAL 结尾”。创建后或在列表“查看链接”中可复制代理组配置。AnyTLS 请使用 sing-box 或 v2rayN 格式。</p>}
+                {subForm.format === "surge" && <p className="hint">Surge 格式输出节点列表，支持传统 SS（如 aes-256-gcm）、AES-GCM 的 SS 2022、ShadowTLS Snell 和 AnyTLS。请通过代理组的 policy-path 引用链接；把此链接当完整配置安装会报“规则必须以 FINAL 结尾”。创建后或在列表“查看链接”中可复制代理组配置。AnyTLS 需要 Surge Mac 6.4.3+ 或 iOS 5.17.0+，默认校验证书。</p>}
                 {subForm.format === "v2rayn" && <p className="hint">v2rayN 格式支持 SS 和 AnyTLS 节点及其链路。复制订阅链接，在 v2rayN 中添加订阅分组并更新订阅；AnyTLS 请使用支持该协议的新版 v2rayN，并选择 sing-box 内核。v2rayN 不支持 Snell / ShadowTLS。</p>}
                 {sharedSubNodes(subForm).length > 0 && <p className="hint">以下 SS 节点沿用节点密码：{sharedSubNodes(subForm).map((n) => n.name).join("、")}。流量只能按节点统计，无法单独撤销某条订阅的节点访问；禁用、到期或轮换订阅链接仅影响订阅下载，撤销已导入客户端的访问需更换节点密码。</p>}
                 <p className="hint">链路的订阅地址是首跳服务器的地址和链路端口，协议与登录凭据来自落地节点。</p>

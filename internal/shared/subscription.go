@@ -143,6 +143,14 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 				lines = append(lines, fmt.Sprintf("%s = ss, %s, %d, encrypt-method=%s, password=%s", n.Name, address, n.Port, n.Method, item.Password))
 			case "socks5":
 				lines = append(lines, fmt.Sprintf("%s = socks5, %s, %d, username=%s, password=%s", n.Name, address, n.Port, item.Username, item.Password))
+			case "anytls":
+				if n.TLSName == "" || strings.ContainsAny(n.TLSName, ",\r\n \t") {
+					excluded = append(excluded, n.Name+": AnyTLS 需要有效的 TLS 域名")
+					continue
+				}
+				// A chain connects to its entry address but verifies the landing
+				// node's TLS identity. Keep SNI explicit and certificate checks on.
+				lines = append(lines, fmt.Sprintf("%s = anytls, %s, %d, password=%s, sni=%s", n.Name, address, n.Port, item.Password, n.TLSName))
 			case "snell":
 				// A per-user Snell key is a sing-box extension Surge cannot send.
 				if n.ShadowTLSHost == "" || item.ShadowTLSPassword == "" || item.UserKey != "" {
@@ -155,7 +163,7 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 				}
 				lines = append(lines, line+fmt.Sprintf(", shadow-tls-password=%s, shadow-tls-sni=%s, shadow-tls-version=3", item.ShadowTLSPassword, n.ShadowTLSHost))
 			default:
-				excluded = append(excluded, n.Name+": Surge 订阅暂不支持 AnyTLS 节点")
+				excluded = append(excluded, n.Name+": Surge 订阅不支持该协议")
 			}
 		}
 		return []byte(strings.Join(lines, "\n") + "\n"), excluded, nil
