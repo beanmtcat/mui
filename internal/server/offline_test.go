@@ -138,8 +138,8 @@ func TestOfflineManagementGuardsAndDeletion(t *testing.T) {
 	}
 	srv, _ := p.store.Server(id)
 	srv.ManagementMode = "online"
-	if code, _, _ := p.do("PATCH", "/api/servers/"+id, srv, nil); code != 409 {
-		t.Fatalf("exported server changed management: %d", code)
+	if code, out, _ := p.do("PATCH", "/api/servers/"+id, srv, nil); code != 200 {
+		t.Fatalf("exported server cannot change management: %d %v", code, out)
 	}
 	srv.ManagementMode = "offline"
 	srv.FirewallMode = "ufw"

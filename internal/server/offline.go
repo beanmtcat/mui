@@ -97,6 +97,7 @@ func (a *App) offlineExport(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	a.Store.Audit("offline.export", id, "revision "+strconv.FormatInt(bundle.Revision, 10))
 	guide := a.standaloneInstallAt(a.publicURLForRequest(r))
+	guide.MigrationCommand = managementMigrationCommand(server)
 	guide.ExampleConfig = ""
 	guide.Command = strings.ReplaceAll(guide.Command, "./forwards.json", "./mui-offline.json")
 	writeJSON(w, 200, map[string]any{"bundle": bundle, "install": guide})

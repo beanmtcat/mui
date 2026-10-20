@@ -710,6 +710,27 @@ input[type="checkbox"] {
 .installModal {
   width: min(760px, 100%);
 }
+.installModal > .managementMigration {
+  margin: 20px;
+}
+.installModal .installCommand {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  max-height: 320px;
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
 .installModal .commandBox {
   padding: 20px;
   border-top: 0;
@@ -1250,7 +1271,6 @@ th.num {
 .offlineManager .offlineStep > * + * { margin-top: 12px; }
 .offlineManager textarea { display: block; width: 100%; font-family: var(--mono, monospace); }
 .offlineManager select { max-width: 180px; }
-.offlineManager .installCommand { white-space: pre-wrap; overflow-wrap: anywhere; max-width: 100%; max-height: 320px; overflow: auto; padding: 12px; border-radius: 4px; background: var(--code-bg); font-size: 12px; }
 .offlineManager .offlineStep > button + button { margin-left: 10px; }
 
 .panelHead .headerActions, .offlineInstall .headerActions { flex-wrap: wrap; }

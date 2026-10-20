@@ -2,6 +2,8 @@
 // can be the first hop of a route; transit and line servers a middle hop.
 export type Role = "entry" | "line" | "transit" | "exit";
 export type OfflineInstallGuide = {
+    migrationCommand?: string;
+    proxyNotice?: string;
     command: string;
     signed: boolean;
     exampleConfig?: string;
@@ -15,6 +17,7 @@ export type InstallGuide = {
 export const roleLabels: Record<Role, string> = { entry: "入口", line: "线路", transit: "中转", exit: "落地" };
 export type Server = {
   managementMode?: "online" | "offline";
+  managementMigrationFrom?: "online" | "offline";
   offlineExportedRevision?: number;
   offlineExportedAt?: string;
   id: string;
@@ -24,6 +27,7 @@ export type Server = {
   firewallMode?: "ufw" | "manual";
   agentProxyNodeId?: string;
   agentProxyInternal?: boolean;
+  agentProxySourceMode?: "" | "auto" | "public" | "internal";
   agentProxySupport?: boolean;
   manualFirewallSupport?: boolean;
   country: string;
@@ -87,10 +91,11 @@ export type Node = {
   certificateId: string;
   firewallPolicy: "all" | "restricted" | "manual";
   firewallSources: string;
-  // Off: clients reach the node only through routes, and its port admits
-  // only their last hops (routeSources, computed by the panel).
+  // Off: ordinary clients use routes. Assigned Agents get independent
+  // source rules, regardless of client subscription visibility.
   direct: boolean;
   routeSources?: string;
+  agentProxySources?: string;
   enabled: boolean;
   deleting?: boolean;
   status: string;

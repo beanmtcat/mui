@@ -509,8 +509,9 @@ func (a *App) syncRoutes() error {
 		queue[old.ServerID] = "forwards.apply"
 	}
 	for _, n := range w.nodes {
-		if sources := w.nodeRouteSources(n.ID); sources != n.RouteSources {
-			n.RouteSources = sources
+		sources, proxySources := w.nodeRouteSources(n.ID), w.nodeAgentProxySources(n.ID)
+		if sources != n.RouteSources || proxySources != n.AgentProxySources {
+			n.RouteSources, n.AgentProxySources = sources, proxySources
 			password, err := a.Store.NodeSecret(n.ID)
 			if err != nil {
 				return err
@@ -540,19 +541,19 @@ func (a *App) syncRoutesInBackground() {
 }
 
 // effectiveNodeAccess is the firewall a node really gets: a node without
-// direct access admits only its routes' last hops, a direct node with a source
-// list admits those sources as well.
+// direct client access admits its routes' last hops and assigned Agent sources.
 func effectiveNodeAccess(n shared.Node) (string, string) {
+	automatic := strings.Trim(strings.Join([]string{n.RouteSources, n.AgentProxySources}, ","), ",")
 	switch {
 	case !n.Direct:
-		if n.RouteSources == "" {
+		if automatic == "" {
 			return "closed", ""
 		}
-		return "restricted", n.RouteSources
+		return "restricted", automatic
 	case n.FirewallPolicy == "manual":
 		return n.FirewallPolicy, n.FirewallSources
-	case n.FirewallPolicy == "restricted" && n.RouteSources != "":
-		return "restricted", n.FirewallSources + "," + n.RouteSources
+	case n.FirewallPolicy == "restricted" && automatic != "":
+		return "restricted", n.FirewallSources + "," + automatic
 	}
 	return n.FirewallPolicy, n.FirewallSources
 }

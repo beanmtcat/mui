@@ -1,6 +1,7 @@
 import { screenshotView } from "./screenshot";
 import { useState } from "react";
 import { mutation, type Server, type OfflineInstallGuide } from "../api";
+import ManagementMigration from "./ManagementMigration";
 
 type Exported = {
   bundle: { revision: number; serverId: string; [key: string]: unknown };
@@ -53,6 +54,7 @@ export default function OfflineManager({ server, onClose, onExported, onCopy, on
         <p className="hint">首次安装或升级：在可联网的电脑下载以下文件，连同 mui-offline.json 上传到目标机的 ~/mui-install/。按目标机架构选择；x86_64 选 amd64，aarch64 选 arm64。</p>
         <select aria-label="目标机架构" value={arch} onChange={(e) => setArch(e.target.value)}><option>amd64</option><option>arm64</option></select>
         <div className="installDownloads">{files?.files.map((f) => <a href={f.url} key={f.name} download={f.name}>{f.name}</a>)}</div>
+        <ManagementMigration command={exported.install.migrationCommand} onCopy={onCopy} />
         <p className="hint">在目标机执行（自动识别 root / sudo）：</p>
         <pre className="installCommand">{exported.install.command}</pre>
         <button className="ghost" onClick={() => onCopy(exported.install.command)}>复制安装命令</button>

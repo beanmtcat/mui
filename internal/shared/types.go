@@ -6,7 +6,10 @@ import (
 )
 
 type Server struct {
-	ManagementMode          string     `json:"managementMode"`
+	ManagementMode string `json:"managementMode"`
+	// Retained across exports so the installation guide can explain how to
+	// retire the other local service before installing this management mode.
+	ManagementMigrationFrom string     `json:"managementMigrationFrom,omitempty"`
 	OfflineExportedRevision int64      `json:"offlineExportedRevision"`
 	OfflineExportedAt       *time.Time `json:"offlineExportedAt,omitempty"`
 	ID                      string     `json:"id"`
@@ -25,39 +28,41 @@ type Server struct {
 	Domain   string   `json:"domain"`
 	// InternalAddress is how other servers on the same private network or
 	// dedicated line (IPLC/IEPL) reach this one; a route hop can use it.
-	InternalAddress            string     `json:"internalAddress"`
-	AgentProxySwitchPending    bool       `json:"agentProxySwitchPending,omitempty"`
-	AgentProxyPreviousInternal bool       `json:"agentProxyPreviousInternal,omitempty"`
-	AgentProxyPreviousNodeID   string     `json:"agentProxyPreviousNodeId,omitempty"`
-	AgentProxyNodeID           string     `json:"agentProxyNodeId,omitempty"`
-	AgentProxyInternal         bool       `json:"agentProxyInternal,omitempty"`
-	AgentProxySupport          bool       `json:"agentProxySupport,omitempty"`
-	FirewallMode               string     `json:"firewallMode"`
-	ManualFirewallSupport      bool       `json:"manualFirewallSupport"`
-	Status                     string     `json:"status"`
-	OS                         string     `json:"os"`
-	Arch                       string     `json:"arch"`
-	AgentVersion               string     `json:"agentVersion"`
-	AgentBuild                 string     `json:"agentBuild"`
-	AgentSelfUpdate            bool       `json:"agentSelfUpdate"`
-	NodeFirewallPolicies       bool       `json:"nodeFirewallPolicies"`
-	MultiUserStats             bool       `json:"multiUserStats"`
-	ForwardTCPUDP              bool       `json:"forwardTcpUdp"`
-	ForwardSupport             bool       `json:"forwardSupport"`
-	ShadowTLSAuth              bool       `json:"shadowTlsAuth"`
-	SnellFixedPort             bool       `json:"snellFixedPort"`
-	SnellV6                    bool       `json:"snellV6"`
-	ReleaseKeyPinned           bool       `json:"releaseKeyPinned"`
-	AppliedRevision            int64      `json:"appliedRevision"`
-	CoreVersion                string     `json:"coreVersion"`
-	CoreBuild                  string     `json:"coreBuild"`
-	CoreSelfUpdate             bool       `json:"coreSelfUpdate"`
-	UFWStatus                  string     `json:"ufwStatus"`
-	StatsStatus                string     `json:"statsStatus"`
-	NetworkRx                  int64      `json:"networkRx"`
-	NetworkTx                  int64      `json:"networkTx"`
-	LastSeen                   *time.Time `json:"lastSeen"`
-	Revision                   int64      `json:"revision"`
+	InternalAddress              string     `json:"internalAddress"`
+	AgentProxySwitchPending      bool       `json:"agentProxySwitchPending,omitempty"`
+	AgentProxyPreviousInternal   bool       `json:"agentProxyPreviousInternal,omitempty"`
+	AgentProxyPreviousSourceMode string     `json:"agentProxyPreviousSourceMode,omitempty"`
+	AgentProxyPreviousNodeID     string     `json:"agentProxyPreviousNodeId,omitempty"`
+	AgentProxyNodeID             string     `json:"agentProxyNodeId,omitempty"`
+	AgentProxyInternal           bool       `json:"agentProxyInternal,omitempty"`
+	AgentProxySourceMode         string     `json:"agentProxySourceMode,omitempty"`
+	AgentProxySupport            bool       `json:"agentProxySupport,omitempty"`
+	FirewallMode                 string     `json:"firewallMode"`
+	ManualFirewallSupport        bool       `json:"manualFirewallSupport"`
+	Status                       string     `json:"status"`
+	OS                           string     `json:"os"`
+	Arch                         string     `json:"arch"`
+	AgentVersion                 string     `json:"agentVersion"`
+	AgentBuild                   string     `json:"agentBuild"`
+	AgentSelfUpdate              bool       `json:"agentSelfUpdate"`
+	NodeFirewallPolicies         bool       `json:"nodeFirewallPolicies"`
+	MultiUserStats               bool       `json:"multiUserStats"`
+	ForwardTCPUDP                bool       `json:"forwardTcpUdp"`
+	ForwardSupport               bool       `json:"forwardSupport"`
+	ShadowTLSAuth                bool       `json:"shadowTlsAuth"`
+	SnellFixedPort               bool       `json:"snellFixedPort"`
+	SnellV6                      bool       `json:"snellV6"`
+	ReleaseKeyPinned             bool       `json:"releaseKeyPinned"`
+	AppliedRevision              int64      `json:"appliedRevision"`
+	CoreVersion                  string     `json:"coreVersion"`
+	CoreBuild                    string     `json:"coreBuild"`
+	CoreSelfUpdate               bool       `json:"coreSelfUpdate"`
+	UFWStatus                    string     `json:"ufwStatus"`
+	StatsStatus                  string     `json:"statsStatus"`
+	NetworkRx                    int64      `json:"networkRx"`
+	NetworkTx                    int64      `json:"networkTx"`
+	LastSeen                     *time.Time `json:"lastSeen"`
+	Revision                     int64      `json:"revision"`
 	// Reported by the agent; never edited by the administrator.
 	DetectedIPv4     string   `json:"detectedIpv4"`
 	DetectedIPv6     string   `json:"detectedIpv6"`
@@ -89,18 +94,20 @@ type Node struct {
 	FirewallSources string `json:"firewallSources"`
 	// Direct allows clients to connect to the node itself, so it can be put
 	// into a subscription as is. Without it the node is reachable only through
-	// routes: its port admits nothing but their last hops (RouteSources).
+	// routes and explicitly assigned Agent proxies.
 	Direct bool `json:"direct"`
 	// RouteSources is computed by the panel from the routes ending at this
 	// node: the addresses their last hops connect from.
-	RouteSources string    `json:"routeSources"`
-	Enabled      bool      `json:"enabled"`
-	Deleting     bool      `json:"deleting"`
-	Status       string    `json:"status"`
-	Error        string    `json:"error"`
-	Uplink       int64     `json:"uplink"`
-	Downlink     int64     `json:"downlink"`
-	CreatedAt    time.Time `json:"createdAt"`
+	RouteSources string `json:"routeSources"`
+	// Panel metadata only; converted to FirewallSources before sending jobs.
+	AgentProxySources string    `json:"agentProxySources,omitempty"`
+	Enabled           bool      `json:"enabled"`
+	Deleting          bool      `json:"deleting"`
+	Status            string    `json:"status"`
+	Error             string    `json:"error"`
+	Uplink            int64     `json:"uplink"`
+	Downlink          int64     `json:"downlink"`
+	CreatedAt         time.Time `json:"createdAt"`
 }
 
 // NodeTemplate stores reusable node settings without a server-specific address

@@ -28,6 +28,7 @@ import {
 import "./style.css";
 import OfflineManager from "./components/OfflineManager";
 import AgentDownloads from "./components/AgentDownloads";
+import ManagementMigration from "./components/ManagementMigration";
 import { screenshotText, screenshotView } from "./components/screenshot";
 // Heavy / rarely-used UI split out of the main bundle and lazy-loaded:
 // TrafficChart (dashboard + traffic modals) and QRCode (TOTP setup only).
@@ -696,6 +697,17 @@ function App() {
   const nodeCoreMissing = !!selectedNodeServer && canHostNodes(selectedNodeServer) && !selectedNodeServer.coreBuild &&
     (!!selectedNodeServer.agentVersion || !selectedNodeServer.roles?.includes("exit"));
   const selectedFormServer = servers.find((s) => s.id === serverForm.id);
+  const serverManagementChanged = !!selectedFormServer && (selectedFormServer.managementMode === "offline") !== (serverForm.managementMode === "offline");
+  const serverProxyEnabled = serverForm.managementMode !== "offline" && !!serverForm.roles?.includes("entry");
+  const serverProxyOptions = nodes.filter((n) => n.protocol === "socks5").map((node) => {
+    const host = servers.find((s) => s.id === node.serverId);
+    const reason = node.serverId === serverForm.id ? "不能代理自身" : node.deleting ? "正在删除" : !node.enabled ? "已停用" :
+      !host ? "服务器不存在" : host.managementMode === "offline" ? "代理服务器为离线管理" :
+      manualFirewall(host) ? "代理服务器需 UFW 托管" : host.ufwStatus !== "active" ? "代理服务器未启用 UFW" :
+      host.firewallConflict ? "代理服务器存在防火墙冲突" : node.firewallPolicy === "manual" ? "节点端口需由 UFW 管理" :
+      node.status !== "active" ? "配置尚未成功应用" : "";
+    return { node, host, reason };
+  });
   const serverFormCoreMissing = !!serverForm.id && !!serverForm.agentVersion && canHostNodes(serverForm) && !selectedFormServer?.coreBuild;
   const serverFormCoreInstalling = operations.some((o) => o.serverId === serverForm.id &&
     ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status));
@@ -731,9 +743,10 @@ function App() {
   const nodeAccessText = (n: Node) => {
     if (manualFirewall(servers.find((s) => s.id === n.serverId))) return "外部管理（来源限制自行配置）";
     const routeHops = (n.routeSources || "").split(",").filter(Boolean);
-    if (!n.direct) return routeHops.length ? "链路：" + routeHops.join("、") : "不开放（无链路）";
+    const agentSources = (n.agentProxySources || "").split(",").filter(Boolean);
+    if (!n.direct) return [routeHops.length ? "链路：" + routeHops.join("、") : "", agentSources.length ? "Agent：" + agentSources.join("、") : ""].filter(Boolean).join("；") || "不开放（无链路或 Agent 使用）";
     if (n.firewallPolicy === "manual") return "手动管理";
-    if (n.firewallPolicy === "restricted") return [...n.firewallSources.split(","), ...routeHops].join("、");
+    if (n.firewallPolicy === "restricted") return [...new Set([...n.firewallSources.split(","), ...routeHops, ...agentSources])].filter(Boolean).join("、");
     return "任意来源";
   };
   const serverName = useCallback((id: string) =>
@@ -949,7 +962,15 @@ function App() {
     e.preventDefault();
     const ok = await act(async () => {
       if (serverForm.id) {
-        await mutation("/api/servers/" + serverForm.id, "PATCH", serverForm);
+        const saved = await mutation<Server>("/api/servers/" + serverForm.id, "PATCH", serverForm);
+        if (serverManagementChanged) {
+          setModal(null);
+          if (saved.managementMode === "offline") { setOfflineServer(saved); return; }
+          const guide = await mutation<InstallGuide>("/api/servers/" + saved.id + "/enrollment", "POST");
+          setInstallMethod("offline");
+          setInstallArch(saved.arch === "arm64" ? "arm64" : "amd64");
+          setInstallInfo({ ...guide, serverName: saved.name });
+        }
       } else {
         const result = await mutation<InstallGuide & { server: Server }>(
           "/api/servers",
@@ -963,7 +984,7 @@ function App() {
         setInstallInfo({ ...result, serverName: serverForm.name || "新服务器" });
         return;
       }
-    }, serverFormCoreMissing ? "服务器类型已保存；尚未安装 sing-box，请在服务器列表安装后创建节点" : "服务器已保存");
+    }, serverManagementChanged ? "管理方式已保存；请按迁移指南在目标机完成切换" : serverFormCoreMissing ? "服务器类型已保存；尚未安装 sing-box，请在服务器列表安装后创建节点" : "服务器已保存");
     if (ok && serverForm.id) close();
   };
   const submitNode = async (e: React.FormEvent) => {
@@ -1271,7 +1292,7 @@ function App() {
       [...records].sort((a, b) => a.id.localeCompare(b.id)).forEach((record, i) => { add(record.name, `${label} ${i + 1}`); add(record.id, "[标识已隐藏]"); add(record.id.slice(0, 8), "[标识已隐藏]"); });
     }
     for (const server of servers) for (const value of [server.ipv4, server.ipv6, server.detectedIpv4, server.detectedIpv6, server.domain, server.internalAddress, server.notes, server.tags]) add(value);
-    for (const node of nodes) for (const value of [node.publishAddress, node.shadowTlsHost, node.tlsName, node.firewallSources, node.routeSources, node.error]) add(value);
+    for (const node of nodes) for (const value of [node.publishAddress, node.shadowTlsHost, node.tlsName, node.firewallSources, node.routeSources, node.agentProxySources, node.error]) add(value);
     for (const forward of forwards) { forward.targets?.forEach((target) => add(target.host)); add(forward.firewallSources); add(forward.error); }
     customers.forEach((customer) => add(customer.notes));
     routes.forEach((route) => add(route.notes));
@@ -1800,7 +1821,7 @@ function App() {
                         <span className="mono">:{n.port}</span>
                         {n.protocol === "snell" && n.shadowTlsHost && <small>ShadowTLS v3 · {n.shadowTlsHost}</small>}
                         {n.protocol === "snell" && !n.shadowTlsHost && <small className="dangerText">旧节点未启用 ShadowTLS，请编辑节点升级</small>}
-                        <small>{n.direct ? "允许直连" : "仅链路访问"}</small>
+                        <small>{n.direct ? "允许直连" : n.agentProxySources ? "链路 / Agent 访问" : "仅链路访问"}</small>
                       </td>
                       <td>{bytes(n.uplink)}</td>
                       <td>{bytes(n.downlink)}</td>
@@ -2881,6 +2902,8 @@ function App() {
               <button type="button" disabled={!installInfo.offlineInstall} title={!installInfo.offlineInstall ? "请更新后端后重新生成接入命令" : ""} aria-pressed={installMethod === "offline"} onClick={() => setInstallMethod("offline")}>手工安装</button>
               <button type="button" disabled={!installInfo.standaloneInstall} title={!installInfo.standaloneInstall ? "请更新后端后重新生成接入命令" : ""} aria-pressed={installMethod === "standalone"} onClick={() => setInstallMethod("standalone")}>完全离线转发</button>
             </div>
+            {installMethod !== "standalone" && installInfo.offlineInstall?.proxyNotice && <p className="hint commandBox">{installInfo.offlineInstall.proxyNotice}</p>}
+            {installMethod !== "standalone" && <ManagementMigration command={installInfo.offlineInstall?.migrationCommand} onCopy={(v) => void copy(v)} />}
             {installMethod === "online" ? <div className="commandBox">
               <strong>在「{installInfo.serverName}」服务器上运行以下命令</strong>
               <p className="hint">命令 10 分钟内有效。运行后会从面板下载并校验文件、接入 Agent；修复时 Agent 会重启，运行中的 sing-box 也可能重启。</p>
@@ -3002,7 +3025,7 @@ function App() {
                     </Field>
                     <div className="serverFormWide">
                       <Field label="管理方式">
-                        <select value={serverForm.managementMode || "online"} disabled={!!serverForm.agentVersion || servers.find((s) => s.id === serverForm.id)?.managementMode === "offline"} onChange={(e) => {
+                        <select aria-label="管理方式" value={serverForm.managementMode || "online"} onChange={(e) => {
                           const offline = e.target.value === "offline";
                           const roles = (serverForm.roles || []).filter((r) => r !== "exit");
                           setServerForm({
@@ -3018,7 +3041,8 @@ function App() {
                           <option value="offline">离线管理（导出配置 / 本地应用）</option>
                         </select>
                       </Field>
-                      <p className="serverFieldHelp">离线服务器仍可参与链路和订阅，仅支持入口、线路、中转。首次接入或导出配置后，管理方式固定。</p>
+                      <p className="serverFieldHelp">在线 Agent 可直接或通过 SOCKS5 连接面板；离线管理通过导出配置在本机应用，仅支持入口、线路、中转。</p>
+                      {serverManagementChanged && <p className="banner warning" role="status">保存后旧 Agent 凭据失效，页面会打开迁移指南。需在目标机停用旧服务并重新安装；保留服务器档案、链路和转发，安装期间会中断转发。已有节点须先删除才能改为离线管理。</p>}
                     </div>
                     <div className="serverFormWide">
                       <fieldset className="serverRoles">
@@ -3054,6 +3078,32 @@ function App() {
                         </div>
                       </div>}
 
+                    </div>
+                    <div className="serverFormWide">
+                      <Field label="Agent 连接面板的 SOCKS5 节点">
+                        <select aria-label="Agent 连接面板的 SOCKS5 节点" disabled={!serverProxyEnabled} value={serverForm.agentProxyNodeId || ""} onChange={(e) => setServerForm({ ...serverForm, agentProxyNodeId: e.target.value, agentProxyInternal: false })}>
+                          <option value="">直接连接面板（不使用代理）</option>
+                          {serverProxyOptions.map(({ node, host, reason }) => <option value={node.id} key={node.id} disabled={!!reason}>{node.name} · {host?.name || "未知服务器"} :{node.port}{reason ? `（${reason}）` : ""}</option>)}
+                        </select>
+                      </Field>
+                      {!serverProxyEnabled && <p className="serverFieldHelp">仅在线管理的入口可通过 SOCKS5 连接面板。<button type="button" className="textButton" onClick={() => setServerForm({ ...serverForm, managementMode: "online", roles: Array.from(new Set([...(serverForm.roles || []), "entry" as Role])) })}>设为在线入口</button></p>}
+                      {!serverProxyOptions.length && <p className="serverFieldHelp">暂无 SOCKS5 节点。请先在已启用 UFW 的在线中转或落地服务器创建 SOCKS5 节点。</p>}
+                      {!!serverProxyOptions.length && !serverProxyOptions.some((o) => !o.reason) && <p className="serverFieldHelp">当前 SOCKS5 节点均不可用，请按各选项后的原因修复，再点击右上角刷新。</p>}
+                      {serverForm.agentProxyNodeId && <Field label="入口连接 SOCKS5 的地址">
+                        <select aria-label="入口连接 SOCKS5 的地址" value={serverForm.agentProxyInternal ? "internal" : "public"} onChange={(e) => setServerForm({ ...serverForm, agentProxyInternal: e.target.value === "internal" })}>
+                          <option value="public">SOCKS5 节点发布地址（公网 / 域名）</option>
+                          <option value="internal" disabled={!servers.find((s) => s.id === nodes.find((n) => n.id === serverForm.agentProxyNodeId)?.serverId)?.internalAddress}>SOCKS5 所在服务器的内网地址</option>
+                        </select>
+                      </Field>}
+                      {serverForm.agentProxyNodeId && <Field label="SOCKS5 防火墙放行来源">
+                        <select aria-label="SOCKS5 防火墙放行来源" value={serverForm.agentProxySourceMode || "auto"} onChange={(e) => setServerForm({ ...serverForm, agentProxySourceMode: e.target.value as Server["agentProxySourceMode"] })}>
+                          <option value="auto">跟随连接地址类型</option>
+                          <option value="public">入口公网 IP</option>
+                          <option value="internal">入口内网 IP</option>
+                        </select>
+                        <p className="serverFieldHelp">这是 SOCKS5 服务器实际看到的入口来源 IP，可独立于上方连接地址选择。选择内网来源时，请在下方填写这台入口服务器的内网 IP。仅改来源规则无需重装或重启入口 Agent。</p>
+                      </Field>}
+                      <p className="serverFieldHelp">代理用于 Agent 接入、心跳、任务与下载，与节点“允许直连”无关。候选节点须已启用、配置已生效，且其服务器已启用 UFW、没有防火墙冲突。面板按所选入口来源 IP 自动放行；经过 NAT 时请填写实际出口 IP。已有在线入口须支持 Agent 0.6.10 的代理功能。</p>
                     </div>
                   </div>
                 </section>
@@ -3093,21 +3143,6 @@ function App() {
                         }
                       />
                     </Field>
-                    {serverForm.roles?.includes("entry") && serverForm.managementMode !== "offline" && <div className="serverFormWide">
-                      <Field label="Agent 连接面板的 SOCKS5 节点">
-                        <select value={serverForm.agentProxyNodeId || ""} onChange={(e) => setServerForm({ ...serverForm, agentProxyNodeId: e.target.value, agentProxyInternal: false })}>
-                          <option value="">直接连接面板</option>
-                          {nodes.filter((n) => n.id === serverForm.agentProxyNodeId || (n.protocol === "socks5" && n.enabled && n.direct && !n.deleting && n.status === "active" && n.serverId !== serverForm.id && servers.some((s) => s.id === n.serverId && !manualFirewall(s) && s.ufwStatus === "active"))).map((n) => <option value={n.id} key={n.id}>{n.name} · {servers.find((s) => s.id === n.serverId)?.name} :{n.port}</option>)}
-                        </select>
-                      </Field>
-                      {serverForm.agentProxyNodeId && <Field label="入口连接 SOCKS5 的地址">
-                        <select value={serverForm.agentProxyInternal ? "internal" : "public"} onChange={(e) => setServerForm({ ...serverForm, agentProxyInternal: e.target.value === "internal" })}>
-                          <option value="public">SOCKS5 节点发布地址（公网 / 域名）</option>
-                          <option value="internal" disabled={!servers.find((s) => s.id === nodes.find((n) => n.id === serverForm.agentProxyNodeId)?.serverId)?.internalAddress}>SOCKS5 所在服务器的内网地址</option>
-                        </select>
-                      </Field>}
-                      <p className="serverFieldHelp">用于 Agent 接入、上报、任务与升级下载。入口无法直连面板时，可经能访问面板的 SOCKS5 服务器联网。先创建已启用 UFW、允许直连的 SOCKS5 节点；内网互通时选择内网地址。已有入口须先升级 Agent 至 0.6.10。</p>
-                    </div>}
                     <div className="serverFormWide">
                       <Field label="防火墙管理">
                         <select disabled={serverForm.managementMode === "offline"} value={serverForm.firewallMode || "ufw"} onChange={(e) => setServerForm({ ...serverForm, firewallMode: e.target.value as "ufw" | "manual" })}>
@@ -3302,7 +3337,7 @@ function App() {
                       <option value="manual" disabled={nodeForm.protocol === "socks5"}>不生成自动规则，手动管理</option>
                     </select>
                   </Field>}
-                  {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && !nodeForm.direct && <p className="hint">未开启直连：节点端口只放行以它为终点的链路最后一跳{nodeForm.routeSources ? `（当前 ${nodeForm.routeSources.split(",").join("、")}）` : "；还没有链路时端口不对外开放"}。</p>}
+                  {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && !nodeForm.direct && <p className="hint">未开启客户端直连：仅放行链路最后一跳和使用此 SOCKS5 的入口 Agent。{nodeForm.routeSources ? `链路来源：${nodeForm.routeSources.split(",").join("、")}。` : ""}{nodeForm.agentProxySources ? `Agent 来源：${nodeForm.agentProxySources.split(",").join("、")}。` : ""}{!nodeForm.routeSources && !nodeForm.agentProxySources ? "未被链路或 Agent 使用时，端口不对外开放。" : ""}</p>}
                   {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && nodeForm.direct && nodeForm.firewallPolicy === "restricted" && (
                     <Field label="允许的来源 IP / CIDR *">
                       <textarea
@@ -3447,7 +3482,7 @@ function App() {
                   {!selectedNodeServer?.coreSelfUpdate && <p>请先接入支持核心安装的 Agent。</p>}
                   {!!selectedNodeServer?.coreSelfUpdate && !coreReleases[selectedNodeServer?.arch || ""] && <p>面板缺少该架构的 sing-box 发布文件。</p>}
                 </div>}
-                {nodeForm.protocol === "socks5" && <p className="hint">SOCKS5 支持 TCP，强制用户名密码认证，服务器必须启用 UFW。供入口 Agent 使用时需打开“允许直连”；如限制来源，请放行入口实际出口 IP。仅在可信网络中使用，SOCKS5 本身不加密。</p>}
+                {nodeForm.protocol === "socks5" && <p className="hint">SOCKS5 支持 TCP，强制用户名密码认证，服务器必须启用 UFW。入口 Agent 可独立使用此节点，无需打开“允许直连”，面板会为它的来源 IP 自动添加放行规则。仅在可信网络中使用，SOCKS5 本身不加密。</p>}
                 {nodeForm.protocol === "socks5" && (manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) || servers.find((s) => s.id === nodeForm.serverId)?.ufwStatus !== "active") && <div className="banner warning" role="status">请先将该服务器设置为 UFW 托管，并在服务器列表安全初始化防火墙，再提交 SOCKS5 节点。</div>}
                 {templateLoading && <p className="hint">正在读取模板密码…</p>}
                 <button className="primary submit" disabled={templateLoading || nodeCoreMissing || (nodeForm.protocol === "socks5" && (manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) || servers.find((s) => s.id === nodeForm.serverId)?.ufwStatus !== "active"))}>提交配置</button>

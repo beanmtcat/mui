@@ -21,10 +21,12 @@ type installDownload struct {
 }
 
 type offlineInstallGuide struct {
-	Command       string            `json:"command"`
-	Downloads     []installDownload `json:"downloads"`
-	Signed        bool              `json:"signed"`
-	ExampleConfig string            `json:"exampleConfig,omitempty"`
+	MigrationCommand string            `json:"migrationCommand,omitempty"`
+	ProxyNotice      string            `json:"proxyNotice,omitempty"`
+	Command          string            `json:"command"`
+	Downloads        []installDownload `json:"downloads"`
+	Signed           bool              `json:"signed"`
+	ExampleConfig    string            `json:"exampleConfig,omitempty"`
 }
 
 const manualInstallDirectory = "mui-install"
@@ -46,7 +48,10 @@ func (a *App) offlineInstallAt(publicURL, serverID, token string, server shared.
 	if a.releaseKeyB64 != "" {
 		files = append(files, "SHA256SUMS.sig")
 	}
-	guide := offlineInstallGuide{Downloads: []installDownload{}, Signed: a.releaseKeyB64 != ""}
+	guide := offlineInstallGuide{Downloads: []installDownload{}, Signed: a.releaseKeyB64 != "", MigrationCommand: managementMigrationCommand(server)}
+	if server.AgentProxyNodeID != "" {
+		guide.ProxyNotice = "已按入口所选的公网 / 内网来源生成 SOCKS5 放行规则，不要求节点开启客户端直连。请先在操作记录中确认代理服务器的配置任务成功，再执行接入命令。来源类型可独立于 SOCKS5 连接地址设置；经过 NAT 时请在服务器档案填写实际出口 IP。"
+	}
 	guide.Downloads = installDownloads(publicURL, files)
 	proxyPrelude, proxyFlag, proxyErr := a.installProxyPrelude(server, false)
 	if proxyErr != nil {

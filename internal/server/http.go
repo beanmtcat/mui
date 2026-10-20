@@ -1007,7 +1007,7 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		Provider: in.Provider, Tags: in.Tags, Notes: in.Notes,
 		IPv4: in.IPv4, IPv6: in.IPv6, Domain: in.Domain, InternalAddress: strings.TrimSpace(in.InternalAddress),
 		Status: "pending", UFWStatus: "unknown",
-		FirewallMode: in.FirewallMode, ManagementMode: in.ManagementMode, AgentProxyNodeID: in.AgentProxyNodeID, AgentProxyInternal: in.AgentProxyInternal,
+		FirewallMode: in.FirewallMode, ManagementMode: in.ManagementMode, AgentProxyNodeID: in.AgentProxyNodeID, AgentProxyInternal: in.AgentProxyInternal, AgentProxySourceMode: in.AgentProxySourceMode,
 	}
 	if err = validInternalAddress(srv.InternalAddress); err != nil {
 		errorJSON(w, 400, err.Error())
@@ -1040,6 +1040,12 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.Store.Audit("server.create", srv.ID, srv.Name)
+	if srv.AgentProxyNodeID != "" {
+		if err = a.syncRoutes(); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+	}
 	publicURL := a.publicURLForRequest(r)
 	if shared.OfflineManaged(srv) {
 		writeJSON(w, 201, map[string]any{"server": srv})
@@ -1259,6 +1265,10 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
+		if err = a.syncRoutes(); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
 		a.Store.Audit("server.delete", id, old.Name)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
@@ -1271,42 +1281,43 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		in.ManagementMode = old.ManagementMode
 	}
 	managementChanged := shared.OfflineManaged(old) != shared.OfflineManaged(in)
-	if managementChanged {
-		var agentHash string
-		if err := a.Store.DB.QueryRow(`SELECT agent_hash FROM mui_servers WHERE id=$1`, id).Scan(&agentHash); err != nil {
-			errorJSON(w, 500, err.Error())
-			return
-		}
-		if old.AgentVersion != "" || agentHash != "" || old.OfflineExportedAt != nil {
-			errorJSON(w, 409, "已接入或已导出离线配置的服务器不能更改管理方式，请新建独立服务器档案")
-			return
-		}
-	}
 	if in.FirewallMode == "" {
 		in.FirewallMode = old.FirewallMode
 	}
-
-	if err := a.checkFirewallModeChange(old, in.FirewallMode); err != nil {
-		errorJSON(w, 409, err.Error())
+	if !shared.ValidFirewallMode(in.FirewallMode) {
+		errorJSON(w, 400, "防火墙管理模式无效")
 		return
+	}
+
+	if !managementChanged {
+		if err := a.checkFirewallModeChange(old, in.FirewallMode); err != nil {
+			errorJSON(w, 409, err.Error())
+			return
+		}
 	}
 	modeChanged := shared.ManualFirewall(old.FirewallMode) != shared.ManualFirewall(in.FirewallMode)
 	if in.AgentProxyNodeID == "" {
 		in.AgentProxyInternal = false
+		in.AgentProxySourceMode = ""
 	}
 	proxyChanged := old.AgentProxyNodeID != in.AgentProxyNodeID || old.AgentProxyInternal != in.AgentProxyInternal
-	if proxyChanged && old.AgentProxySwitchPending && (in.AgentProxyNodeID != old.AgentProxyPreviousNodeID || in.AgentProxyInternal != old.AgentProxyPreviousInternal) {
+	if !managementChanged && proxyChanged && old.AgentProxySwitchPending && (in.AgentProxyNodeID != old.AgentProxyPreviousNodeID || in.AgentProxyInternal != old.AgentProxyPreviousInternal) {
 		errorJSON(w, 409, "Agent 代理切换尚未成功应用；请等待完成，或先改回之前的代理再重试")
 		return
 	}
 	before := old
-	if proxyChanged {
+	if proxyChanged && !managementChanged {
 		old.AgentProxyPreviousNodeID, old.AgentProxyPreviousInternal = old.AgentProxyNodeID, old.AgentProxyInternal
+		old.AgentProxyPreviousSourceMode = old.AgentProxySourceMode
 		old.AgentProxySwitchPending = true
 	}
 	old.AgentProxyNodeID, old.AgentProxyInternal = in.AgentProxyNodeID, in.AgentProxyInternal
+	old.AgentProxySourceMode = in.AgentProxySourceMode
 	old.FirewallMode = in.FirewallMode
 	old.ManagementMode = in.ManagementMode
+	if managementChanged {
+		resetManagementRuntime(&old, before)
+	}
 	old.Name = in.Name
 	roles, err := validRoles(in.Roles)
 	if err != nil {
@@ -1329,6 +1340,10 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if len(nodes) > 0 {
+			if shared.OfflineManaged(candidate) {
+				errorJSON(w, 409, "该服务器仍有节点，不能切换为离线管理；请先删除所有节点并等待配置应用完成")
+				return
+			}
 			errorJSON(w, 409, "该服务器仍有节点，请保留中转或落地类型，或先删除所有节点")
 			return
 		}
@@ -1378,15 +1393,18 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if err = a.Store.PutServer(old); err != nil {
-		errorJSON(w, 500, err.Error())
-		return
-	}
 	if managementChanged {
-		if _, err = a.Store.DB.Exec(`UPDATE mui_servers SET enroll_hash='',enroll_expires=0 WHERE id=$1`, id); err != nil {
-			errorJSON(w, 500, err.Error())
+		err = a.saveManagementChange(old)
+	} else {
+		err = a.Store.PutServer(old)
+	}
+	if err != nil {
+		if errors.Is(err, errManagementBusy) {
+			errorJSON(w, 409, err.Error())
 			return
 		}
+		errorJSON(w, 500, err.Error())
+		return
 	}
 	if modeChanged || managementChanged || proxyChanged {
 		if err = a.queueApplyLocked(id, "nodes.apply"); err != nil {
@@ -1637,6 +1655,7 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 	n.ShadowTLSHost = strings.TrimSpace(n.ShadowTLSHost)
 	n.ID = ID()
 	n.RouteSources = "" // No route ends here yet.
+	n.AgentProxySources = ""
 	n.CreatedAt = time.Now()
 	n.Status = "pending"
 	n.Deleting = false
@@ -1904,6 +1923,7 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 	n.ID = old.ID
 	n.ServerID = old.ServerID
 	n.RouteSources = old.RouteSources
+	n.AgentProxySources = old.AgentProxySources
 	n.CreatedAt = old.CreatedAt
 	n.Status = "pending"
 	n.Deleting = false
@@ -3086,11 +3106,31 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 	for i, sub := range subscriptions {
 		subNodes[i] = subscriptionNodeIDs(sub, routes)
 	}
+	proxyWorld := routeWorld{servers: map[string]shared.Server{}, nodes: map[string]shared.Node{}}
+	if slices.ContainsFunc(nodes, func(n shared.Node) bool { return n.Protocol == "socks5" }) {
+		servers, err := a.Store.Servers()
+		if err != nil {
+			return state, err
+		}
+		for _, s := range servers {
+			proxyWorld.servers[s.ID] = s
+		}
+		for _, n := range nodes {
+			proxyWorld.nodes[n.ID] = n
+		}
+	}
 	for _, n := range nodes {
 		if n.Deleting {
 			continue
 		}
+		// Compute from current assignments even before syncRoutes persists its
+		// display cache. Closing client direct access must never queue a job
+		// that temporarily removes existing Agents' access.
+		n.AgentProxySources = proxyWorld.nodeAgentProxySources(n.ID)
 		n.FirewallPolicy, n.FirewallSources = effectiveNodeAccess(n)
+		// This is panel-only metadata. Older installed Agents need only the
+		// normalized firewall sources, so signed jobs introduce no new field.
+		n.AgentProxySources = ""
 		if shared.ManualFirewall(server.FirewallMode) {
 			n.FirewallPolicy, n.FirewallSources = "manual", ""
 		}
@@ -3456,6 +3496,17 @@ func (a *App) agentEnroll(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 401, "接入令牌无效或已过期")
 		return
 	}
+	if srv, err := a.Store.Server(in.ServerID); err == nil && srv.AgentProxyNodeID != "" {
+		ready, err := a.agentProxyAccessLive(srv)
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		if !ready {
+			errorJSON(w, 409, "SOCKS5 服务器尚未确认 Agent 来源放行规则，请等待该服务器的配置任务成功后重试；接入令牌尚未使用")
+			return
+		}
+	}
 	token := Token()
 	result, err := a.Store.DB.Exec(`UPDATE mui_servers SET agent_hash=$1,agent_signs=0,enroll_hash='',enroll_expires=0 WHERE id=$2 AND enroll_hash=$3 AND enroll_expires>=$4`, Hash(token), in.ServerID, expected, time.Now().Unix())
 	if err != nil {
@@ -3565,6 +3616,14 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 	if shared.ManualFirewall(server.FirewallMode) && !server.ManualFirewallSupport {
 		allowApply = false
 	}
+	if allowApply && server.AgentProxyNodeID != "" {
+		ready, err := a.agentProxyAccessLive(server)
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		allowApply = ready
+	}
 	job, err := a.Store.ClaimJob(id, allowApply)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
@@ -3661,6 +3720,7 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		server.Arch = in.Arch
 	}
 	if in.AgentVersion != "" {
+		server.ManagementMigrationFrom = ""
 		server.AgentVersion = in.AgentVersion
 		server.NodeFirewallPolicies = in.NodeFirewallPolicies
 		server.ManualFirewallSupport = in.ManualFirewallSupport
@@ -3786,12 +3846,17 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if strings.HasSuffix(op.Kind, ".apply") && in.JobStatus == "success" && op.Revision == server.Revision {
+			proxyChanged := server.AgentProxyPreviousNodeID != "" || server.AgentProxySwitchPending
 			server.AgentProxyPreviousNodeID = ""
 			server.AgentProxyPreviousInternal = false
+			server.AgentProxyPreviousSourceMode = ""
 			server.AgentProxySwitchPending = false
 			if err = a.Store.PutServer(server); err != nil {
 				errorJSON(w, 500, err.Error())
 				return
+			}
+			if proxyChanged {
+				defer func() { go a.syncRoutesInBackground() }()
 			}
 		}
 		if strings.HasSuffix(op.Kind, ".apply") && in.JobStatus == "success" && op.Deployed != nil {
