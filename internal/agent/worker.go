@@ -472,9 +472,9 @@ func Run(ctx context.Context) error {
 			}
 			now := time.Now()
 			report := shared.AgentReport{OS: osRelease(), Arch: runtime.GOARCH, AgentVersion: Version, AgentBuild: build, BuildDigest: build,
-				ManualFirewallSupport: host.ManualFirewallSupport, AgentSelfUpdate: host.AgentSelfUpdate, NodeFirewallPolicies: host.NodeFirewallPolicies, MultiUserStats: host.MultiUserStats, ForwardSupport: host.ForwardSupport, ForwardTCPUDP: host.ForwardTCPUDP, ShadowTLSAuth: host.ShadowTLSAuth, SnellFixedPort: host.SnellFixedPort, SnellV6: host.SnellV6, AgentProxySupport: host.AgentProxySupport, ReleaseKeyPinned: host.ReleaseKeyPinned,
+				ManualFirewallSupport: host.ManualFirewallSupport, AgentSelfUpdate: host.AgentSelfUpdate, NodeFirewallPolicies: host.NodeFirewallPolicies, MultiUserStats: host.MultiUserStats, ForwardSupport: host.ForwardSupport, ForwardTCPUDP: host.ForwardTCPUDP, ShadowTLSAuth: host.ShadowTLSAuth, SnellFixedPort: host.SnellFixedPort, SnellV6: host.SnellV6, AgentProxySupport: host.AgentProxySupport, OutboundBindingSupport: host.OutboundBindingSupport, ReleaseKeyPinned: host.ReleaseKeyPinned,
 				CoreVersion: coreVersions.get(), CoreBuild: coreBuild, CoreDigest: coreBuild, CoreSelfUpdate: host.CoreSelfUpdate,
-				UFWStatus: host.UFW, StatsStatus: statsStatus, Traffic: state.Pending[:batchSize], UserTraffic: state.UserPending[:userBatch], ForwardTraffic: host.ForwardTraffic, ServerTraffic: state.NetworkPending[:networkBatch], Connections: pendingConnections,
+				UFWStatus: host.UFW, StatsStatus: statsStatus, Traffic: state.Pending[:batchSize], UserTraffic: state.UserPending[:userBatch], ForwardTraffic: host.ForwardTraffic, ServerTraffic: state.NetworkPending[:networkBatch], Connections: pendingConnections, ForwardConnections: host.ForwardConnections,
 				IPv4: ipv4, IPv6: ipv6, AgentTime: &now, HostReported: true, SSHPorts: host.SSHPorts, FirewallConflict: host.Conflict, UFWRules: host.Rules}
 			headers := map[string]string{"X-Server-ID": c.ServerID, "Authorization": "Bearer " + c.Token}
 			if err := sendJSON(ctx, client, "POST", c.URL+"/agent/report", report, headers, nil, c.Token); err == nil {

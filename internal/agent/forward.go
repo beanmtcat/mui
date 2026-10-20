@@ -114,6 +114,7 @@ func RunForward(ctx context.Context) error {
 		return err
 	}
 	defer os.Remove(ForwardReady)
+	defer os.Remove(ForwardConnections)
 	// SIGHUP applies a changed rule file in place: rules that did not change keep
 	// their listeners and connections. The ready file is only rewritten after a
 	// reload that fully succeeded, which is how the helper learns the outcome.
@@ -147,7 +148,12 @@ func RunForward(ctx context.Context) error {
 	defer func() { stopStats(); <-statsDone; _ = os.Remove(ForwardStats) }()
 	go func() {
 		defer close(statsDone)
-		runForwardStats(statsCtx, ForwardStats, instanceID, service.Snapshot, 5*time.Second)
+		runForwardStats(statsCtx, ForwardStats, instanceID, func() map[string]forward.Counter {
+			if err := writeForwardConnections(ForwardConnections, service.ConnectionSnapshot()); err != nil {
+				fmt.Fprintln(os.Stderr, "forward clients:", err)
+			}
+			return service.Snapshot()
+		}, 5*time.Second)
 	}()
 	return service.Run(ctx)
 }

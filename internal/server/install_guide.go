@@ -50,7 +50,7 @@ func (a *App) offlineInstallAt(publicURL, serverID, token string, server shared.
 	}
 	guide := offlineInstallGuide{Downloads: []installDownload{}, Signed: a.releaseKeyB64 != "", MigrationCommand: managementMigrationCommand(server)}
 	if server.AgentProxyNodeID != "" {
-		guide.ProxyNotice = "已按入口所选的公网 / 内网来源生成 SOCKS5 放行规则，不要求节点开启客户端直连。请先在操作记录中确认代理服务器的配置任务成功，再执行接入命令。来源类型可独立于 SOCKS5 连接地址设置；经过 NAT 时请在服务器档案填写实际出口 IP。"
+		guide.ProxyNotice = "已按本机所选的公网 / 内网来源生成 SOCKS5 放行规则，不要求节点开启客户端直连。请先在操作记录中确认代理服务器的配置任务成功，再执行接入命令。来源类型可独立于 SOCKS5 连接地址设置；经过 NAT 时请在服务器档案填写实际出口 IP。"
 	}
 	guide.Downloads = installDownloads(publicURL, files)
 	proxyPrelude, proxyFlag, proxyErr := a.installProxyPrelude(server, false)

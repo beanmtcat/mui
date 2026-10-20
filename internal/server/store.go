@@ -343,6 +343,10 @@ var migrations = [][]string{
 		// The server document records only its latest exported revision.
 		`DROP TABLE mui_offline_exports`,
 	},
+	{
+		`CREATE TABLE mui_entry_connection_ips (server_id TEXT NOT NULL, route_id TEXT NOT NULL, node_id TEXT NOT NULL, ip TEXT NOT NULL, at_ms BIGINT NOT NULL, first_seen_ms BIGINT NOT NULL, PRIMARY KEY(server_id,route_id,node_id,ip))`,
+		`CREATE INDEX mui_entry_connection_ips_at ON mui_entry_connection_ips(at_ms)`,
+	},
 }
 
 func ID() string {
@@ -624,6 +628,9 @@ func (s *Store) PruneTraffic(before time.Time) error {
 		return err
 	}
 	if _, err := s.DB.Exec(`DELETE FROM mui_connection_ips WHERE at_ms<$1`, before.UnixMilli()); err != nil {
+		return err
+	}
+	if _, err := s.DB.Exec(`DELETE FROM mui_entry_connection_ips WHERE at_ms<$1`, before.UnixMilli()); err != nil {
 		return err
 	}
 	return nil

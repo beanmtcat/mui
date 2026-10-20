@@ -85,11 +85,11 @@ func (a *App) validateAgentProxySelection(s shared.Server) error {
 	if s.AgentProxyNodeID == "" {
 		return nil
 	}
-	if shared.OfflineManaged(s) || !shared.HasRole(s, shared.RoleEntry) {
-		return errors.New("仅在线管理的入口服务器可以设置 Agent SOCKS5 代理")
+	if shared.OfflineManaged(s) {
+		return errors.New("离线管理不使用 Agent SOCKS5 代理，请选择在线 Agent 管理方式")
 	}
 	if s.AgentVersion != "" && !s.AgentProxySupport {
-		return errors.New("请先将入口 Agent 升级至 0.6.10，再设置 SOCKS5 代理")
+		return errors.New("请先将该服务器的 Agent 升级至 0.6.10，再设置 SOCKS5 代理")
 	}
 	if _, err := a.agentProxy(s); err != nil {
 		return err
@@ -103,7 +103,7 @@ func (a *App) validateAgentProxySelection(s shared.Server) error {
 		return err
 	}
 	if len(agentProxySourceAddresses(s, n, host, s.AgentProxyInternal, s.AgentProxySourceMode)) == 0 && (!(n.Direct && n.FirewallPolicy == "all") || s.AgentProxySourceMode == "internal") {
-		return errors.New("无法生成 Agent 代理来源规则：选择内网来源时须填写入口的内网 IP，公网来源须填写入口实际出口 IP；地址族须与 SOCKS5 连接地址匹配")
+		return errors.New("无法生成 Agent 代理来源规则：选择内网来源时须填写本机的内网 IP，公网来源须填写本机实际出口 IP；地址族须与 SOCKS5 连接地址匹配")
 	}
 	world, err := a.loadRouteWorld()
 	if err != nil {
@@ -155,7 +155,7 @@ func (a *App) protectProxyNode(old, n shared.Node, password string, deleting boo
 	for _, s := range users {
 		names = append(names, s.Name)
 	}
-	return fmt.Errorf("该 SOCKS5 正供入口 %v 的 Agent 联网；请先为这些入口切换代理并等待配置应用，再修改连接参数、停用或删除", names)
+	return fmt.Errorf("该 SOCKS5 正供服务器 %v 的 Agent 联网；请先为这些服务器切换代理并等待配置应用，再修改连接参数、停用或删除", names)
 }
 
 func agentProxySourceAddresses(entry shared.Server, node shared.Node, host shared.Server, internal bool, sourceMode string) []string {
@@ -265,7 +265,7 @@ func (a *App) protectProxyHost(old, changed shared.Server, deleting bool) error 
 			continue
 		}
 		if deleting || old.IPv4 != changed.IPv4 || old.IPv6 != changed.IPv6 || old.Domain != changed.Domain || old.InternalAddress != changed.InternalAddress {
-			return errors.New("服务器上的 SOCKS5 正供入口 Agent 联网；请先切换入口代理并等待应用，再删除服务器或修改地址")
+			return errors.New("服务器上的 SOCKS5 正供其他服务器的 Agent 联网；请先切换这些服务器的代理并等待应用，再删除服务器或修改地址")
 		}
 	}
 	if shared.ManualFirewall(changed.FirewallMode) {

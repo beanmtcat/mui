@@ -7,13 +7,14 @@ import (
 )
 
 const (
-	ConfigDir     = "/etc/mui-agent"
-	DataDir       = "/var/lib/mui-agent"
-	SocketPath    = "/run/mui-agent/helper.sock"
-	ForwardDir    = "/etc/mui-forward"
-	ForwardConfig = ForwardDir + "/forwards.json"
-	ForwardReady  = "/run/mui-forward/ready"
-	ForwardStats  = "/run/mui-forward/stats.json"
+	ConfigDir          = "/etc/mui-agent"
+	DataDir            = "/var/lib/mui-agent"
+	SocketPath         = "/run/mui-agent/helper.sock"
+	ForwardDir         = "/etc/mui-forward"
+	ForwardConfig      = ForwardDir + "/forwards.json"
+	ForwardReady       = "/run/mui-forward/ready"
+	ForwardStats       = "/run/mui-forward/stats.json"
+	ForwardConnections = "/run/mui-forward/connections.json"
 	// The core runs under its own account so that a compromised proxy process
 	// can reach neither the agent token nor the privileged helper socket.
 	CoreDir    = "/etc/mui-core"
@@ -41,11 +42,13 @@ const (
 
 // HostStatus is what the privileged helper can see and the unprivileged agent cannot.
 type HostStatus struct {
-	UFW            string                       `json:"ufw"`
-	SSHPorts       []int                        `json:"sshPorts,omitempty"`
-	Conflict       string                       `json:"conflict,omitempty"`
-	Rules          []string                     `json:"rules,omitempty"`
-	ForwardTraffic []shared.ForwardTrafficPoint `json:"forwardTraffic,omitempty"`
+	ForwardConnections     []shared.ForwardConnectionPoint `json:"forwardConnections,omitempty"`
+	OutboundBindingSupport bool                            `json:"outboundBindingSupport"`
+	UFW                    string                          `json:"ufw"`
+	SSHPorts               []int                           `json:"sshPorts,omitempty"`
+	Conflict               string                          `json:"conflict,omitempty"`
+	Rules                  []string                        `json:"rules,omitempty"`
+	ForwardTraffic         []shared.ForwardTrafficPoint    `json:"forwardTraffic,omitempty"`
 	// Supported reports whether this helper implements the current
 	// panel protocol. The capability bits below describe what this
 	// build can do; the panel gates features on them.

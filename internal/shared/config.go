@@ -36,6 +36,9 @@ func ValidateNodeTemplate(t NodeTemplate) error {
 // check: an expired certificate must not stop the node from being disabled or the
 // rest of the server from being reconfigured.
 func ValidateNode(n Node, cert *Certificate, allowExpired bool) error {
+	if err := ValidateNodeOutbound(n); err != nil {
+		return err
+	}
 	if strings.TrimSpace(n.Name) == "" || len(n.Name) > 100 {
 		return errors.New("节点名称不能为空且不能超过 100 字符")
 	}
@@ -289,7 +292,36 @@ func CertificateCovers(certPEM, hostname string) bool {
 	return err == nil && cert.VerifyHostname(hostname) == nil
 }
 
-func SingBoxConfig(nodes []ManagedNode, certDir string) ([]byte, error) {
+func CertificateDNSNames(certPEM string) []string {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil {
+		return nil
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil
+	}
+	return cert.DNSNames
+}
+
+func SingBoxConfig(nodes []ManagedNode, certDir string, defaultInterface ...string) ([]byte, error) {
+	serverDefault := ""
+	if len(defaultInterface) > 0 {
+		serverDefault = defaultInterface[0]
+	}
+	if err := ValidateOutboundInterface(serverDefault); err != nil {
+		return nil, err
+	}
+	// The default outbound serves inherited nodes; overrides get a shared
+	// outbound per device and an explicit inbound route (including Snell's
+	// inner inbound, never its loopback ShadowTLS detour).
+	direct := map[string]any{"type": "direct", "tag": "direct"}
+	if serverDefault != "" {
+		direct["bind_interface"] = serverDefault
+	}
+	outbounds := []map[string]any{direct}
+	outboundTags := map[string]string{serverDefault: "direct"}
+	rules := make([]map[string]any, 0)
 	inbounds := make([]map[string]any, 0, len(nodes))
 	tags := make([]string, 0, len(nodes))
 	userNames := make([]string, 0)
@@ -298,10 +330,27 @@ func SingBoxConfig(nodes []ManagedNode, certDir string) ([]byte, error) {
 		if !n.Enabled {
 			continue
 		}
+		if err := ValidateNodeOutbound(n); err != nil {
+			return nil, err
+		}
 		if n.Listen == "" {
 			n.Listen = "0.0.0.0"
 		}
 		tag := "node-" + n.ID
+		iface := EffectiveOutboundInterface(n, serverDefault)
+		if iface != serverDefault {
+			outboundTag, ok := outboundTags[iface]
+			if !ok {
+				outboundTag = fmt.Sprintf("egress-%d", len(outbounds))
+				outbound := map[string]any{"type": "direct", "tag": outboundTag}
+				if iface != "" {
+					outbound["bind_interface"] = iface
+				}
+				outbounds = append(outbounds, outbound)
+				outboundTags[iface] = outboundTag
+			}
+			rules = append(rules, map[string]any{"inbound": []string{tag}, "action": "route", "outbound": outboundTag})
+		}
 		base := map[string]any{"tag": tag, "listen": n.Listen, "listen_port": n.Port}
 		switch n.Protocol {
 		case "ss":
@@ -357,11 +406,15 @@ func SingBoxConfig(nodes []ManagedNode, certDir string) ([]byte, error) {
 					shadowUsers = append(shadowUsers, map[string]string{"name": user.Name, "password": user.ShadowTLSPassword})
 					userNames = append(userNames, user.Name)
 				}
+				handshake := map[string]any{"server": n.ShadowTLSHost, "server_port": 443}
+				if iface != "" {
+					handshake["bind_interface"] = iface
+				}
 				inbounds = append(inbounds, map[string]any{
 					"type": "shadowtls", "tag": "shadowtls-" + n.ID,
 					"listen": n.Listen, "listen_port": n.Port, "detour": tag,
 					"version": 3, "users": shadowUsers,
-					"handshake":   map[string]any{"server": n.ShadowTLSHost, "server_port": 443},
+					"handshake":   handshake,
 					"strict_mode": true,
 				})
 			}
@@ -396,11 +449,15 @@ func SingBoxConfig(nodes []ManagedNode, certDir string) ([]byte, error) {
 	}
 	sort.Strings(tags)
 	sort.Strings(userNames)
+	route := map[string]any{"final": "direct"}
+	if len(rules) > 0 {
+		route["rules"] = rules
+	}
 	config := map[string]any{
 		"log":          map[string]any{"level": "warn", "timestamp": true},
 		"inbounds":     inbounds,
-		"outbounds":    []map[string]any{{"type": "direct", "tag": "direct"}},
-		"route":        map[string]any{"final": "direct"},
+		"outbounds":    outbounds,
+		"route":        route,
 		"experimental": map[string]any{"v2ray_api": map[string]any{"listen": fmt.Sprintf("127.0.0.1:%d", StatsAPIPort), "stats": map[string]any{"enabled": true, "inbounds": tags, "users": userNames}}, "clash_api": map[string]any{"external_controller": fmt.Sprintf("127.0.0.1:%d", ConnectionsAPIPort)}},
 	}
 	return json.MarshalIndent(config, "", "  ")

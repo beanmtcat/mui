@@ -1,7 +1,13 @@
 package server
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +15,69 @@ import (
 
 	"mui/internal/shared"
 )
+
+func TestNginxPEMChainAndRSAKeyUpload(t *testing.T) {
+	p := newTestMui(t)
+	rootPEM, rootKeyPEM := makeTestCertificate(t, true, nil, 30)
+	block, _ := pem.Decode([]byte(rootPEM))
+	root, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyBlock, _ := pem.Decode([]byte(rootKeyPEM))
+	rootKey, err := x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: "*.example.com"}, DNSNames: []string{"*.example.com", "example.com"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(24 * time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, leaf, root, &key.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})) + rootPEM
+	pkcs8, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, kind string
+		der        []byte
+	}{{"nginx RSA PKCS1", "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(key)}, {"nginx PKCS8", "PRIVATE KEY", pkcs8}} {
+		t.Run(tc.name, func(t *testing.T) {
+			private := string(pem.EncodeToMemory(&pem.Block{Type: tc.kind, Bytes: tc.der}))
+			code, out, _ := p.do("POST", "/api/certificates", map[string]any{"pem": chain, "key": private}, nil)
+			if code != 201 {
+				t.Fatalf("standard Nginx pair rejected: %d %v", code, out)
+			}
+			if out["domain"] != "*.example.com" || out["name"] != "*.example.com" || out["key"] != nil {
+				t.Fatal("incorrect inferred metadata or private key in response")
+			}
+			cert, err := p.store.Certificate(out["id"].(string))
+			if err != nil || cert.PEM != chain || len(cert.DNSNames) != 2 {
+				t.Fatal("chain or DNS names lost", err)
+			}
+			storedKey, err := p.store.CertificateKey(cert.ID)
+			if err != nil || storedKey != private {
+				t.Fatal("private key changed", err)
+			}
+			if !shared.CertificateCovers(cert.PEM, "node.example.com") || shared.CertificateCovers(cert.PEM, "a.b.example.com") {
+				t.Fatal("wildcard coverage is wrong")
+			}
+		})
+	}
+	if code, out, _ := p.do("POST", "/api/certificates", map[string]any{"pem": chain, "key": rootKeyPEM}, nil); code != 400 || !strings.Contains(out["error"].(string), "证书与私钥不匹配") {
+		t.Fatal("mismatched pair accepted or error unclear", code)
+	}
+	code, out, _ := p.do("GET", "/api/certificates", nil, nil)
+	if code != 200 {
+		t.Fatal(code, out)
+	}
+}
 
 func TestCertificateSharedAcrossServers(t *testing.T) {
 	p := newTestMui(t)
@@ -114,6 +183,9 @@ func TestCertificateMigrationPreservesKeysAndNodeReferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := store.DB.Exec(`DROP TABLE IF EXISTS mui_offline_exports`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`DROP TABLE IF EXISTS mui_entry_connection_ips`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.DB.Exec(`DELETE FROM mui_schema_migrations WHERE version>=14`); err != nil {

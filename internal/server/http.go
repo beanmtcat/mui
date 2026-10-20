@@ -1005,9 +1005,13 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		ID: ID(), Name: in.Name, Roles: roles,
 		Country: strings.ToUpper(in.Country), Region: in.Region, City: in.City,
 		Provider: in.Provider, Tags: in.Tags, Notes: in.Notes,
-		IPv4: in.IPv4, IPv6: in.IPv6, Domain: in.Domain, InternalAddress: strings.TrimSpace(in.InternalAddress),
+		IPv4: in.IPv4, IPv6: in.IPv6, Domain: in.Domain, InternalAddress: strings.TrimSpace(in.InternalAddress), OutboundInterface: strings.TrimSpace(in.OutboundInterface),
 		Status: "pending", UFWStatus: "unknown",
 		FirewallMode: in.FirewallMode, ManagementMode: in.ManagementMode, AgentProxyNodeID: in.AgentProxyNodeID, AgentProxyInternal: in.AgentProxyInternal, AgentProxySourceMode: in.AgentProxySourceMode,
+	}
+	if err = shared.ValidateOutboundInterface(srv.OutboundInterface); err != nil {
+		errorJSON(w, 400, err.Error())
+		return
 	}
 	if err = validInternalAddress(srv.InternalAddress); err != nil {
 		errorJSON(w, 400, err.Error())
@@ -1105,7 +1109,7 @@ func (a *App) purgeServer(id string) error {
 	for _, stmt := range []string{
 		`DELETE FROM mui_nodes WHERE server_id=$1`, `DELETE FROM mui_firewall_rules WHERE server_id=$1`, `DELETE FROM mui_forwards WHERE server_id=$1`,
 		`DELETE FROM mui_operations WHERE server_id=$1`, `DELETE FROM mui_server_traffic WHERE server_id=$1`, `DELETE FROM mui_server_totals WHERE server_id=$1`, `DELETE FROM mui_server_applied WHERE server_id=$1`,
-		`DELETE FROM mui_connection_ips WHERE server_id=$1`,
+		`DELETE FROM mui_connection_ips WHERE server_id=$1`, `DELETE FROM mui_entry_connection_ips WHERE server_id=$1`,
 		`DELETE FROM mui_servers WHERE id=$1`,
 	} {
 		if _, err = tx.Exec(stmt, id); err != nil {
@@ -1305,7 +1309,14 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 409, "Agent 代理切换尚未成功应用；请等待完成，或先改回之前的代理再重试")
 		return
 	}
+	in.OutboundInterface = strings.TrimSpace(in.OutboundInterface)
+	if err := shared.ValidateOutboundInterface(in.OutboundInterface); err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
+	outboundChanged := old.OutboundInterface != in.OutboundInterface
 	before := old
+	old.OutboundInterface = in.OutboundInterface
 	if proxyChanged && !managementChanged {
 		old.AgentProxyPreviousNodeID, old.AgentProxyPreviousInternal = old.AgentProxyNodeID, old.AgentProxyInternal
 		old.AgentProxyPreviousSourceMode = old.AgentProxySourceMode
@@ -1406,7 +1417,13 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	if modeChanged || managementChanged || proxyChanged {
+	if outboundChanged {
+		if err = a.markOutboundChangePending(before, old); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+	}
+	if modeChanged || managementChanged || proxyChanged || outboundChanged {
 		if err = a.queueApplyLocked(id, "nodes.apply"); err != nil {
 			errorJSON(w, 500, err.Error())
 			return
@@ -1652,6 +1669,7 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n := in.Node
+	n.OutboundInterface = strings.TrimSpace(n.OutboundInterface)
 	n.ShadowTLSHost = strings.TrimSpace(n.ShadowTLSHost)
 	n.ID = ID()
 	n.RouteSources = "" // No route ends here yet.
@@ -1919,6 +1937,7 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n := in.Node
+	n.OutboundInterface = strings.TrimSpace(n.OutboundInterface)
 	n.ShadowTLSHost = strings.TrimSpace(n.ShadowTLSHost)
 	n.ID = old.ID
 	n.ServerID = old.ServerID
@@ -2105,6 +2124,7 @@ func (a *App) certificates(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		for i := range list {
+			list[i].DNSNames = shared.CertificateDNSNames(list[i].PEM)
 			list[i].PEM = ""
 			list[i].DaysUntilExpiry, list[i].ExpiringSoon = shared.CertExpiryStatus(list[i].ExpiresAt)
 		}
@@ -2115,15 +2135,32 @@ func (a *App) certificates(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
-	expires, _, err := shared.ParseCertificate(in.PEM, in.Key)
+	in.PEM, in.Key = strings.TrimPrefix(in.PEM, "\ufeff"), strings.TrimPrefix(in.Key, "\ufeff")
+	expires, names, err := shared.ParseCertificate(in.PEM, in.Key)
 	if err != nil {
-		errorJSON(w, 400, err.Error())
+		message := "证书或私钥校验失败：" + err.Error()
+		if strings.Contains(err.Error(), "private key does not match public key") {
+			message = "证书与私钥不匹配，请选择同一套 .pem 证书和 .key 私钥文件"
+		}
+		errorJSON(w, 400, message)
 		return
 	}
 	if err := shared.CheckCertificateServerAuth(in.PEM, in.Key); err != nil {
 		errorJSON(w, 400, err.Error())
 		return
 	}
+	in.Domain = strings.TrimSpace(in.Domain)
+	if in.Domain == "" && len(names) > 0 {
+		in.Domain = names[0]
+	}
+	if in.Domain == "" {
+		errorJSON(w, 400, "证书中没有 DNS 域名，请使用包含所需 TLS 域名的服务器证书")
+		return
+	}
+	if strings.TrimSpace(in.Name) == "" {
+		in.Name = in.Domain
+	}
+	in.DNSNames = names
 	if !shared.CertificateCovers(in.PEM, in.Domain) {
 		errorJSON(w, 400, "证书域名不匹配")
 		return
@@ -3087,7 +3124,7 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 	if err != nil {
 		return shared.DesiredState{}, err
 	}
-	state := shared.DesiredState{FirewallMode: server.FirewallMode, Revision: server.Revision, ProtocolVersion: 1, Nodes: []shared.ManagedNode{}, Rules: []shared.FirewallRule{}, Forwards: []shared.ForwardRule{}}
+	state := shared.DesiredState{OutboundInterface: server.OutboundInterface, FirewallMode: server.FirewallMode, Revision: server.Revision, ProtocolVersion: 1, Nodes: []shared.ManagedNode{}, Rules: []shared.FirewallRule{}, Forwards: []shared.ForwardRule{}}
 	if server.AgentProxySupport || server.AgentProxyNodeID != "" {
 		state.AgentProxy, err = a.agentProxy(server)
 		if err != nil {
@@ -3186,6 +3223,16 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 		return state, err
 	}
 	for _, forward := range forwards {
+		// Client observation is decided per job from the current routes, never
+		// stored: a stored flag would rewrite every route forward (and bump every
+		// hop's revision, including offline exports) when the panel upgrades.
+		forward.ObserveClients, forward.ClientNodeID = false, ""
+		for _, rt := range routes {
+			if rt.ID == forward.RouteID && rt.EntryServerID == serverID {
+				forward.ObserveClients, forward.ClientNodeID = true, rt.NodeID
+				break
+			}
+		}
 		if !forward.Deleting {
 			if shared.ManualFirewall(server.FirewallMode) {
 				forward.FirewallPolicy, forward.FirewallSources = "manual", ""
@@ -3311,6 +3358,9 @@ func (a *App) nodeFingerprint(server shared.Server, n shared.Node, password, sha
 	}
 	if n.Protocol == "snell" && shared.SnellVersion(n) == 6 {
 		fields = append(fields, "snell-v6")
+	}
+	if iface := shared.EffectiveOutboundInterface(n, server.OutboundInterface); iface != "" {
+		fields = append(fields, "bind-interface", iface)
 	}
 	return a.Store.Fingerprint(fields...)
 }
@@ -3570,6 +3620,16 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if allowApply && (!server.OutboundBindingSupport || !shared.VersionAtLeast(server.AgentVersion, "0.6.12")) {
+		nodes, err := a.Store.Nodes(id)
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		if outboundBindingRequired(server, nodes) {
+			allowApply = false
+		}
+	}
 	if allowApply && !server.SnellFixedPort {
 		nodes, err := a.Store.Nodes(id)
 		if err != nil {
@@ -3692,8 +3752,15 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "report arrays must have at most 2000 entries each")
 		return
 	}
+	if len(in.ForwardConnections) > 500 {
+		errorJSON(w, 400, "too many forward connection points")
+		return
+	}
+	becameClientIPs := in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.13") && !shared.VersionAtLeast(server.AgentVersion, "0.6.13")
+	becameRouteUFW := !shared.ManualFirewall(server.FirewallMode) && in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.14") && !shared.VersionAtLeast(server.AgentVersion, "0.6.14")
 	server.Status = "online"
 	becameMultiUser := !server.MultiUserStats && in.MultiUserStats
+	becameOutboundBinding := in.AgentVersion != "" && !server.OutboundBindingSupport && in.OutboundBindingSupport && shared.VersionAtLeast(in.AgentVersion, "0.6.12")
 	becameForward := !server.ForwardSupport && in.ForwardSupport
 	becameForwardTCPUDP := in.AgentVersion != "" && !server.ForwardTCPUDP && in.ForwardTCPUDP
 	becameManualFirewall := in.AgentVersion != "" && !server.ManualFirewallSupport && in.ManualFirewallSupport && shared.ManualFirewall(server.FirewallMode)
@@ -3730,6 +3797,7 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		server.ShadowTLSAuth = in.ShadowTLSAuth
 		server.SnellFixedPort = in.SnellFixedPort
 		server.SnellV6 = in.SnellV6 && shared.VersionAtLeast(in.AgentVersion, "0.6.11")
+		server.OutboundBindingSupport = in.OutboundBindingSupport && shared.VersionAtLeast(in.AgentVersion, "0.6.12")
 		server.AgentProxySupport = in.AgentProxySupport
 		server.ReleaseKeyPinned = in.ReleaseKeyPinned
 		server.AgentSelfUpdate = in.AgentSelfUpdate
@@ -3801,6 +3869,12 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(in.ServerTraffic) > 0 {
 		if err = a.Store.SaveServerTraffic(id, in.ServerTraffic); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+	}
+	if len(in.ForwardConnections) > 0 {
+		if err = a.saveForwardConnectionIPs(id, in.ForwardConnections); err != nil {
 			errorJSON(w, 500, err.Error())
 			return
 		}
@@ -3965,6 +4039,19 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if becameOutboundBinding {
+		nodes, err := a.Store.Nodes(id)
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		if outboundBindingRequired(server, nodes) {
+			if err = a.queueApplyLocked(id, "nodes.apply"); err != nil {
+				errorJSON(w, 500, err.Error())
+				return
+			}
+		}
+	}
 	if becameMultiUser || schemeChanged {
 		nodes, e := a.Store.Nodes(id)
 		if e != nil {
@@ -3978,7 +4065,7 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if becameForward || becameForwardTCPUDP {
+	if becameForward || becameForwardTCPUDP || becameClientIPs || becameRouteUFW {
 		forwards, e := a.Store.Forwards(id)
 		if e != nil {
 			errorJSON(w, 500, e.Error())
@@ -3988,6 +4075,18 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 			if err = a.queueApplyLocked(id, "forwards.apply"); err != nil {
 				errorJSON(w, 500, err.Error())
 				return
+			}
+		} else if becameRouteUFW {
+			nodes, e := a.Store.Nodes(id)
+			if e != nil {
+				errorJSON(w, 500, e.Error())
+				return
+			}
+			if len(nodes) > 0 {
+				if err = a.queueApplyLocked(id, "nodes.apply"); err != nil {
+					errorJSON(w, 500, err.Error())
+					return
+				}
 			}
 		}
 	}

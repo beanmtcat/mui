@@ -77,8 +77,9 @@ type Counter struct {
 type counter struct{ up, down atomic.Int64 }
 
 type Service struct {
-	mu    sync.Mutex
-	rules map[string]*rule
+	clients clientObservations
+	mu      sync.Mutex
+	rules   map[string]*rule
 	// Counters outlive their rule: a rule that is disabled and enabled again
 	// within one process must continue counting, not restart from zero.
 	counts             map[string]*counter
@@ -316,7 +317,7 @@ func tryBind(spec shared.ForwardRule) error {
 func sameEndpoints(a, b shared.ForwardRule) bool {
 	// The firewall policy is part of a rule's identity: changing only the
 	// policy must restart the rule so the new source check takes effect.
-	if a.Network != b.Network || a.Listen != b.Listen || a.Port != b.Port || a.Balance != b.Balance || a.HealthCheck != b.HealthCheck || a.FirewallPolicy != b.FirewallPolicy || a.FirewallSources != b.FirewallSources || len(a.Targets) != len(b.Targets) {
+	if a.ObserveClients != b.ObserveClients || a.ClientNodeID != b.ClientNodeID || a.RouteID != b.RouteID || a.Network != b.Network || a.Listen != b.Listen || a.Port != b.Port || a.Balance != b.Balance || a.HealthCheck != b.HealthCheck || a.FirewallPolicy != b.FirewallPolicy || a.FirewallSources != b.FirewallSources || len(a.Targets) != len(b.Targets) {
 		return false
 	}
 	for i := range a.Targets {
@@ -809,6 +810,9 @@ func (r *rule) proxyTCP(client *net.TCPConn) {
 		r.mu.Lock()
 		delete(r.pairs, pair)
 		r.mu.Unlock()
+		if pair.upstream != nil {
+			r.svc.clients.record(r.spec, sourceOf(client.RemoteAddr()), time.Now())
+		}
 		pair.close()
 	}()
 	upstream := r.dialUpstream()
@@ -817,6 +821,7 @@ func (r *rule) proxyTCP(client *net.TCPConn) {
 	}
 	r.mu.Lock()
 	pair.upstream = upstream
+	r.svc.clients.record(r.spec, sourceOf(client.RemoteAddr()), time.Now())
 	r.mu.Unlock()
 	if r.stopped() {
 		return
@@ -977,6 +982,7 @@ func (r *rule) openSession(listener *net.UDPConn, client netip.AddrPort) *udpSes
 		r.release(src, &r.svc.udpTotal)
 		return nil
 	}
+	r.svc.clients.record(r.spec, src, time.Now())
 	session := &udpSession{conn: conn, target: target, remote: remote}
 	session.last.Store(time.Now().UnixNano())
 	r.mu.Lock()

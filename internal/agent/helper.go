@@ -292,7 +292,7 @@ func QueryHostStatus() HostStatus {
 }
 
 func hostStatus() HostStatus {
-	status := HostStatus{UFW: UFWStatus(), Conflict: firewallConflict(), ManualFirewallSupport: true, Supported: true, AgentSelfUpdate: true, ForwardSupport: true, ForwardTCPUDP: true, ShadowTLSAuth: true, SnellFixedPort: true, SnellV6: true, AgentProxySupport: true, MultiUserStats: true, NodeFirewallPolicies: true, CoreSelfUpdate: true, ReleaseKeyPinned: fileExists(ReleaseKeyPath)}
+	status := HostStatus{UFW: UFWStatus(), Conflict: firewallConflict(), ManualFirewallSupport: true, Supported: true, AgentSelfUpdate: true, ForwardSupport: true, ForwardTCPUDP: true, ShadowTLSAuth: true, SnellFixedPort: true, SnellV6: true, AgentProxySupport: true, OutboundBindingSupport: true, MultiUserStats: true, NodeFirewallPolicies: true, CoreSelfUpdate: true, ReleaseKeyPinned: fileExists(ReleaseKeyPath)}
 	if file, err := os.Open(ForwardStats); err == nil {
 		var traffic []shared.ForwardTrafficPoint
 		_ = json.NewDecoder(io.LimitReader(file, 1<<20)).Decode(&traffic)
@@ -310,6 +310,7 @@ func hostStatus() HostStatus {
 			status.ForwardTraffic = status.ForwardTraffic[:500]
 		}
 	}
+	status.ForwardConnections = readForwardConnections()
 	if ports, err := sshPorts(); err == nil {
 		for port := range ports {
 			status.SSHPorts = append(status.SSHPorts, port)
@@ -515,11 +516,14 @@ func ApplyDesired(state shared.DesiredState, raw []byte) error {
 	}
 }
 
-func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
+func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) {
 	if err := verifyDesiredSignature(state, raw); err != nil {
 		return err
 	}
 	if err := validateDesired(state); err != nil {
+		return err
+	}
+	if err := checkOutboundInterfaces(state); err != nil {
 		return err
 	}
 	if err := prepareAgentProxy(state, raw); err != nil {
@@ -555,6 +559,9 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 		if UFWStatus() != "active" {
 			return errors.New("UFW 未启用；请初始化 UFW 或在服务器设置中选择手动管理防火墙")
 		}
+		if err := checkRouteUFWSSH(state); err != nil {
+			return err
+		}
 		if err := checkManualUFWBypass(state); err != nil {
 			return err
 		}
@@ -565,8 +572,36 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 			}
 		}
 	}
+	coreUnitChanged := false
+	restoreCoreUnit := func() {}
 	if hasCore {
-		if err := ensureCoreUnit(); err != nil {
+		path, unit, mode := serviceFile("mui-sing-box.service", coreUnitForState(state))
+		previousUnit, readErr := os.ReadFile(path)
+		if readErr != nil && !os.IsNotExist(readErr) {
+			return readErr
+		}
+		coreUnitChanged = !bytes.Equal(previousUnit, []byte(unit))
+		if coreUnitChanged {
+			restored := false
+			restoreCoreUnit = func() {
+				if restored {
+					return
+				}
+				restored = true
+				if os.IsNotExist(readErr) {
+					_ = os.Remove(path)
+				} else {
+					_ = writeFileAtomic(path, previousUnit, mode)
+				}
+				_, _ = serviceCommand("daemon-reload")
+			}
+			defer func() {
+				if retErr != nil {
+					restoreCoreUnit()
+				}
+			}()
+		}
+		if err := ensureCoreUnit(state); err != nil {
 			return err
 		}
 	}
@@ -624,7 +659,7 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 	}
 	var config []byte
 	if hasCore {
-		config, err = shared.SingBoxConfig(state.Nodes, CertDir)
+		config, err = shared.SingBoxConfig(state.Nodes, CertDir, state.OutboundInterface)
 		if err != nil {
 			restoreCerts()
 			return err
@@ -639,7 +674,7 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 	oldState := readCurrentRaw()
 	// Restarting the core drops every connection on the host, so only do it when
 	// what the core reads has actually changed. Firewall-only jobs skip it.
-	coreChanged := hasCore && (len(certBackup) > 0 || !bytes.Equal(previous, config) || !coreActive())
+	coreChanged := hasCore && (coreUnitChanged || len(certBackup) > 0 || !bytes.Equal(previous, config) || !coreActive())
 	tmp := CoreConfig + ".next"
 	if coreChanged {
 		if err := writeOwned(tmp, config, 0640, coreUser); err != nil {
@@ -655,7 +690,9 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 	if err = syncUFW(state); err != nil {
 		_ = os.Remove(tmp)
 		if !shared.ManualFirewall(state.FirewallMode) {
-			_ = restoreUFW(oldState)
+			if rollbackErr := restoreUFW(oldState); rollbackErr != nil {
+				err = fmt.Errorf("%w; restore previous UFW policy: %v", err, rollbackErr)
+			}
 		}
 		restoreCerts()
 		return err
@@ -707,10 +744,13 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) error {
 			}
 		}
 		if coreChanged {
+			restoreCoreUnit()
 			rollbackCore(previous)
 		}
 		if !shared.ManualFirewall(state.FirewallMode) {
-			_ = restoreUFW(oldState)
+			if rollbackErr := restoreUFW(oldState); rollbackErr != nil {
+				err = fmt.Errorf("%w; restore previous UFW policy: %v", err, rollbackErr)
+			}
 		}
 		return err
 	}
@@ -869,7 +909,11 @@ func sanitizeStateForStorage(state shared.DesiredState) shared.DesiredState {
 // revision, so the early return must check the artifacts themselves.
 func driftDetected(state shared.DesiredState, hasCore bool) bool {
 	if hasCore {
-		want, err := shared.SingBoxConfig(state.Nodes, CertDir)
+		path, unit, _ := serviceFile("mui-sing-box.service", coreUnitForState(state))
+		if current, err := os.ReadFile(path); err != nil || !bytes.Equal(current, []byte(unit)) {
+			return true
+		}
+		want, err := shared.SingBoxConfig(state.Nodes, CertDir, state.OutboundInterface)
 		if err != nil {
 			return true
 		}
@@ -898,12 +942,18 @@ func driftDetected(state shared.DesiredState, hasCore bool) bool {
 	if err != nil {
 		return true
 	}
+	if routeUFWDrift(out, state) {
+		return true
+	}
 	present := map[string]bool{}
 	for _, line := range append(parseMuiLines(out), parseLegacyLines(out)...) {
 		present[line.ID] = true
 	}
 	wanted := map[string]bool{}
-	for _, rule := range ownedRules(state) {
+	for _, rule := range baseUFWRules(state) {
+		wanted[rule.ID] = true
+	}
+	for _, rule := range routeUFWRules(state) {
 		wanted[rule.ID] = true
 	}
 	if len(present) != len(wanted) {
@@ -915,11 +965,6 @@ func driftDetected(state shared.DesiredState, hasCore bool) bool {
 		}
 	}
 	return false
-}
-
-type portProto struct {
-	port  int
-	proto string
 }
 
 type ufwStatusRule struct {
@@ -997,8 +1042,8 @@ func parseUFWStatusRule(line string) (ufwStatusRule, bool) {
 // checkManualUFWBypass refuses an apply when a rule UFW does not manage
 // already allows traffic to a port this batch manages. Such a rule sits
 // outside the panel's model: it would silently bypass a deny rule or a
-// restricted-source rule, so it blocks the apply instead of merely being
-// reported in status.
+// restricted-source rule. Chain ports have a verified allow/deny prefix that
+// takes precedence over host rules, so they do not need this refusal.
 func checkManualUFWBypass(state shared.DesiredState) error {
 	out, err := command("ufw", "status", "numbered")
 	if err != nil {
@@ -1030,6 +1075,9 @@ func checkManualUFWBypass(state shared.DesiredState) error {
 		for port := rule.PortFrom; port <= rule.PortTo; port++ {
 			managed[portProto{port, rule.Network}] = true
 		}
+	}
+	for pp := range routeUFWPorts(state) {
+		delete(managed, pp)
 	}
 	for _, line := range strings.Split(out, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -1064,13 +1112,30 @@ func runtimeForwards(state shared.DesiredState) []shared.ForwardRule {
 			// FirewallPolicy/FirewallSources ride along: the forward
 			// process needs them for its own source filtering, and
 			// syncUFW reads them when it builds the forward rules.
-			out = append(out, shared.ForwardRule{ID: f.ID, Name: f.Name, Network: f.Network, Listen: f.Listen, Port: f.Port, Targets: f.Targets, Balance: f.Balance, HealthCheck: f.HealthCheck, FirewallPolicy: f.FirewallPolicy, FirewallSources: f.FirewallSources, Enabled: true})
+			out = append(out, shared.ForwardRule{ID: f.ID, Name: f.Name, Network: f.Network, Listen: f.Listen, Port: f.Port, Targets: f.Targets, Balance: f.Balance, HealthCheck: f.HealthCheck, RouteID: f.RouteID, ObserveClients: f.ObserveClients, ClientNodeID: f.ClientNodeID, FirewallPolicy: f.FirewallPolicy, FirewallSources: f.FirewallSources, Enabled: true})
 		}
 	}
 	return out
 }
 
-func ensureCoreUnit() error {
+func coreUnitForState(state shared.DesiredState) string {
+	unit := coreUnit
+	if len(shared.OutboundInterfaces(state.Nodes, state.OutboundInterface)) > 0 {
+		// Older Linux kernels require NET_RAW for SO_BINDTODEVICE. Keep the
+		// core unprivileged and grant it only while device binding is in use.
+		unit = strings.ReplaceAll(unit, "=CAP_NET_BIND_SERVICE\n", "=CAP_NET_BIND_SERVICE CAP_NET_RAW\n")
+	}
+	return unit
+}
+
+func ensureCoreUnit(states ...shared.DesiredState) error {
+	state, err := readCurrentChecked()
+	if err != nil {
+		return err
+	}
+	if len(states) > 0 {
+		state = states[0]
+	}
 	if err := ensureServiceUser(coreUser, CoreDir); err != nil {
 		return err
 	}
@@ -1082,7 +1147,7 @@ func ensureCoreUnit() error {
 			return err
 		}
 	}
-	path, unit, mode := serviceFile("mui-sing-box.service", coreUnit)
+	path, unit, mode := serviceFile("mui-sing-box.service", coreUnitForState(state))
 	content, err := os.ReadFile(path)
 	if err == nil && string(content) == unit {
 		return nil
@@ -1319,9 +1384,23 @@ func syncUFW(state shared.DesiredState) error {
 	if err != nil {
 		return err
 	}
+	if err := syncRouteUFW(state, out); err != nil {
+		return err
+	}
+	out, err = command("ufw", "status", "numbered")
+	if err != nil {
+		return err
+	}
 	present := append(parseMuiLines(out), parseLegacyLines(out)...)
+	base := present[:0]
+	for _, line := range present {
+		if !strings.HasPrefix(line.ID, routeUFWPrefix) {
+			base = append(base, line)
+		}
+	}
+	present = base
 	sort.Slice(present, func(i, j int) bool { return present[i].Index < present[j].Index })
-	rules := ownedRules(state)
+	rules := baseUFWRules(state)
 	byID := map[string]shared.FirewallRule{}
 	desired := make([]string, 0, len(rules))
 	for _, rule := range rules {
@@ -1465,6 +1544,10 @@ func deleteHostRules(state shared.DesiredState, raw []byte) error {
 }
 
 func addUFWRule(rule shared.FirewallRule, timeout time.Duration) error {
+	return addUFWRuleAt(rule, timeout, false)
+}
+
+func addUFWRuleAt(rule shared.FirewallRule, timeout time.Duration, routePriority bool) error {
 	if rule.Action != "allow" && rule.Action != "deny" {
 		return errors.New("invalid UFW action")
 	}
@@ -1509,6 +1592,9 @@ func addUFWRule(rule shared.FirewallRule, timeout time.Duration) error {
 		return errors.New("invalid UFW rule ID")
 	}
 	args := []string{rule.Action, "from", source, "to", "any", "port", port, "proto", rule.Network, "comment", "mui-" + rule.ID}
+	if routePriority {
+		args = []string{"prepend", rule.Action, "from", source, "to", "any", "app", routeUFWApp(rule), "comment", "mui-" + rule.ID}
+	}
 	_, err := commandTimeout("ufw", timeout, args...)
 	return err
 }

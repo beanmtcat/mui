@@ -29,6 +29,7 @@ import "./style.css";
 import OfflineManager from "./components/OfflineManager";
 import AgentDownloads from "./components/AgentDownloads";
 import ManagementMigration from "./components/ManagementMigration";
+import CertificateFileField from "./components/CertificateFileField";
 import { screenshotText, screenshotView } from "./components/screenshot";
 // Heavy / rarely-used UI split out of the main bundle and lazy-loaded:
 // TrafficChart (dashboard + traffic modals) and QRCode (TOTP setup only).
@@ -99,6 +100,7 @@ const emptyServer: Partial<Server> = {
   name: "",
   roles: ["exit"],
   internalAddress: "",
+  outboundInterface: "",
   country: "SG",
   region: "",
   city: "",
@@ -116,6 +118,8 @@ const emptyNode: Partial<Node> = {
   port: 50000,
   listen: "0.0.0.0",
   publishAddress: "",
+  outboundMode: "inherit",
+  outboundInterface: "",
   method: "2022-blake3-aes-128-gcm",
   snellVersion: 6,
   snellPort: 20001,
@@ -161,6 +165,12 @@ function subscriptionNodeIssue(format: string | undefined, node: Node): string {
 }
 function subscriptionNodeEligible(format: string | undefined, node: Node) {
   return !subscriptionNodeIssue(format, node);
+}
+function subscriptionDirectNodeIssue(format: string | undefined, node: Node): string {
+  if (node.deleting) return "节点正在删除";
+  if (!node.direct) return "未开启允许直连，请先编辑节点并保存";
+  if (!node.enabled) return "节点已停用";
+  return subscriptionNodeIssue(format, node);
 }
 function sharedSubscriptionPassword(node: Node) {
   return node.protocol === "ss" && !node.method.startsWith("2022-blake3-");
@@ -383,6 +393,7 @@ function App() {
       "server" | "node" | "template" | "certificate" | "rule" | "forward" | "route" | "subscription" | "customer" | null
     >(null),
     [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  const [certFilesBusy, setCertFilesBusy] = useState({ pem: false, key: false });
   const [serverForm, setServerForm] = useState<Partial<Server>>(emptyServer),
     [nodeForm, setNodeForm] = useState<Partial<Node> & { password?: string; shadowTlsPassword?: string }>(
       emptyNode,
@@ -698,7 +709,7 @@ function App() {
     (!!selectedNodeServer.agentVersion || !selectedNodeServer.roles?.includes("exit"));
   const selectedFormServer = servers.find((s) => s.id === serverForm.id);
   const serverManagementChanged = !!selectedFormServer && (selectedFormServer.managementMode === "offline") !== (serverForm.managementMode === "offline");
-  const serverProxyEnabled = serverForm.managementMode !== "offline" && !!serverForm.roles?.includes("entry");
+  const serverProxyEnabled = serverForm.managementMode !== "offline";
   const serverProxyOptions = nodes.filter((n) => n.protocol === "socks5").map((node) => {
     const host = servers.find((s) => s.id === node.serverId);
     const reason = node.serverId === serverForm.id ? "不能代理自身" : node.deleting ? "正在删除" : !node.enabled ? "已停用" :
@@ -876,7 +887,11 @@ function App() {
   const matchingCertificate = useCallback((tlsName: string) =>
     certificates.find(
       (c) =>
-        c.domain.toLowerCase() === tlsName.toLowerCase() &&
+        (c.dnsNames?.length ? c.dnsNames : [c.domain]).some((pattern) => {
+          const name = tlsName.toLowerCase().replace(/\.$/, "");
+          const domain = pattern.toLowerCase().replace(/\.$/, "");
+          return domain === name || domain.startsWith("*.") && name.endsWith(domain.slice(1)) && name.split(".").length === domain.split(".").length;
+        }) &&
         new Date(c.expiresAt).getTime() > Date.now(),
     )?.id || "", [certificates]);
   const useTemplate = async (template: NodeTemplate, serverId = nodeForm.serverId || "") => {
@@ -954,6 +969,10 @@ function App() {
     }
   };
   const close = () => {
+    if (modal === "certificate") {
+      setCertForm({ name: "", domain: "", pem: "", key: "" });
+      setCertFilesBusy({ pem: false, key: false });
+    }
     clearSelectedTemplate();
     setModal(null);
     setIssuedURL("");
@@ -1021,6 +1040,10 @@ function App() {
   };
   const submitCert = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!certForm.pem?.trim() || !certForm.key?.trim()) {
+      setError("请选择证书 .pem 和私钥 .key 文件，或粘贴对应的 PEM 内容。");
+      return;
+    }
     if (
       await act(
         () => mutation("/api/certificates", "POST", certForm),
@@ -1300,7 +1323,7 @@ function App() {
     return screenshotText(entries);
   }, [servers, nodes, subs, customers, routes, forwards, certificates, templates]);
   const protectScreenshot = (tree: React.ReactNode) => screenshotMode
-    ? screenshotView(tree, redactScreenshot, new Set([SecretField, SecretTextarea, MaskedValue])) : tree;
+    ? screenshotView(tree, redactScreenshot, new Set([SecretField, SecretTextarea, MaskedValue, CertificateFileField])) : tree;
   const surgeImportHelp = (value: string) => {
     const line = `MUI = select, policy-path=${value}, update-interval=3600`;
     return <div className="surgeImportHelp">
@@ -1939,6 +1962,8 @@ function App() {
                     key: "",
                   });
                   setModal("certificate");
+                  setCertFilesBusy({ pem: false, key: false });
+                  setError(""); setNotice("");
                 }}
               >
                 上传证书
@@ -2171,6 +2196,7 @@ function App() {
                           : custom ? "自定义规则"
                           : node ? `节点 ${node.name}`
                           : fwd ? `${fwd.routeId ? "链路转发" : "转发"} ${fwd.name}`
+                          : r.tag.startsWith("mui-route-priority-") ? "节点 / 链路优先规则"
                           : r.tag.startsWith("panel-") ? "旧版面板规则，下次应用时清理"
                           : r.tag ? "面板规则（对象已删除，下次应用时清理）"
                           : "主机手动添加";
@@ -2602,26 +2628,30 @@ function App() {
         )}
         {tab === "connections" && (
             <section className="panel">
-              <div className="panelHead"><div><h2>节点连接 IP</h2><p>Agent 从 sing-box 实时连接中采样，按首次发现顺序列出 IP，并显示最近连接时间。短连接可能未采到，经 ShadowTLS 接入的 Snell 节点目前采不到连接；订阅归属和流量请查看订阅统计。</p></div></div>
+              <div className="panelHead"><div><h2>节点连接 IP</h2><p>链路客户端 IP 从入口转发采集（TCP / UDP，需入口 Agent 0.6.13+）；直连节点从 sing-box 采样。中转和 Agent 的对端地址单独标注，不作为客户端 IP。离线入口无法上报，历史记录无法还原；连接来源不代表已通过节点认证，也不能据此确定订阅归属。</p></div></div>
               <div className="filters">
-                <select value={connectionServer} onChange={(e) => setConnectionServer(e.target.value)} aria-label="按服务器筛选连接 IP">
+                <select value={connectionServer} onChange={(e) => setConnectionServer(e.target.value)} aria-label="按采集服务器筛选连接 IP">
                   <option value="">全部服务器</option>
                   {servers.map((sv) => <option key={sv.id} value={sv.id}>{sv.name}</option>)}
                 </select>
                 <DateRange value={connectionRange} onChange={setConnectionRange} label="最近连接" />
               </div>
-              <div className="tableWrap"><table><thead><tr><th>最近连接</th><th>服务器</th><th>节点</th><th>来源 IP</th><th>订阅关联</th></tr></thead><tbody>
+              <div className="tableWrap"><table><thead><tr><th>最近连接</th><th>采集服务器</th><th>节点 / 链路</th><th>客户端 IP</th><th>采集方式 / 对端地址</th><th>订阅关联</th></tr></thead><tbody>
                 {connectionLog.items.map((item) => {
-                  const linked = subs.filter((s) => subNodeIds(s).includes(item.nodeId));
-                  return <tr key={item.serverId + item.nodeId + item.ip}>
+                  const linked = item.sourceKind === "entry"
+                    ? subs.filter((s) => !!item.routeId && s.routeIds?.includes(item.routeId))
+                    : item.sourceKind === "direct" ? subs.filter((s) => s.nodeIds?.includes(item.nodeId)) : [];
+                  const sourceLabel = ({ entry: "入口转发采集", direct: "节点直连采样", relay: "中转 / 服务器对端", agent: "Agent 代理连接", unknown: "仅有落地对端，无法确认客户端" } as Record<string, string>)[item.sourceKind || "unknown"];
+                  return <tr key={item.serverId + item.nodeId + item.ip + (item.routeId || "")}>
                     <td>{new Date(item.lastSeen).toLocaleString()}</td>
                     <td>{serverName(item.serverId)}</td>
-                    <td>{nodes.find((n) => n.id === item.nodeId)?.name || "已删除"}</td>
-                    <td><code>{item.ip}</code></td>
+                    <td>{nodes.find((n) => n.id === item.nodeId)?.name || "已删除"}{item.routeId && <small>{routes.find((r) => r.id === item.routeId)?.name || "历史链路（已删除）"}</small>}</td>
+                    <td>{item.clientIp ? <code>{item.clientIp}</code> : <span className="hint">无法获取</span>}</td>
+                    <td>{sourceLabel}{item.peerIp && <small>对端：<code>{item.peerIp}</code></small>}</td>
                     <td>{linked.length ? `可能关联：${linked.map((s) => s.name).join("、")}` : "无法归属"}</td>
                   </tr>;
                 })}
-              </tbody></table>{connectionLog.empty && <Empty text="暂无节点连接 IP；需更新 Agent 并等待实际连接" />}</div>
+              </tbody></table>{connectionLog.empty && <Empty text="暂无连接来源记录；链路请升级入口 Agent 至 0.6.13，离线入口无法上报" />}</div>
               <Pager log={connectionLog} />
             </section>
         )}
@@ -3056,7 +3086,6 @@ function App() {
                                 checked={serverForm.roles?.includes(role) || false}
                                 onChange={(e) => setServerForm({
                                   ...serverForm,
-                                  agentProxyNodeId: role === "entry" && !e.target.checked ? "" : serverForm.agentProxyNodeId,
                                   roles: e.target.checked ? [...(serverForm.roles || []), role] : (serverForm.roles || []).filter((r) => r !== role),
                                 })}
                               />
@@ -3086,11 +3115,11 @@ function App() {
                           {serverProxyOptions.map(({ node, host, reason }) => <option value={node.id} key={node.id} disabled={!!reason}>{node.name} · {host?.name || "未知服务器"} :{node.port}{reason ? `（${reason}）` : ""}</option>)}
                         </select>
                       </Field>
-                      {!serverProxyEnabled && <p className="serverFieldHelp">仅在线管理的入口可通过 SOCKS5 连接面板。<button type="button" className="textButton" onClick={() => setServerForm({ ...serverForm, managementMode: "online", roles: Array.from(new Set([...(serverForm.roles || []), "entry" as Role])) })}>设为在线入口</button></p>}
+                      {!serverProxyEnabled && <p className="serverFieldHelp">离线管理不连接面板；切换为在线 Agent 后即可使用 SOCKS5，与服务器类型无关。</p>}
                       {!serverProxyOptions.length && <p className="serverFieldHelp">暂无 SOCKS5 节点。请先在已启用 UFW 的在线中转或落地服务器创建 SOCKS5 节点。</p>}
                       {!!serverProxyOptions.length && !serverProxyOptions.some((o) => !o.reason) && <p className="serverFieldHelp">当前 SOCKS5 节点均不可用，请按各选项后的原因修复，再点击右上角刷新。</p>}
-                      {serverForm.agentProxyNodeId && <Field label="入口连接 SOCKS5 的地址">
-                        <select aria-label="入口连接 SOCKS5 的地址" value={serverForm.agentProxyInternal ? "internal" : "public"} onChange={(e) => setServerForm({ ...serverForm, agentProxyInternal: e.target.value === "internal" })}>
+                      {serverForm.agentProxyNodeId && <Field label="本机连接 SOCKS5 的地址">
+                        <select aria-label="本机连接 SOCKS5 的地址" value={serverForm.agentProxyInternal ? "internal" : "public"} onChange={(e) => setServerForm({ ...serverForm, agentProxyInternal: e.target.value === "internal" })}>
                           <option value="public">SOCKS5 节点发布地址（公网 / 域名）</option>
                           <option value="internal" disabled={!servers.find((s) => s.id === nodes.find((n) => n.id === serverForm.agentProxyNodeId)?.serverId)?.internalAddress}>SOCKS5 所在服务器的内网地址</option>
                         </select>
@@ -3098,12 +3127,12 @@ function App() {
                       {serverForm.agentProxyNodeId && <Field label="SOCKS5 防火墙放行来源">
                         <select aria-label="SOCKS5 防火墙放行来源" value={serverForm.agentProxySourceMode || "auto"} onChange={(e) => setServerForm({ ...serverForm, agentProxySourceMode: e.target.value as Server["agentProxySourceMode"] })}>
                           <option value="auto">跟随连接地址类型</option>
-                          <option value="public">入口公网 IP</option>
-                          <option value="internal">入口内网 IP</option>
+                          <option value="public">本机公网 IP</option>
+                          <option value="internal">本机内网 IP</option>
                         </select>
-                        <p className="serverFieldHelp">这是 SOCKS5 服务器实际看到的入口来源 IP，可独立于上方连接地址选择。选择内网来源时，请在下方填写这台入口服务器的内网 IP。仅改来源规则无需重装或重启入口 Agent。</p>
+                        <p className="serverFieldHelp">这是 SOCKS5 服务器实际看到的入口来源 IP，可独立于上方连接地址选择。选择内网来源时，请在下方填写这台服务器的内网 IP。仅改来源规则无需重装或重启本机 Agent。</p>
                       </Field>}
-                      <p className="serverFieldHelp">代理用于 Agent 接入、心跳、任务与下载，与节点“允许直连”无关。候选节点须已启用、配置已生效，且其服务器已启用 UFW、没有防火墙冲突。面板按所选入口来源 IP 自动放行；经过 NAT 时请填写实际出口 IP。已有在线入口须支持 Agent 0.6.10 的代理功能。</p>
+                      <p className="serverFieldHelp">代理用于 Agent 接入、心跳、任务与下载，与节点“允许直连”无关。候选节点须已启用、配置已生效，且其服务器已启用 UFW、没有防火墙冲突。面板按所选本机来源 IP 自动放行；经过 NAT 时请填写实际出口 IP。所有在线服务器均可使用代理，需 Agent 0.6.10 或更高版本。</p>
                     </div>
                   </div>
                 </section>
@@ -3143,6 +3172,13 @@ function App() {
                         }
                       />
                     </Field>
+                    {serverForm.managementMode !== "offline" && <div className="serverFormWide">
+                      <Field label="节点默认出口网卡">
+                        <input maxLength={15} placeholder="留空使用系统路由，例如 ppp0" value={serverForm.outboundInterface || ""} onChange={(e) => setServerForm({ ...serverForm, outboundInterface: e.target.value })} />
+                      </Field>
+                      <p className="serverFieldHelp">仅控制这台服务器上 sing-box 节点的出口，节点可单独覆盖。修改后会重新应用配置并重启 sing-box；指定网卡不存在或未启用时，保留原配置并报错。</p>
+                      {!!serverForm.outboundInterface?.trim() && !!serverForm.agentVersion && !serverForm.outboundBindingSupport && <p className="serverFieldHelp dangerText">配置可保存；请先升级 Agent 至 0.6.12 后应用出口网卡设置。</p>}
+                    </div>}
                     <div className="serverFormWide">
                       <Field label="防火墙管理">
                         <select disabled={serverForm.managementMode === "offline"} value={serverForm.firewallMode || "ufw"} onChange={(e) => setServerForm({ ...serverForm, firewallMode: e.target.value as "ufw" | "manual" })}>
@@ -3320,6 +3356,19 @@ function App() {
                       }
                     />
                   </Field>
+                  <Field label="节点出口">
+                    <select aria-label="节点出口" value={nodeForm.outboundMode || "inherit"} onChange={(e) => setNodeForm({ ...nodeForm, outboundMode: e.target.value as Node["outboundMode"], outboundInterface: "" })}>
+                      <option value="inherit">继承服务器（{servers.find((s) => s.id === nodeForm.serverId)?.outboundInterface || "系统路由"}）</option>
+                      <option value="system">使用系统路由</option>
+                      <option value="interface">指定出口网卡</option>
+                    </select>
+                    <small>仅影响此节点的 sing-box 流量及 ShadowTLS 握手，不改变 Agent 或端口转发的出口。</small>
+                  </Field>
+                  {nodeForm.outboundMode === "interface" && <Field label="出口网卡 *">
+                    <input required maxLength={15} placeholder="例如 ppp0、eth0" value={nodeForm.outboundInterface || ""} onChange={(e) => setNodeForm({ ...nodeForm, outboundInterface: e.target.value })} />
+                    <small>须为目标服务器已启用的网卡；不可用时应用失败，不自动改用其他出口。</small>
+                  </Field>}
+                  {(nodeForm.outboundMode === "interface" || ((nodeForm.outboundMode || "inherit") === "inherit" && !!servers.find((s) => s.id === nodeForm.serverId)?.outboundInterface)) && !servers.find((s) => s.id === nodeForm.serverId)?.outboundBindingSupport && <p className="hint dangerText">配置可保存；需升级 Agent 至 0.6.12 后应用出口网卡设置。</p>}
                   <Field label="访问方式">
                     <label className="check">
                       <input type="checkbox" checked={!!nodeForm.direct} onChange={(e) => setNodeForm({ ...nodeForm, direct: e.target.checked })} />
@@ -3337,7 +3386,7 @@ function App() {
                       <option value="manual" disabled={nodeForm.protocol === "socks5"}>不生成自动规则，手动管理</option>
                     </select>
                   </Field>}
-                  {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && !nodeForm.direct && <p className="hint">未开启客户端直连：仅放行链路最后一跳和使用此 SOCKS5 的入口 Agent。{nodeForm.routeSources ? `链路来源：${nodeForm.routeSources.split(",").join("、")}。` : ""}{nodeForm.agentProxySources ? `Agent 来源：${nodeForm.agentProxySources.split(",").join("、")}。` : ""}{!nodeForm.routeSources && !nodeForm.agentProxySources ? "未被链路或 Agent 使用时，端口不对外开放。" : ""}</p>}
+                  {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && !nodeForm.direct && <p className="hint">未开启客户端直连：仅放行链路最后一跳和使用此 SOCKS5 的 Agent。{nodeForm.routeSources ? `链路来源：${nodeForm.routeSources.split(",").join("、")}。` : ""}{nodeForm.agentProxySources ? `Agent 来源：${nodeForm.agentProxySources.split(",").join("、")}。` : ""}{!nodeForm.routeSources && !nodeForm.agentProxySources ? "未被链路或 Agent 使用时，端口不对外开放。" : ""}</p>}
                   {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && nodeForm.direct && nodeForm.firewallPolicy === "restricted" && (
                     <Field label="允许的来源 IP / CIDR *">
                       <textarea
@@ -3469,7 +3518,7 @@ function App() {
                 <p className="hint">
                   节点连接配置改变时会重启 sing-box；只修改 UFW 放行来源不会重启。
                 </p>
-                {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && nodeForm.firewallPolicy === "restricted" && <p className="hint">指定来源只约束节点自动规则；请检查主机上是否还有放行同一端口的其他规则。</p>}
+                {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && nodeForm.firewallPolicy === "restricted" && <p className="hint">Agent 0.6.14 起，节点来源限制优先于主机已有的同端口 UFW 规则；其他来源会被拒绝。</p>}
                 {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && nodeForm.firewallPolicy === "manual" && <p className="hint">手动管理模式不会开放节点端口，请先在自定义规则中添加需要的允许来源。</p>}
                 {manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && <p className="hint">该服务器的防火墙由外部管理。允许直连开关仅决定能否加入直连订阅；实际端口放行、来源白名单和仅链路访问限制请自行配置。</p>}
                 {nodeForm.protocol === "socks5" && !!servers.find((s) => s.id === nodeForm.serverId)?.agentVersion && !servers.find((s) => s.id === nodeForm.serverId)?.agentProxySupport && <div className="banner warning" role="status">配置可以保存；请先将服务器 Agent 升级至 0.6.10，之后才会应用 SOCKS5 节点。</div>}
@@ -3482,7 +3531,7 @@ function App() {
                   {!selectedNodeServer?.coreSelfUpdate && <p>请先接入支持核心安装的 Agent。</p>}
                   {!!selectedNodeServer?.coreSelfUpdate && !coreReleases[selectedNodeServer?.arch || ""] && <p>面板缺少该架构的 sing-box 发布文件。</p>}
                 </div>}
-                {nodeForm.protocol === "socks5" && <p className="hint">SOCKS5 支持 TCP，强制用户名密码认证，服务器必须启用 UFW。入口 Agent 可独立使用此节点，无需打开“允许直连”，面板会为它的来源 IP 自动添加放行规则。仅在可信网络中使用，SOCKS5 本身不加密。</p>}
+                {nodeForm.protocol === "socks5" && <p className="hint">SOCKS5 支持 TCP，强制用户名密码认证，服务器必须启用 UFW。所有在线服务器的 Agent 均可独立使用此节点，无需打开“允许直连”，面板会为它的来源 IP 自动添加放行规则。仅在可信网络中使用，SOCKS5 本身不加密。</p>}
                 {nodeForm.protocol === "socks5" && (manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) || servers.find((s) => s.id === nodeForm.serverId)?.ufwStatus !== "active") && <div className="banner warning" role="status">请先将该服务器设置为 UFW 托管，并在服务器列表安全初始化防火墙，再提交 SOCKS5 节点。</div>}
                 {templateLoading && <p className="hint">正在读取模板密码…</p>}
                 <button className="primary submit" disabled={templateLoading || nodeCoreMissing || (nodeForm.protocol === "socks5" && (manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) || servers.find((s) => s.id === nodeForm.serverId)?.ufwStatus !== "active"))}>提交配置</button>
@@ -3591,7 +3640,10 @@ function App() {
               </form>
             )}
             {modal === "certificate" && (
-              <form onSubmit={submitCert}>
+              <form className="certificateForm" onSubmit={submitCert}>
+                <p className="hint">和 Nginx 一样，选择证书文件和对应私钥文件即可，无需转换格式或选择服务器。</p>
+                <CertificateFileField kind="certificate" value={certForm.pem || ""} onChange={(pem) => setCertForm((f) => ({ ...f, pem }))} onBusy={(busy) => setCertFilesBusy((s) => ({ ...s, pem: busy }))} />
+                <CertificateFileField kind="key" value={certForm.key || ""} onChange={(key) => setCertForm((f) => ({ ...f, key }))} onBusy={(busy) => setCertFilesBusy((s) => ({ ...s, key: busy }))} />
                 <div className="formGrid">
                   <Field label="名称">
                     <input
@@ -3601,9 +3653,8 @@ function App() {
                       }
                     />
                   </Field>
-                  <Field label="域名 *">
+                  <Field label="域名（留空从证书读取）">
                     <input
-                      required
                       value={certForm.domain || ""}
                       onChange={(e) =>
                         setCertForm({ ...certForm, domain: e.target.value })
@@ -3611,26 +3662,8 @@ function App() {
                     />
                   </Field>
                 </div>
-                <Field label="证书链 PEM *">
-                  <textarea
-                    required
-                    rows={7}
-                    value={certForm.pem || ""}
-                    onChange={(e) =>
-                      setCertForm({ ...certForm, pem: e.target.value })
-                    }
-                  />
-                </Field>
-                <Field label="私钥 PEM *">
-                  <SecretTextarea
-                    required
-                    rows={7}
-                    value={certForm.key || ""}
-                    onChange={(v) => setCertForm({ ...certForm, key: v })}
-                  />
-                </Field>
                 <p className="hint">证书可供多台服务器复用。创建 AnyTLS 节点时选择证书，面板会将证书和私钥下发到该节点所在服务器；TLS 域名须被证书覆盖。</p>
-                <button className="primary submit">保存证书</button>
+                <button className="primary submit" disabled={certFilesBusy.pem || certFilesBusy.key || !certForm.pem?.trim() || !certForm.key?.trim()}>{certFilesBusy.pem || certFilesBusy.key ? "正在读取文件…" : "保存证书"}</button>
               </form>
             )}
             {modal === "route" && (() => {
@@ -3986,17 +4019,14 @@ function App() {
                 </Field>
                 <Field label="直连节点（需在节点中开启“允许直连”）">
                   <div className="nodePicker">
-                    {nodes
-                      .filter(
-                        (n) =>
-                          (n.status === "active" && n.direct && subscriptionNodeEligible(subForm.format, n)) ||
-                          subForm.nodeIds?.includes(n.id),
-                      )
-                      .map((n) => (
-                        <label className="check" key={n.id}>
+                    {nodes.map((n) => {
+                      const selected = subForm.nodeIds?.includes(n.id) || false;
+                      const issue = subscriptionDirectNodeIssue(subForm.format, n);
+                      return <label className="check subscriptionRouteChoice" key={n.id}>
                           <input
                             type="checkbox"
-                            checked={subForm.nodeIds?.includes(n.id) || false}
+                            checked={selected}
+                            disabled={!!issue && !selected}
                             onChange={(e) =>
                               setSubForm({
                                 ...subForm,
@@ -4008,16 +4038,17 @@ function App() {
                               })
                             }
                           />
-                          {n.name}{" "}
-                          <small>
-                            {n.protocol.toUpperCase()} ·{" "}
-                            {serverName(n.serverId)}
-                          </small>
-                        </label>
-                      ))}
-                    {nodes.filter((n) => n.status === "active" && n.direct && subscriptionNodeEligible(subForm.format, n)).length ===
-                      0 && <p className="hint">尚无适用于当前客户端格式且允许直连的已生效节点</p>}
+                          <span className="subscriptionRouteDetails">
+                            <span>{n.name}</span>
+                            <small>{n.protocol.toUpperCase()} · {serverName(n.serverId)}</small>
+                            {issue && <small className="routeChoiceIssue">{issue}{selected ? "；请取消选择或调整节点配置" : ""}</small>}
+                            {!issue && n.status !== "active" && <small>{n.status === "error" ? "配置应用失败，请检查操作记录；可先加入订阅，生效后下发" : "配置待应用；可先加入订阅，生效后下发"}</small>}
+                          </span>
+                        </label>;
+                    })}
+                    {!nodes.length && <p className="hint">暂无节点，请先创建节点并开启“允许直连”。</p>}
                   </div>
+                  <p className="hint">待应用的节点可以先选入订阅，配置在服务器上生效后才会出现在订阅下载中。不兼容当前客户端格式的节点会显示具体原因。</p>
                 </Field>
                 {subForm.format === "surge" && <p className="hint">Surge 格式输出节点列表，支持传统 SS（如 aes-256-gcm）、AES-GCM 的 SS 2022 和 ShadowTLS Snell。请通过代理组的 policy-path 引用链接；把此链接当完整配置安装会报“规则必须以 FINAL 结尾”。创建后或在列表“查看链接”中可复制代理组配置。AnyTLS 请使用 sing-box 或 v2rayN 格式。</p>}
                 {subForm.format === "v2rayn" && <p className="hint">v2rayN 格式支持 SS 和 AnyTLS 节点及其链路。复制订阅链接，在 v2rayN 中添加订阅分组并更新订阅；AnyTLS 请使用支持该协议的新版 v2rayN，并选择 sing-box 内核。v2rayN 不支持 Snell / ShadowTLS。</p>}

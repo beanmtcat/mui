@@ -710,6 +710,20 @@ input[type="checkbox"] {
 .installModal {
   width: min(760px, 100%);
 }
+.certificateForm > * + * { margin-top: 16px; }
+.certificateFileField {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.certificateFileField label { display: grid; gap: 8px; }
+.certificateFileField input[type="file"] { display: block; width: 100%; min-width: 0; padding: 8px; background: var(--surface); }
+.certificateFileField > * + * { margin-top: 8px; }
+.certificateFileField details summary { cursor: pointer; color: var(--accent); }
+.certificateFileField details > textarea, .certificateFileField details > div { margin-top: 8px; }
+.certificateFileReady { color: var(--good); font-size: 12px; }
 .installModal > .managementMigration {
   margin: 20px;
 }

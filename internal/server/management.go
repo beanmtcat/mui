@@ -20,6 +20,7 @@ func resetManagementRuntime(s *shared.Server, before shared.Server) {
 	s.LastSeen, s.AppliedRevision, s.Status = nil, 0, "pending"
 	s.AgentVersion, s.AgentBuild, s.CoreVersion, s.CoreBuild = "", "", "", ""
 	s.AgentSelfUpdate, s.CoreSelfUpdate, s.AgentProxySupport = false, false, false
+	s.OutboundBindingSupport = false
 	s.ManualFirewallSupport, s.NodeFirewallPolicies, s.MultiUserStats = false, false, false
 	s.ForwardSupport, s.ForwardTCPUDP, s.ShadowTLSAuth, s.SnellFixedPort, s.SnellV6 = false, false, false, false, false
 	s.AgentProxySwitchPending, s.AgentProxyPreviousInternal, s.AgentProxyPreviousNodeID = false, false, ""

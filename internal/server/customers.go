@@ -132,6 +132,7 @@ func (a *App) accessLog(query *logQuery, limit, offset int) ([]shared.Subscripti
 }
 
 type connectionCursor struct {
+	RouteID     string `json:"routeId,omitempty"`
 	FirstSeenMs int64  `json:"firstSeenMs"`
 	ServerID    string `json:"serverId"`
 	NodeID      string `json:"nodeId"`
@@ -140,7 +141,11 @@ type connectionCursor struct {
 
 func (a *App) connectionLog(query *logQuery, limit, offset int) ([]shared.ConnectionIP, error) {
 	out := []shared.ConnectionIP{}
-	rows, err := a.Store.DB.Query(query.sql("first_seen_ms DESC, server_id DESC, node_id DESC, ip DESC", limit, offset), query.args...)
+	world, err := a.loadRouteWorld()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := a.Store.DB.Query(query.sql("first_seen_ms DESC, server_id DESC, node_id DESC, ip DESC, route_id DESC", limit, offset), query.args...)
 	if err != nil {
 		return nil, err
 	}
@@ -148,11 +153,12 @@ func (a *App) connectionLog(query *logQuery, limit, offset int) ([]shared.Connec
 	for rows.Next() {
 		var item shared.ConnectionIP
 		var at, firstSeen int64
-		if err = rows.Scan(&item.ServerID, &item.NodeID, &item.IP, &at, &firstSeen); err != nil {
+		if err = rows.Scan(&item.ServerID, &item.NodeID, &item.IP, &at, &firstSeen, &item.RouteID, &item.SourceKind); err != nil {
 			return nil, err
 		}
+		classifyConnection(&item, world)
 		item.LastSeen = time.UnixMilli(at).UTC()
-		cursor, err := json.Marshal(connectionCursor{FirstSeenMs: firstSeen, ServerID: item.ServerID, NodeID: item.NodeID, IP: item.IP})
+		cursor, err := json.Marshal(connectionCursor{FirstSeenMs: firstSeen, ServerID: item.ServerID, NodeID: item.NodeID, IP: item.IP, RouteID: item.RouteID})
 		if err != nil {
 			return nil, err
 		}
@@ -163,7 +169,10 @@ func (a *App) connectionLog(query *logQuery, limit, offset int) ([]shared.Connec
 }
 
 const accessColumns = `SELECT id,subscription_id,customer_id,ip,at_ms FROM mui_subscription_access`
-const connectionColumns = `SELECT server_id,node_id,ip,at_ms,first_seen_ms FROM mui_connection_ips`
+const connectionColumns = `SELECT server_id,node_id,ip,at_ms,first_seen_ms,route_id,source_kind FROM (
+SELECT server_id,node_id,ip,at_ms,first_seen_ms,'' AS route_id,'node' AS source_kind FROM mui_connection_ips
+UNION ALL SELECT server_id,node_id,ip,at_ms,first_seen_ms,route_id,'entry' AS source_kind FROM mui_entry_connection_ips
+) AS connection_log`
 
 // clientAccesses lists subscription downloads, newest first. ?before= takes the
 // ID of the last row already shown.
@@ -222,7 +231,7 @@ func (a *App) clientConnections(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 400, "无效的连接记录游标")
 			return
 		}
-		query.where("(first_seen_ms,server_id,node_id,ip)<(" + query.arg(cursor.FirstSeenMs) + "," + query.arg(cursor.ServerID) + "," + query.arg(cursor.NodeID) + "," + query.arg(cursor.IP) + ")")
+		query.where("(first_seen_ms,server_id,node_id,ip,route_id)<(" + query.arg(cursor.FirstSeenMs) + "," + query.arg(cursor.ServerID) + "," + query.arg(cursor.NodeID) + "," + query.arg(cursor.IP) + "," + query.arg(cursor.RouteID) + ")")
 	}
 	limit, offset := pageLimit(r), 0
 	if page.paged {

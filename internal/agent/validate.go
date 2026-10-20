@@ -60,6 +60,9 @@ func (idx *portConflictIndex) claim(port int, class, listen string) {
 
 // ValidateDesired validates the exact configuration accepted by the Linux helper.
 func ValidateDesired(state shared.DesiredState) error {
+	if err := shared.ValidateOutboundInterface(state.OutboundInterface); err != nil {
+		return err
+	}
 	if !shared.ValidFirewallMode(state.FirewallMode) {
 		return errors.New("invalid firewall management mode")
 	}
