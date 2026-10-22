@@ -349,6 +349,58 @@ td > button.dangerText {
 .tableWrap {
   overflow-x: auto;
 }
+.serverListTable th,
+.serverListTable td {
+  padding: 10px 12px;
+  vertical-align: middle;
+}
+.serverListTable td {
+  line-height: 1.5;
+}
+.serverCountry {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.serverFlag {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 16px;
+  line-height: 1;
+}
+.serverListTable td small {
+  overflow: hidden;
+  max-width: 190px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.serverNameLine,
+.serverAgentLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.serverNameLine strong {
+  overflow: hidden;
+  max-width: 180px;
+  text-overflow: ellipsis;
+}
+.serverAddress {
+  display: inline-block;
+  overflow: hidden;
+  max-width: 180px;
+  vertical-align: middle;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.serverListTable td.mono .helpTip {
+  margin-left: 6px;
+}
+.serverTraffic {
+  white-space: nowrap;
+  font-size: 12px;
+}
 table {
   width: 100%;
   border-collapse: collapse;
@@ -571,6 +623,69 @@ input[type="checkbox"] {
   font-size: 14px;
   color: var(--text);
 }
+.fieldLabelRow,
+.serverToggleRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.helpTip {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--muted);
+}
+.helpTipButton {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.helpTipButton:hover,
+.helpTipButton[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.helpTipWarning {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.helpTipButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.helpTipPanel {
+  position: fixed;
+  z-index: 30;
+  width: 320px;
+  max-width: min(320px, calc(100vw - 48px));
+  max-height: min(60vh, 440px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  box-shadow: 0 6px 22px rgb(0 0 0 / 14%);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.6;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.nodeSingleUserRow {
+  grid-column: 1 / -1;
+}
 .check {
   display: flex;
   align-items: center;
@@ -682,6 +797,9 @@ input[type="checkbox"] {
   margin-bottom: 8px;
   font-size: 12px;
   color: var(--muted);
+}
+.serverRoles legend .fieldLabelRow {
+  display: inline-flex;
 }
 .serverRoles .checkRow {
   gap: 8px;

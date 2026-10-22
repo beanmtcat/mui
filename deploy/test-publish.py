@@ -120,6 +120,37 @@ else: raise SystemExit(subprocess.call(['/bin/mv',*args]))
                 self.assertNotIn("mui-service", call)
         self.assertTrue(previous.is_dir())
 
+    def test_success_prunes_old_releases_but_keeps_current_and_previous(self):
+        first = self.initialize()
+        releases = self.remote / "releases"
+        unrelated = releases / "manual-backup"
+        unrelated.mkdir()
+        outside = self.base / "outside"
+        outside.mkdir()
+        link = releases / "20200101T000000Z-ABCDEFGH"
+        link.symlink_to(outside, target_is_directory=True)
+        self.run_publish()
+        second = (self.remote / "current").resolve()
+        self.run_publish()
+        third = (self.remote / "current").resolve()
+        self.assertFalse(first.exists())
+        self.assertTrue(second.is_dir())
+        self.assertTrue(third.is_dir())
+        self.assertEqual((self.remote / "current").resolve(), third)
+        self.assertTrue(unrelated.is_dir())
+        self.assertTrue(link.is_symlink())
+        self.assertTrue(outside.is_dir())
+
+    def test_failed_publish_does_not_prune_previous_release(self):
+        first = self.initialize()
+        self.run_publish()
+        second = (self.remote / "current").resolve()
+        self.env["PUBLISH_MOCK_FAIL"] = "build"
+        self.run_publish(ok=False)
+        self.assertTrue(first.is_dir())
+        self.assertTrue(second.is_dir())
+        self.assertEqual((self.remote / "current").resolve(), second)
+
     def test_init_cannot_overwrite_remote_env(self):
         previous = self.initialize()
         before = (self.remote / "deploy/.env").read_bytes()

@@ -94,15 +94,15 @@ func (a *App) coreRelease(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, builds)
 }
 
-func (a *App) queueAgentUpgrade(serverID string) (shared.Operation, error) {
-	return a.queueBinaryUpgrade(serverID, "agent.upgrade")
+func (a *App) queueAgentUpgrade(serverID, ip string) (shared.Operation, error) {
+	return a.queueBinaryUpgrade(serverID, "agent.upgrade", ip)
 }
 
-func (a *App) queueCoreUpgrade(serverID string) (shared.Operation, error) {
-	return a.queueBinaryUpgrade(serverID, "core.upgrade")
+func (a *App) queueCoreUpgrade(serverID, ip string) (shared.Operation, error) {
+	return a.queueBinaryUpgrade(serverID, "core.upgrade", ip)
 }
 
-func (a *App) queueBinaryUpgrade(serverID, kind string) (shared.Operation, error) {
+func (a *App) queueBinaryUpgrade(serverID, kind, ip string) (shared.Operation, error) {
 	if err := a.Store.ExpireUpgrades(); err != nil {
 		return shared.Operation{}, err
 	}
@@ -164,7 +164,7 @@ func (a *App) queueBinaryUpgrade(serverID, kind string) (shared.Operation, error
 	if err = a.Store.PutOperation(op, state); err != nil {
 		return shared.Operation{}, err
 	}
-	a.Store.Audit(kind, serverID, fmt.Sprintf("queued %s", hash[:12]))
+	a.Store.AuditWithIP(kind, serverID, fmt.Sprintf("queued %s", hash[:12]), ip)
 	return op, nil
 }
 
@@ -173,7 +173,7 @@ func (a *App) agentUpgrade(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "服务器不存在")
 		return
 	}
-	op, err := a.queueAgentUpgrade(r.PathValue("id"))
+	op, err := a.queueAgentUpgrade(r.PathValue("id"), a.clientIP(r))
 	if err != nil {
 		errorJSON(w, 409, err.Error())
 		return
@@ -186,7 +186,7 @@ func (a *App) coreUpgrade(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "服务器不存在")
 		return
 	}
-	op, err := a.queueCoreUpgrade(r.PathValue("id"))
+	op, err := a.queueCoreUpgrade(r.PathValue("id"), a.clientIP(r))
 	if err != nil {
 		errorJSON(w, 409, err.Error())
 		return

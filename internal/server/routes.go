@@ -708,7 +708,7 @@ func (a *App) routes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = ID()
-	a.saveRoute(w, in, nil)
+	a.saveRoute(w, r, in, nil)
 }
 
 func (a *App) routeByID(w http.ResponseWriter, r *http.Request) {
@@ -743,7 +743,7 @@ func (a *App) routeByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
-		a.Store.Audit("route.delete", old.ID, old.Name)
+		a.auditRequest(r, "route.delete", old.ID, old.Name)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
@@ -752,10 +752,10 @@ func (a *App) routeByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.ID = old.ID
-	a.saveRoute(w, in, &old)
+	a.saveRoute(w, r, in, &old)
 }
 
-func (a *App) saveRoute(w http.ResponseWriter, in shared.Route, old *shared.Route) {
+func (a *App) saveRoute(w http.ResponseWriter, r *http.Request, in shared.Route, old *shared.Route) {
 	world, err := a.loadRouteWorld()
 	if err != nil {
 		errorJSON(w, 500, err.Error())
@@ -822,11 +822,11 @@ func (a *App) saveRoute(w http.ResponseWriter, in shared.Route, old *shared.Rout
 		}
 	}
 	if old == nil {
-		a.Store.Audit("route.create", in.ID, in.Name)
+		a.auditRequest(r, "route.create", in.ID, in.Name)
 		writeJSON(w, 201, in)
 		return
 	}
-	a.Store.Audit("route.update", in.ID, in.Name)
+	a.auditRequest(r, "route.update", in.ID, in.Name)
 	writeJSON(w, 200, in)
 }
 

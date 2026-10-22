@@ -96,7 +96,7 @@ func (a *App) offlineExport(w http.ResponseWriter, r *http.Request) {
 	}
 	// An export file is private administrator data, never a public URL.
 	w.Header().Set("Cache-Control", "no-store")
-	a.Store.Audit("offline.export", id, "revision "+strconv.FormatInt(bundle.Revision, 10))
+	a.auditRequest(r, "offline.export", id, "revision "+strconv.FormatInt(bundle.Revision, 10))
 	guide := a.standaloneInstallAt(a.publicURLForRequest(r))
 	guide.MigrationCommand = managementMigrationCommand(server)
 	guide.ExampleConfig = ""

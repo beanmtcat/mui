@@ -26,6 +26,9 @@ type Server struct {
 	IPv4     string   `json:"ipv4"`
 	IPv6     string   `json:"ipv6"`
 	Domain   string   `json:"domain"`
+	// AutoSyncPublicIP replaces configured IPs with valid addresses reported
+	// by the Agent. Absent on existing servers, so static addresses stay manual.
+	AutoSyncPublicIP bool `json:"autoSyncPublicIp,omitempty"`
 	// InternalAddress is how other servers on the same private network or
 	// dedicated line (IPLC/IEPL) reach this one; a route hop can use it.
 	InternalAddress              string     `json:"internalAddress"`
@@ -75,10 +78,13 @@ type Server struct {
 }
 
 type Node struct {
-	ID                string `json:"id"`
-	ServerID          string `json:"serverId"`
-	Name              string `json:"name"`
-	Protocol          string `json:"protocol"`
+	ID       string `json:"id"`
+	ServerID string `json:"serverId"`
+	Name     string `json:"name"`
+	Protocol string `json:"protocol"`
+	// SingleUser keeps the node's original login for all subscriptions.
+	// Absent on existing records, so their current multi-user behavior stays.
+	SingleUser        bool   `json:"singleUser,omitempty"`
 	Username          string `json:"username,omitempty"`
 	Port              int    `json:"port"`
 	Listen            string `json:"listen"`

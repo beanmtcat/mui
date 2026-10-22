@@ -55,7 +55,7 @@ func (a *App) forwards(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("forward.create", in.ID, in.Name)
+	a.auditRequest(r, "forward.create", in.ID, in.Name)
 	writeJSON(w, 201, in)
 }
 
@@ -80,7 +80,7 @@ func (a *App) forwardByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
-		a.Store.Audit("forward.delete", old.ID, old.Name)
+		a.auditRequest(r, "forward.delete", old.ID, old.Name)
 		writeJSON(w, 202, map[string]bool{"queued": true})
 		return
 	}
@@ -118,7 +118,7 @@ func (a *App) forwardByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("forward.update", in.ID, in.Name)
+	a.auditRequest(r, "forward.update", in.ID, in.Name)
 	writeJSON(w, 200, in)
 }
 

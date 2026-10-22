@@ -59,7 +59,7 @@ func (a *App) customers(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("customer.create", in.ID, in.Name)
+	a.auditRequest(r, "customer.create", in.ID, in.Name)
 	writeJSON(w, 201, in)
 }
 
@@ -90,7 +90,7 @@ func (a *App) customerByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
-		a.Store.Audit("customer.delete", id, old.Name)
+		a.auditRequest(r, "customer.delete", id, old.Name)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
@@ -108,7 +108,7 @@ func (a *App) customerByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("customer.update", id, old.Name)
+	a.auditRequest(r, "customer.update", id, old.Name)
 	writeJSON(w, 200, old)
 }
 

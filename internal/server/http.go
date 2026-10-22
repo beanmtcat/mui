@@ -174,6 +174,19 @@ func (a *App) clientIP(r *http.Request) string {
 	return host
 }
 
+// carrierGradeNAT is RFC 6598 shared address space. IsPrivate does not cover
+// it, but a host behind CGNAT cannot be reached at such an address.
+var carrierGradeNAT = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+// publicUnicast reports whether ip can stand for a server's public address.
+func publicUnicast(ip net.IP) bool {
+	return ip.IsGlobalUnicast() && !ip.IsPrivate() && !carrierGradeNAT.Contains(ip)
+}
+
+func (a *App) auditRequest(r *http.Request, action, target, detail string) {
+	a.Store.AuditWithIP(action, target, detail, a.clientIP(r))
+}
+
 // lockServer returns the unlock function for one server's mutex, creating the
 // mutex on first use. Callers must not hold two server locks at once.
 func (a *App) lockServer(id string) func() {
@@ -754,7 +767,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 401, "密码或验证码错误")
 		return
 	}
-	if totp != "" && !a.checkTOTP(totp, in.Code) {
+	if totp != "" && !a.checkTOTP(r, totp, in.Code) {
 		a.rateCount(r, "login", 1)
 		errorJSON(w, 401, "密码或验证码错误")
 		return
@@ -824,7 +837,7 @@ func (a *App) changePassword(w http.ResponseWriter, r *http.Request) {
 	// Every other session was opened with the old password.
 	c, _ := r.Cookie("mui_session")
 	_, _ = a.Store.DB.Exec(`DELETE FROM mui_sessions WHERE token_hash<>$1`, Hash(c.Value))
-	a.Store.Audit("admin.password", "admin", "")
+	a.auditRequest(r, "admin.password", "admin", "")
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 func (a *App) totpDisable(w http.ResponseWriter, r *http.Request) {
@@ -844,7 +857,7 @@ func (a *App) totpDisable(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("admin.totp.disable", "admin", "")
+	a.auditRequest(r, "admin.totp.disable", "admin", "")
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -853,7 +866,7 @@ func (a *App) totpDisable(w http.ResponseWriter, r *http.Request) {
 // whatever address they come from, and a code is accepted only once. The
 // replay state lives in the database, so a restart does not make a used code
 // valid again.
-func (a *App) checkTOTP(secret, code string) bool {
+func (a *App) checkTOTP(r *http.Request, secret, code string) bool {
 	a.rateMu.Lock()
 	defer a.rateMu.Unlock()
 	lastStep, failures, lockedUntil, err := a.Store.TOTPState()
@@ -876,7 +889,7 @@ func (a *App) checkTOTP(secret, code string) bool {
 	locked := time.Time{}
 	if failures >= 5 {
 		failures, locked = 0, time.Now().Add(5*time.Minute)
-		a.Store.Audit("admin.totp.lock", "admin", "5 consecutive wrong codes")
+		a.auditRequest(r, "admin.totp.lock", "admin", "5 consecutive wrong codes")
 	}
 	if err := a.Store.SetTOTPState(lastStep, failures, locked); err != nil {
 		log.Printf("totp state: %v", err)
@@ -1005,7 +1018,7 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		ID: ID(), Name: in.Name, Roles: roles,
 		Country: strings.ToUpper(in.Country), Region: in.Region, City: in.City,
 		Provider: in.Provider, Tags: in.Tags, Notes: in.Notes,
-		IPv4: in.IPv4, IPv6: in.IPv6, Domain: in.Domain, InternalAddress: strings.TrimSpace(in.InternalAddress), OutboundInterface: strings.TrimSpace(in.OutboundInterface),
+		IPv4: in.IPv4, IPv6: in.IPv6, Domain: in.Domain, AutoSyncPublicIP: in.AutoSyncPublicIP, InternalAddress: strings.TrimSpace(in.InternalAddress), OutboundInterface: strings.TrimSpace(in.OutboundInterface),
 		Status: "pending", UFWStatus: "unknown",
 		FirewallMode: in.FirewallMode, ManagementMode: in.ManagementMode, AgentProxyNodeID: in.AgentProxyNodeID, AgentProxyInternal: in.AgentProxyInternal, AgentProxySourceMode: in.AgentProxySourceMode,
 	}
@@ -1043,7 +1056,7 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("server.create", srv.ID, srv.Name)
+	a.auditRequest(r, "server.create", srv.ID, srv.Name)
 	if srv.AgentProxyNodeID != "" {
 		if err = a.syncRoutes(); err != nil {
 			errorJSON(w, 500, err.Error())
@@ -1217,7 +1230,7 @@ func (a *App) revokeAgent(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "服务器不存在")
 		return
 	}
-	a.Store.Audit("agent.revoke", id, "")
+	a.auditRequest(r, "agent.revoke", id, "")
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -1273,7 +1286,7 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
-		a.Store.Audit("server.delete", id, old.Name)
+		a.auditRequest(r, "server.delete", id, old.Name)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
@@ -1374,6 +1387,7 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 	old.IPv4 = in.IPv4
 	old.IPv6 = in.IPv6
 	old.Domain = in.Domain
+	old.AutoSyncPublicIP = in.AutoSyncPublicIP
 	if old.Name == "" || len(old.Country) != 2 || (old.IPv4 == "" && old.IPv6 == "" && old.Domain == "") {
 		errorJSON(w, 400, "名称、国家代码及地址必填")
 		return
@@ -1437,7 +1451,7 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("server.update", id, old.Name)
+	a.auditRequest(r, "server.update", id, old.Name)
 	writeJSON(w, 200, old)
 }
 func (a *App) enrollment(w http.ResponseWriter, r *http.Request) {
@@ -1541,7 +1555,7 @@ func (a *App) nodeTemplates(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("node_template.create", t.ID, t.Name)
+	a.auditRequest(r, "node_template.create", t.ID, t.Name)
 	writeJSON(w, 201, t)
 }
 
@@ -1576,7 +1590,7 @@ func (a *App) nodeTemplateByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
-		a.Store.Audit("node_template.delete", id, "")
+		a.auditRequest(r, "node_template.delete", id, "")
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
@@ -1634,7 +1648,7 @@ func (a *App) nodeTemplateByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("node_template.update", id, t.Name)
+	a.auditRequest(r, "node_template.update", id, t.Name)
 	writeJSON(w, 200, t)
 }
 
@@ -1809,7 +1823,7 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("node.create", n.ID, n.Name)
+	a.auditRequest(r, "node.create", n.ID, n.Name)
 	writeJSON(w, 201, n)
 }
 
@@ -1920,7 +1934,7 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
-		a.Store.Audit("node.delete", id, old.Name)
+		a.auditRequest(r, "node.delete", id, old.Name)
 		writeJSON(w, 202, map[string]bool{"queued": true})
 		return
 	}
@@ -2090,7 +2104,7 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("node.update", id, n.Name)
+	a.auditRequest(r, "node.update", id, n.Name)
 	writeJSON(w, 200, n)
 }
 func (a *App) share(w http.ResponseWriter, r *http.Request) {
@@ -2102,11 +2116,17 @@ func (a *App) share(w http.ResponseWriter, r *http.Request) {
 	server, _ := a.Store.Server(n.ServerID)
 	password, _ := a.Store.NodeSecret(n.ID)
 	if n.Protocol == "ss" && shared.SSMultiUser(n.Method) {
-		if live, err := a.nodeLive(n, server, "direct"); err != nil || !live {
+		login := "direct"
+		if n.SingleUser {
+			login = ""
+		}
+		if live, err := a.nodeLive(n, server, login); err != nil || !live {
 			errorJSON(w, 503, "该节点的配置尚未在服务器上生效")
 			return
 		}
-		password += ":" + a.Store.SubscriptionUser(n, "direct").Password
+		if !n.SingleUser {
+			password += ":" + a.Store.SubscriptionUser(n, "direct").Password
+		}
 	}
 	uri, err := shared.ShareURI(shared.SubscriptionItem{Node: n, Server: server, Password: password, Username: n.Username})
 	if err != nil {
@@ -2173,7 +2193,7 @@ func (a *App) certificates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Key = ""
-	a.Store.Audit("certificate.create", in.ID, in.Domain)
+	a.auditRequest(r, "certificate.create", in.ID, in.Domain)
 	writeJSON(w, 201, in)
 }
 func (a *App) certificateByID(w http.ResponseWriter, r *http.Request) {
@@ -2199,7 +2219,7 @@ func (a *App) certificateByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("certificate.delete", id, c.Domain)
+	a.auditRequest(r, "certificate.delete", id, c.Domain)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -2262,7 +2282,7 @@ func (a *App) firewall(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
-		a.Store.Audit("firewall.host_delete", server.ID, body.ReplaceHostRule)
+		a.auditRequest(r, "firewall.host_delete", server.ID, body.ReplaceHostRule)
 	}
 	in.ID = ID()
 	in.Owner = "custom"
@@ -2277,7 +2297,7 @@ func (a *App) firewall(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("firewall.create", in.ID, in.Comment)
+	a.auditRequest(r, "firewall.create", in.ID, in.Comment)
 	writeJSON(w, 201, in)
 }
 func validateRule(r shared.FirewallRule) error {
@@ -2334,7 +2354,7 @@ func (a *App) firewallByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("firewall.delete", id, target.Comment)
+	a.auditRequest(r, "firewall.delete", id, target.Comment)
 	writeJSON(w, 202, map[string]bool{"queued": true})
 }
 func (a *App) ufwInit(w http.ResponseWriter, r *http.Request) {
@@ -2356,7 +2376,7 @@ func (a *App) ufwInit(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("ufw.init", id, "")
+	a.auditRequest(r, "ufw.init", id, "")
 	writeJSON(w, 202, map[string]bool{"queued": true})
 }
 
@@ -2473,7 +2493,7 @@ func (a *App) subscriptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.URL = a.publicURLForRequest(r) + "/s/" + token
-	a.Store.Audit("subscription.create", in.ID, in.Name)
+	a.auditRequest(r, "subscription.create", in.ID, in.Name)
 	writeJSON(w, 201, in)
 }
 
@@ -2552,7 +2572,7 @@ func (a *App) subscriptionByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
-		a.Store.Audit("subscription.delete", id, old.Name)
+		a.auditRequest(r, "subscription.delete", id, old.Name)
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
@@ -2590,7 +2610,7 @@ func (a *App) subscriptionByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("subscription.update", id, old.Name)
+	a.auditRequest(r, "subscription.update", id, old.Name)
 	writeJSON(w, 200, old)
 }
 
@@ -2661,7 +2681,7 @@ func (a *App) queueSubscriptionApply(nodeIDs []string) error {
 	servers := map[string]bool{}
 	for _, id := range nodeIDs {
 		n, err := a.Store.Node(id)
-		if err == nil {
+		if err == nil && !shared.SharedSubscriptionPassword(n) {
 			servers[n.ServerID] = true
 		}
 	}
@@ -2728,7 +2748,7 @@ func (a *App) rotateSubscription(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "订阅不存在")
 		return
 	}
-	a.Store.Audit("subscription.rotate", id, "")
+	a.auditRequest(r, "subscription.rotate", id, "")
 	writeJSON(w, 200, map[string]string{"url": a.publicURLForRequest(r) + "/s/" + token})
 }
 
@@ -2908,9 +2928,9 @@ func (a *App) retryOperation(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if op.Kind == "agent.upgrade" {
-		_, err = a.queueAgentUpgrade(op.ServerID)
+		_, err = a.queueAgentUpgrade(op.ServerID, a.clientIP(r))
 	} else if op.Kind == "core.upgrade" {
-		_, err = a.queueCoreUpgrade(op.ServerID)
+		_, err = a.queueCoreUpgrade(op.ServerID, a.clientIP(r))
 	} else {
 		err = a.queueApply(op.ServerID, op.Kind)
 	}
@@ -2918,7 +2938,7 @@ func (a *App) retryOperation(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("operation.retry", op.ID, op.Kind)
+	a.auditRequest(r, "operation.retry", op.ID, op.Kind)
 	writeJSON(w, 202, map[string]bool{"queued": true})
 }
 func (a *App) traffic(w http.ResponseWriter, r *http.Request) {
@@ -3074,9 +3094,9 @@ func (a *App) trafficSummary(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"today": d, "month": m})
 }
 func (a *App) audit(w http.ResponseWriter, r *http.Request) {
-	query, args := newLogQuery(`SELECT id,at_ms,action,target,detail FROM mui_audit`)
+	query, args := newLogQuery(`SELECT id,at_ms,action,target,detail,ip FROM mui_audit`)
 	if q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q"))); q != "" {
-		query.where("LOWER(action || ' ' || detail) LIKE " + query.arg("%"+likeEscape(q)+"%") + ` ESCAPE '\'`)
+		query.where("LOWER(action || ' ' || detail || ' ' || ip) LIKE " + query.arg("%"+likeEscape(q)+"%") + ` ESCAPE '\'`)
 	}
 	page, err := readLogPage(r)
 	if err == nil {
@@ -3101,9 +3121,9 @@ func (a *App) audit(w http.ResponseWriter, r *http.Request) {
 	out := []map[string]any{}
 	for rows.Next() {
 		var at int64
-		var id, action, target, detail string
-		if rows.Scan(&id, &at, &action, &target, &detail) == nil {
-			out = append(out, map[string]any{"id": id, "at": time.UnixMilli(at), "action": action, "target": target, "detail": detail})
+		var id, action, target, detail, ip string
+		if rows.Scan(&id, &at, &action, &target, &detail, &ip) == nil {
+			out = append(out, map[string]any{"id": id, "at": time.UnixMilli(at), "action": action, "target": target, "detail": detail, "ip": ip})
 		}
 	}
 	if page.paged {
@@ -3182,11 +3202,11 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 			return state, err
 		}
 		item := shared.ManagedNode{Node: n, Password: password, ShadowTLSPassword: shadowPassword}
-		if n.Protocol == "ss" && shared.SSMultiUser(n.Method) {
+		if n.Protocol == "ss" && shared.SSMultiUser(n.Method) && !n.SingleUser {
 			item.Users = append(item.Users, a.Store.SubscriptionUser(n, "direct"))
 		}
 		for i, sub := range subscriptions {
-			if !sub.Enabled || sub.ExpiresAt != nil && time.Now().After(*sub.ExpiresAt) || n.Protocol == "ss" && !shared.SSMultiUser(n.Method) {
+			if !sub.Enabled || sub.ExpiresAt != nil && time.Now().After(*sub.ExpiresAt) || shared.SharedSubscriptionPassword(n) {
 				continue
 			}
 			if slices.Contains(subNodes[i], n.ID) {
@@ -3258,8 +3278,8 @@ func (a *App) subscriptionItem(sub shared.Subscription, n shared.Node, server sh
 	}
 	item := shared.SubscriptionItem{Node: n, Server: server, Password: password, Username: n.Username, ShadowTLSPassword: shadowPassword}
 	if shared.SharedSubscriptionPassword(n) {
-		// Legacy AEAD SS has one node password, not SS 2022's
-		// server-key:user-key pair. Do not invent a per-subscription key.
+		// Single-user nodes and legacy AEAD SS share their original node
+		// credential across subscriptions.
 		return item, nil
 	}
 	user := a.Store.SubscriptionUser(n, sub.ID)
@@ -3351,6 +3371,9 @@ func (a *App) nodeFingerprint(server shared.Server, n shared.Node, password, sha
 		scheme = "shadowtls"
 	}
 	fields := []string{n.Protocol, strconv.Itoa(n.Port), n.Method, n.Obfs, n.ShadowTLSHost, n.TLSName, password, shadowPassword, scheme}
+	if n.SingleUser {
+		fields = append(fields, "single-user")
+	}
 	if n.Protocol == "socks5" {
 		fields = append(fields, n.Username)
 	}
@@ -3571,7 +3594,7 @@ func (a *App) agentEnroll(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("agent.enroll", in.ServerID, "")
+	a.auditRequest(r, "agent.enroll", in.ServerID, "")
 	writeJSON(w, 200, map[string]string{"agentToken": token, "panelPublicKey": base64.StdEncoding.EncodeToString(publicKey)})
 }
 func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
@@ -3817,21 +3840,38 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 	if in.StatsStatus != "" {
 		server.StatsStatus = in.StatsStatus
 	}
-	// Detected addresses are kept next to the ones the administrator entered and
-	// only fill them in when nothing was entered; they never overwrite them.
+	// A server opted into dynamic public IPs uses valid Agent-reported
+	// addresses as its configured addresses. Other servers keep manual values
+	// and only fill previously empty fields, preserving existing behavior.
 	// Only full reports carry them: a job result without addresses must not
 	// blank them out.
 	if in.HostReported {
-		if server.DetectedIPv4 != in.IPv4 || server.DetectedIPv6 != in.IPv6 || in.IPv4 != "" && server.IPv4 == "" || in.IPv6 != "" && server.IPv6 == "" {
+		reportedIPv4 := in.IPv4
+		// Behind a home NAT the Agent's local IPv4 is private, so it reports
+		// nothing. For a direct Agent connection the panel can use the public
+		// request source instead. A configured SOCKS5 proxy would report the
+		// proxy's address, so never use that connection for this fallback.
+		if server.AutoSyncPublicIP && reportedIPv4 == "" && server.AgentProxyNodeID == "" && server.AgentProxyPreviousNodeID == "" {
+			observed := net.ParseIP(a.clientIP(r))
+			if observed != nil && observed.To4() != nil && publicUnicast(observed) {
+				reportedIPv4 = observed.String()
+			}
+		}
+		ipv4, ipv6 := net.ParseIP(reportedIPv4), net.ParseIP(in.IPv6)
+		validIPv4 := ipv4 != nil && ipv4.To4() != nil && publicUnicast(ipv4)
+		validIPv6 := ipv6 != nil && ipv6.To4() == nil && publicUnicast(ipv6)
+		updateIPv4 := validIPv4 && (server.IPv4 == "" || server.AutoSyncPublicIP && server.IPv4 != reportedIPv4)
+		updateIPv6 := validIPv6 && (server.IPv6 == "" || server.AutoSyncPublicIP && server.IPv6 != in.IPv6)
+		if server.DetectedIPv4 != reportedIPv4 || server.DetectedIPv6 != in.IPv6 || updateIPv4 || updateIPv6 {
 			// Route firewalls admit hops by these addresses. The sync takes
 			// the server locks itself, so it runs after this report is done.
 			defer func() { go a.syncRoutesInBackground() }()
 		}
-		server.DetectedIPv4, server.DetectedIPv6 = in.IPv4, in.IPv6
-		if in.IPv4 != "" && server.IPv4 == "" {
-			server.IPv4 = in.IPv4
+		server.DetectedIPv4, server.DetectedIPv6 = reportedIPv4, in.IPv6
+		if updateIPv4 {
+			server.IPv4 = reportedIPv4
 		}
-		if in.IPv6 != "" && server.IPv6 == "" {
+		if updateIPv6 {
 			server.IPv6 = in.IPv6
 		}
 	}

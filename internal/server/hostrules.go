@@ -111,7 +111,7 @@ func (a *App) hostRuleDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, line := range lines {
-		a.Store.Audit("firewall.host_delete", server.ID, line.Rule)
+		a.auditRequest(r, "firewall.host_delete", server.ID, line.Rule)
 	}
 	writeJSON(w, 202, map[string]int{"queued": len(lines)})
 }
@@ -170,7 +170,7 @@ func (a *App) hostRuleAdopt(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, line := range lines {
-		a.Store.Audit("firewall.host_adopt", server.ID, line.Rule)
+		a.auditRequest(r, "firewall.host_adopt", server.ID, line.Rule)
 	}
 	writeJSON(w, 201, rules)
 }
@@ -246,6 +246,6 @@ func (a *App) updateCustomRule(w http.ResponseWriter, r *http.Request, old share
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.Store.Audit("firewall.update", in.ID, in.Comment)
+	a.auditRequest(r, "firewall.update", in.ID, in.Comment)
 	writeJSON(w, 200, in)
 }

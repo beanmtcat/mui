@@ -40,6 +40,7 @@ export type Server = {
   notes: string;
   ipv4: string;
   ipv6: string;
+  autoSyncPublicIp?: boolean;
   domain: string;
   status: string;
   os: string;
@@ -80,6 +81,7 @@ export type Node = {
   serverId: string;
   name: string;
   protocol: "ss" | "snell" | "anytls" | "socks5";
+  singleUser?: boolean;
   username?: string;
   port: number;
   listen: string;
@@ -202,7 +204,7 @@ export type Route = {
   notes: string;
   status?: string;
 };
-export type AuditEntry = { id: string; at: string; action: string; target: string; detail: string };
+export type AuditEntry = { id: string; at: string; action: string; target: string; detail: string; ip: string };
 export type Customer = { id: string; name: string; notes: string; createdAt: string };
 export type SubscriptionAccess = { id: string; subscriptionId: string; customerId: string; ip: string; at: string };
 export type ConnectionIP = { serverId: string; nodeId: string; ip: string; clientIp?: string; peerIp?: string; routeId?: string; sourceKind?: "entry" | "direct" | "relay" | "agent" | "unknown"; lastSeen: string; cursor: string };

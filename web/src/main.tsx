@@ -1,5 +1,6 @@
-import React, { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { lazy, memo, Suspense, useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
+import { createPortal } from "react-dom";
 import {
   api,
   list,
@@ -109,12 +110,14 @@ const emptyServer: Partial<Server> = {
   notes: "",
   ipv4: "",
   ipv6: "",
+  autoSyncPublicIp: false,
   domain: "",
 };
 const emptyNode: Partial<Node> = {
   serverId: "",
   name: "",
   protocol: "ss",
+  singleUser: false,
   port: 50000,
   listen: "0.0.0.0",
   publishAddress: "",
@@ -153,6 +156,11 @@ function serverFilterValues(servers: Server[], field: ServerFilterField) {
   return [...new Set(servers.map((server) => server[field]?.trim()).filter((value): value is string => !!value))]
     .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"));
 }
+function countryFlag(country: string) {
+  const code = country.trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(code)) return "";
+  return String.fromCodePoint(...Array.from(code, (letter) => 0x1f1e6 + letter.charCodeAt(0) - 65));
+}
 function subscriptionNodeIssue(format: string | undefined, node: Node): string {
   if (format === "v2rayn" && node.protocol !== "ss" && node.protocol !== "anytls" && node.protocol !== "socks5") return "v2rayN 订阅不支持 Snell / ShadowTLS";
   if (node.protocol === "ss") {
@@ -172,7 +180,7 @@ function subscriptionDirectNodeIssue(format: string | undefined, node: Node): st
   return subscriptionNodeIssue(format, node);
 }
 function sharedSubscriptionPassword(node: Node) {
-  return node.protocol === "ss" && !node.method.startsWith("2022-blake3-");
+  return !!node.singleUser || node.protocol === "ss" && !node.method.startsWith("2022-blake3-");
 }
 function manualFirewall(server?: Partial<Server>) { return server?.firewallMode === "manual"; }
 function forwardDisplayStatus(forward: ForwardRule, server?: Server): string {
@@ -672,7 +680,7 @@ function App() {
   const activeNodes = useMemo(() => nodes.filter((n) => n.status === "active" && n.enabled), [nodes]);
   const onlineServers = useMemo(() => servers.filter((s) => s.status === "online"), [servers]);
   const forwardServerIDs = useMemo(() => new Set(forwards.map((f) => f.serverId)), [forwards]);
-  // What the agent saw that disagrees with what was entered for this server.
+  // Issues needing attention; ordinary traffic sampling states are not alerts.
   const serverWarnings = useCallback((s: Server) => {
     const out: string[] = [];
     if (s.detectedIpv4 && s.ipv4 && s.detectedIpv4 !== s.ipv4)
@@ -683,6 +691,8 @@ function App() {
       out.push(`系统时间与面板相差 ${s.clockSkewSeconds} 秒，请检查时间同步`);
     if (s.firewallConflict && !manualFirewall(s))
       out.push(`${s.firewallConflict} 正在管理防火墙，面板已停止写入 UFW`);
+    if (s.status === "online" && s.statsStatus === "unavailable")
+      out.push("节点流量采样不可用，请检查 Agent 和 sing-box");
     return out;
   }, []);
   const fwServer = useMemo(() => servers.find((s) => s.id === firewallServer) || servers[0], [servers, firewallServer]);
@@ -796,7 +806,7 @@ function App() {
   // sing-box has to restart to add or remove a login, which drops the
   // connections of everyone on that server.
   const restartNotice = useCallback((nodeIds: string[]) => {
-    const names = [...new Set(nodeIds.map((id) => nodes.find((n) => n.id === id)?.serverId).filter(Boolean))]
+    const names = [...new Set(nodeIds.map((id) => nodes.find((n) => n.id === id)).filter((n): n is Node => !!n && !sharedSubscriptionPassword(n)).map((n) => n.serverId))]
       .map((id) => serverName(id as string));
     return names.length
       ? `\n\n以下服务器的 sing-box 会重启，其上所有连接将中断数秒：${names.join("、")}`
@@ -1614,7 +1624,7 @@ function App() {
               ))}
             </div>
             <div className="tableWrap">
-              <table>
+              <table className="serverListTable">
                 <thead>
                   <tr>
                     <th>服务器</th>
@@ -1622,9 +1632,9 @@ function App() {
                     <th>公网地址</th>
                     <th>Agent</th>
                     <th>UFW</th>
-                    <th>统计</th>
                     <th title="Agent 开始采样后的默认网卡累计收发量，包含系统流量、SSH、程序下载和 Agent 通信；不是节点或订阅用量。">整机累计流量</th>
                     <th>节点</th>
+                    <th title="包含停用和链路自动生成的转发规则；不包含正在删除的规则。">转发</th>
                     <th>操作</th>
                   </tr>
                 </thead>
@@ -1632,54 +1642,30 @@ function App() {
                   {visibleServers.map((s) => (
                     <tr key={s.id}>
                       <td>
-                        <strong>{s.name}</strong>
-                        <small>
-                          {s.managementMode === "offline" ? "离线管理" : s.os || "待接入"}{s.arch && ` · ${s.arch}`}
-                        </small>
-                        {serverWarnings(s).map((w) => (
-                          <small className="dangerText" key={w}>
-                            {w}
-                          </small>
-                        ))}
+                        <span className="serverNameLine"><strong title={s.name}>{s.name}</strong>{serverWarnings(s).length > 0 && <HelpTip label={`${s.name} 的 ${serverWarnings(s).length} 项提醒`} text={serverWarnings(s).join("\n")} warning />}</span>
+                        <small>{s.managementMode === "offline" ? "离线管理" : s.os || "待接入"}{s.arch && ` · ${s.arch}`}</small>
                       </td>
                       <td>
-                        {s.country}
-                        <small>{s.provider || "—"}</small>
-                        {(s.region || s.city) && <small>{[s.region, s.city].filter(Boolean).join(" · ")}</small>}
+                        <span className="serverCountry">{countryFlag(s.country) && <span className="serverFlag" aria-hidden="true">{countryFlag(s.country)}</span>}{s.country}</span>
+                        <small title={[s.provider, s.region, s.city].filter(Boolean).join(" · ")}>{[s.provider, s.region, s.city].filter(Boolean).join(" · ") || "—"}</small>
                       </td>
-                      <td className="mono">{s.domain || s.ipv4 || s.ipv6}{s.internalAddress && <small>内网 {s.internalAddress}</small>}</td>
+                      <td className="mono"><span className="serverAddress" title={s.domain || s.ipv4 || s.ipv6}>{s.domain || s.ipv4 || s.ipv6 || "—"}</span>{(s.autoSyncPublicIp || s.internalAddress || s.domain && (s.ipv4 || s.ipv6)) && <HelpTip label={`${s.name} 的地址`} text={[s.domain && `域名：${s.domain}`, s.ipv4 && `IPv4：${s.ipv4}`, s.ipv6 && `IPv6：${s.ipv6}`, s.internalAddress && `内网：${s.internalAddress}`, s.autoSyncPublicIp && "公网 IP 自动同步"].filter(Boolean).join("\n")} />}</td>
                       <td>
-                        <Status value={s.status} />
-                        {s.managementMode === "offline" ? <>
-                          <small>{s.offlineExportedAt ? `已导出版本 ${s.offlineExportedRevision}` : "尚未导出配置"}</small>
-                          {(!s.offlineExportedAt || s.offlineExportedRevision !== s.revision) && <small className="dangerText">配置待导出 · 版本 {s.revision || 1}</small>}
-                          <small>实时连通性未知</small>
-                        </> : <>
-                        <small>{s.agentVersion || "未接入"}</small>
-                        {s.agentSelfUpdate && agentReleases[s.arch] && <small>{s.agentBuild === agentReleases[s.arch] ? "已是当前构建" : "有可用升级"}</small>}
-                        {!s.agentSelfUpdate && !!s.agentVersion && <small>需先人工升级一次</small>}
-                        {!!s.agentVersion && <small>{s.releaseKeyPinned ? "升级需发布签名" : "升级未启用签名校验"}</small>}
-                        <small>{rolesText(s.roles)} · sing-box：{s.coreBuild ? s.coreVersion || "版本待上报" : "未安装"}</small>
-                        {s.coreSelfUpdate && !!s.coreBuild && coreReleases[s.arch] && <small>{s.coreBuild === coreReleases[s.arch] ? "核心已是当前构建" : "核心有可用升级"}</small>}
-                        {!s.coreSelfUpdate && !!s.agentVersion && <small>升级 Agent 后可一键升级核心</small>}
-                        {operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status)) && <small>程序升级进行中，详情见操作记录</small>}
-                        </>}
+                        <span className="serverAgentLine"><Status value={s.status} /><HelpTip label={`${s.name} 的 Agent 与核心状态`} text={s.managementMode === "offline"
+                          ? [s.offlineExportedAt ? `已导出版本 ${s.offlineExportedRevision}` : "尚未导出配置", (!s.offlineExportedAt || s.offlineExportedRevision !== s.revision) && `配置待导出 · 版本 ${s.revision || 1}`, "实时连通性未知"].filter(Boolean).join("\n")
+                          : [`Agent：${s.agentVersion || "未接入"}`, s.agentSelfUpdate && agentReleases[s.arch] ? s.agentBuild === agentReleases[s.arch] ? "Agent 已是当前构建" : "Agent 有可用升级" : !s.agentSelfUpdate && s.agentVersion ? "需先人工升级 Agent 一次" : "", s.agentVersion && (s.releaseKeyPinned ? "升级需发布签名" : "升级未启用签名校验"), `类型：${rolesText(s.roles)}`, `sing-box：${s.coreBuild ? s.coreVersion || "版本待上报" : "未安装"}`, s.coreSelfUpdate && s.coreBuild && coreReleases[s.arch] ? s.coreBuild === coreReleases[s.arch] ? "核心已是当前构建" : "核心有可用升级" : !s.coreSelfUpdate && s.agentVersion ? "升级 Agent 后可一键升级核心" : "", operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status)) && "程序升级进行中，详情见操作记录"].filter(Boolean).join("\n")} /></span>
+                        <small>{s.managementMode === "offline" ? (!s.offlineExportedAt || s.offlineExportedRevision !== s.revision ? "配置待导出" : `已导出 v${s.offlineExportedRevision}`) : `Agent ${s.agentVersion || "未接入"} · 核心 ${s.coreBuild ? s.coreVersion || "待上报" : "未安装"}`}</small>
                       </td>
                       <td>
                         <Status
                           value={manualFirewall(s) ? "manual" : s.firewallConflict ? "conflict" : s.ufwStatus}
                         />
                       </td>
-                      <td>
-                        {s.managementMode === "offline" ? "不可远程获取" : <Status value={s.statsStatus} />}
-                      </td>
-                      <td title="↓ 网卡接收，↑ 网卡发送。包含本机所有经过默认网卡的流量。">
-                        {s.managementMode === "offline" ? "—" : <small>
-                          ↓ {bytes(s.networkRx || 0)}
-                          <br />↑ {bytes(s.networkTx || 0)}
-                        </small>}
+                      <td className="serverTraffic" title="↓ 网卡接收，↑ 网卡发送。包含本机所有经过默认网卡的流量。">
+                        {s.managementMode === "offline" ? "—" : <span>↓ {bytes(s.networkRx || 0)} · ↑ {bytes(s.networkTx || 0)}</span>}
                       </td>
                       <td>{nodes.filter((n) => n.serverId === s.id).length}</td>
+                      <td>{forwards.filter((f) => f.serverId === s.id && !f.deleting).length}</td>
                       <td>
                         <div className="actions">
                           <button onClick={() => openServer(s)}>编辑</button>
@@ -1843,6 +1829,7 @@ function App() {
                         <span className="mono">:{n.port}</span>
                         {n.protocol === "snell" && n.shadowTlsHost && <small>ShadowTLS v3 · {n.shadowTlsHost}</small>}
                         {n.protocol === "snell" && !n.shadowTlsHost && <small className="dangerText">旧节点未启用 ShadowTLS，请编辑节点升级</small>}
+                        {n.singleUser && <small>单用户 · 共享节点凭据</small>}
                         <small>{n.direct ? "允许直连" : n.agentProxySources ? "链路 / Agent 访问" : "仅链路访问"}</small>
                       </td>
                       <td>{bytes(n.uplink)}</td>
@@ -2397,7 +2384,7 @@ function App() {
             <div className="panelHead">
               <div>
                 <h2>订阅管理</h2>
-                <p>分发节点和链路；支持独立凭据统计及传统 SS 共享密码</p>
+                <p>分发节点和链路；支持独立凭据统计及单用户共享凭据</p>
               </div>
               <button
                 className="primary"
@@ -2449,7 +2436,7 @@ function App() {
                         {onlySharedSubNodes(s) ? <span className="hint">无法按订阅统计</span> : <button className="textButton" onClick={() => { setSubTraffic([]); setTrafficSub(s); }}>
                           {bytes((s.uplink || 0) + (s.downlink || 0))}
                         </button>}
-                        {sharedSubNodes(s).length > 0 && <small>共享密码节点的流量请在节点中查看{onlySharedSubNodes(s) ? "" : "；此处仅统计独立凭据节点"}</small>}
+                        {sharedSubNodes(s).length > 0 && <small>共享凭据节点的流量请在节点中查看{onlySharedSubNodes(s) ? "" : "；此处仅统计独立凭据节点"}</small>}
                       </td>
                       <td>
                         <Status value={!s.enabled ? "disabled" : s.expiresAt && new Date(s.expiresAt).getTime() <= Date.now() ? "expired" : pendingNodes(s).length ? "partial" : "active"} />
@@ -2501,7 +2488,7 @@ function App() {
                               setConfirmation({
                                 title: s.enabled ? "停用订阅" : "启用订阅",
                                 message: (s.enabled
-                                  ? `停用「${s.name}」？订阅下载链接立即失效。独立用户凭据在 Agent 应用配置后失效。${sharedSubNodes(s).length ? "共享密码的 SS 节点仍可访问，撤销访问需更换节点密码。" : ""}`
+                                  ? `停用「${s.name}」？订阅下载链接立即失效。独立用户凭据在 Agent 应用配置后失效。${sharedSubNodes(s).length ? "共享凭据的节点仍可访问，撤销访问需更换节点密码。" : ""}`
                                   : `启用「${s.name}」？`) + restartNotice(subNodeIds(s)),
                                 confirmLabel: s.enabled ? "停用" : "启用",
                                 onConfirm: () => {
@@ -2538,7 +2525,7 @@ function App() {
                             onClick={() =>
                               setConfirmation({
                                 title: "删除订阅",
-                                message: `确定删除「${s.name}」？下载链接立即失效，独立用户凭据在 Agent 应用配置后失效。${sharedSubNodes(s).length ? "共享密码的 SS 节点仍可访问，撤销访问需更换节点密码。" : ""}此操作无法撤销。` + restartNotice(subNodeIds(s)),
+                                message: `确定删除「${s.name}」？下载链接立即失效，独立用户凭据在 Agent 应用配置后失效。${sharedSubNodes(s).length ? "共享凭据的节点仍可访问，撤销访问需更换节点密码。" : ""}此操作无法撤销。` + restartNotice(subNodeIds(s)),
                                 confirmLabel: "删除",
                                 onConfirm: () => { void act(() => mutation("/api/subscriptions/" + s.id, "DELETE"), "订阅已删除"); },
                               })
@@ -2598,7 +2585,7 @@ function App() {
                   return <tr key={c.id}>
                   <td><strong>{c.name}</strong></td><td>{c.notes || "—"}</td>
                   <td>{memberships.map((s) => s.name).join("、") || "—"}</td>
-                  <td>{onlyShared ? "无法按客户统计" : bytes(memberships.reduce((sum, s) => sum + (s.uplink || 0) + (s.downlink || 0), 0))}{shared && <small>共享密码节点的流量请在节点中查看{onlyShared ? "" : "；此处仅统计独立凭据节点"}</small>}</td>
+                  <td>{onlyShared ? "无法按客户统计" : bytes(memberships.reduce((sum, s) => sum + (s.uplink || 0) + (s.downlink || 0), 0))}{shared && <small>共享凭据节点的流量请在节点中查看{onlyShared ? "" : "；此处仅统计独立凭据节点"}</small>}</td>
                   <td><div className="actions"><button onClick={() => { setCustomerForm({ ...c }); setModal("customer"); }}>编辑</button><button className="dangerText" onClick={() => deleteItem("/api/customers/" + c.id, "客户")}>删除</button></div></td>
                 </tr>; })}
               </tbody></table>{!visibleCustomers.length && <Empty text={customerQuery ? "没有匹配的客户" : "暂无客户，点击右上角新建"} />}</div>
@@ -2627,7 +2614,7 @@ function App() {
         )}
         {tab === "connections" && (
             <section className="panel">
-              <div className="panelHead"><div><h2>节点连接 IP</h2><p>链路客户端 IP 从入口转发采集（TCP / UDP，需入口 Agent 0.6.13+）；直连节点从 sing-box 采样。中转和 Agent 的对端地址单独标注，不作为客户端 IP。离线入口无法上报，历史记录无法还原；连接来源不代表已通过节点认证，也不能据此确定订阅归属。</p></div></div>
+              <div className="panelHead"><div><h2>节点连接 IP</h2><p>入口记录连接来源（TCP / UDP，需入口 Agent 0.6.13+），可能包含扫描、握手失败和正常访问；未验证节点身份，无法确定使用了哪个订阅。直连节点从 sing-box 采样；中转和 Agent 的对端地址单独标注。离线入口无法上报，历史记录无法还原。</p></div></div>
               <div className="filters">
                 <select value={connectionServer} onChange={(e) => setConnectionServer(e.target.value)} aria-label="按采集服务器筛选连接 IP">
                   <option value="">全部服务器</option>
@@ -2635,19 +2622,15 @@ function App() {
                 </select>
                 <DateRange value={connectionRange} onChange={setConnectionRange} label="最近连接" />
               </div>
-              <div className="tableWrap"><table><thead><tr><th>最近连接</th><th>采集服务器</th><th>节点 / 链路</th><th>客户端 IP</th><th>采集方式 / 对端地址</th><th>订阅关联</th></tr></thead><tbody>
+              <div className="tableWrap"><table><thead><tr><th>最近连接</th><th>采集服务器</th><th>节点 / 链路</th><th>连接来源 IP</th><th>采集方式 / 对端地址</th></tr></thead><tbody>
                 {connectionLog.items.map((item) => {
-                  const linked = item.sourceKind === "entry"
-                    ? subs.filter((s) => !!item.routeId && s.routeIds?.includes(item.routeId))
-                    : item.sourceKind === "direct" ? subs.filter((s) => s.nodeIds?.includes(item.nodeId)) : [];
-                  const sourceLabel = ({ entry: "入口转发采集", direct: "节点直连采样", relay: "中转 / 服务器对端", agent: "Agent 代理连接", unknown: "仅有落地对端，无法确认客户端" } as Record<string, string>)[item.sourceKind || "unknown"];
+                  const sourceLabel = ({ entry: "入口连接来源（未验证）", direct: "节点直连采样", relay: "中转 / 服务器对端", agent: "Agent 代理连接", unknown: "仅有落地对端，无法确认客户端" } as Record<string, string>)[item.sourceKind || "unknown"];
                   return <tr key={item.serverId + item.nodeId + item.ip + (item.routeId || "")}>
                     <td>{new Date(item.lastSeen).toLocaleString()}</td>
                     <td>{serverName(item.serverId)}</td>
                     <td>{nodes.find((n) => n.id === item.nodeId)?.name || "已删除"}{item.routeId && <small>{routes.find((r) => r.id === item.routeId)?.name || "历史链路（已删除）"}</small>}</td>
                     <td>{item.clientIp ? <code>{item.clientIp}</code> : <span className="hint">无法获取</span>}</td>
                     <td>{sourceLabel}{item.peerIp && <small>对端：<code>{item.peerIp}</code></small>}</td>
-                    <td>{linked.length ? `可能关联：${linked.map((s) => s.name).join("、")}` : "无法归属"}</td>
                   </tr>;
                 })}
               </tbody></table>{connectionLog.empty && <Empty text="暂无连接来源记录；链路请升级入口 Agent 至 0.6.13，离线入口无法上报" />}</div>
@@ -2734,7 +2717,7 @@ function App() {
               </div>
             </div>
             <form className="filters" onSubmit={(e) => { e.preventDefault(); setAuditQuery(auditInput.trim()); }}>
-              <input value={auditInput} onChange={(e) => setAuditInput(e.target.value)} placeholder="搜索动作或说明，如 node.delete" aria-label="搜索审计日志" />
+              <input value={auditInput} onChange={(e) => setAuditInput(e.target.value)} placeholder="搜索动作、说明或 IP，如 node.delete" aria-label="搜索审计日志" />
               <button className="ghost">搜索</button>
               {auditQuery && <button type="button" className="textButton" onClick={() => { setAuditInput(""); setAuditQuery(""); }}>清除</button>}
               <DateRange value={auditRange} onChange={setAuditRange} />
@@ -2742,12 +2725,13 @@ function App() {
             <div className="tableWrap">
               <table>
                 <thead>
-                  <tr><th>时间</th><th>动作</th><th>对象</th><th>说明</th></tr>
+                  <tr><th>时间</th><th>操作 IP</th><th>动作</th><th>对象</th><th>说明</th></tr>
                 </thead>
                 <tbody>
                   {auditLog.items.map((entry) => (
                     <tr key={entry.id}>
                       <td>{new Date(entry.at).toLocaleString()}</td>
+                      <td className="mono">{entry.ip || (entry.action === "admin.reset" || entry.action === "certificate.expiring" ? "系统" : "未记录")}</td>
                       <td className="mono">{entry.action}</td>
                       <td>{auditTarget(entry.target)}</td>
                       <td>{entry.detail || "—"}</td>
@@ -3053,7 +3037,7 @@ function App() {
                       />
                     </Field>
                     <div className="serverFormWide">
-                      <Field label="管理方式">
+                      <Field label="管理方式" help="在线 Agent 可直接或通过 SOCKS5 连接面板；离线管理通过导出配置在本机应用，仅支持入口、线路、中转。">
                         <select aria-label="管理方式" value={serverForm.managementMode || "online"} onChange={(e) => {
                           const offline = e.target.value === "offline";
                           const roles = (serverForm.roles || []).filter((r) => r !== "exit");
@@ -3070,12 +3054,11 @@ function App() {
                           <option value="offline">离线管理（导出配置 / 本地应用）</option>
                         </select>
                       </Field>
-                      <p className="serverFieldHelp">在线 Agent 可直接或通过 SOCKS5 连接面板；离线管理通过导出配置在本机应用，仅支持入口、线路、中转。</p>
                       {serverManagementChanged && <p className="banner warning" role="status">保存后旧 Agent 凭据失效，页面会打开迁移指南。需在目标机停用旧服务并重新安装；保留服务器档案、链路和转发，安装期间会中断转发。已有节点须先删除才能改为离线管理。</p>}
                     </div>
                     <div className="serverFormWide">
                       <fieldset className="serverRoles">
-                        <legend>类型（可多选） *</legend>
+                        <legend><span className="fieldLabelRow">类型（可多选） * <HelpTip label="服务器类型" text="入口、线路可作为首跳；中转、线路可作为中间跳；在线中转和落地都可搭建节点。中转服务器建节点前需在列表安装 sing-box，安装后保留中转类型。" /></span></legend>
                         <div className="checkRow">
                           {roleOrder.map((role) => (
                             <label className="check" key={role}>
@@ -3093,8 +3076,6 @@ function App() {
                           ))}
                         </div>
                       </fieldset>
-                      <p className="serverFieldHelp">入口、线路可作为首跳；中转、线路可作为中间跳；在线中转和落地都可搭建节点。</p>
-                      <p className="serverFieldHelp">中转服务器建节点前需在列表安装 sing-box，安装后保留中转类型。</p>
                       {serverFormCoreMissing && <div className="banner warning serverCoreHint" role="status">
                         <div>
                           <p>可以保存服务器类型。该服务器尚未安装 sing-box，建节点前需先安装。</p>
@@ -3108,7 +3089,7 @@ function App() {
 
                     </div>
                     <div className="serverFormWide">
-                      <Field label="Agent 连接面板的 SOCKS5 节点">
+                      <Field label="Agent 连接面板的 SOCKS5 节点" help="代理用于 Agent 接入、心跳、任务与下载，与节点“允许直连”无关。候选节点须已启用、配置已生效，且其服务器已启用 UFW、没有防火墙冲突。面板按所选本机来源 IP 自动放行；经过 NAT 时请填写实际出口 IP。所有在线服务器均可使用代理，需 Agent 0.6.10 或更高版本。">
                         <select aria-label="Agent 连接面板的 SOCKS5 节点" disabled={!serverProxyEnabled} value={serverForm.agentProxyNodeId || ""} onChange={(e) => setServerForm({ ...serverForm, agentProxyNodeId: e.target.value, agentProxyInternal: false })}>
                           <option value="">直接连接面板（不使用代理）</option>
                           {serverProxyOptions.map(({ node, host, reason }) => <option value={node.id} key={node.id} disabled={!!reason}>{node.name} · {host?.name || "未知服务器"} :{node.port}{reason ? `（${reason}）` : ""}</option>)}
@@ -3123,20 +3104,18 @@ function App() {
                           <option value="internal" disabled={!servers.find((s) => s.id === nodes.find((n) => n.id === serverForm.agentProxyNodeId)?.serverId)?.internalAddress}>SOCKS5 所在服务器的内网地址</option>
                         </select>
                       </Field>}
-                      {serverForm.agentProxyNodeId && <Field label="SOCKS5 防火墙放行来源">
+                      {serverForm.agentProxyNodeId && <Field label="SOCKS5 防火墙放行来源" help="这是 SOCKS5 服务器实际看到的入口来源 IP，可独立于上方连接地址选择。选择内网来源时，请在下方填写这台服务器的内网 IP。仅改来源规则无需重装或重启本机 Agent。">
                         <select aria-label="SOCKS5 防火墙放行来源" value={serverForm.agentProxySourceMode || "auto"} onChange={(e) => setServerForm({ ...serverForm, agentProxySourceMode: e.target.value as Server["agentProxySourceMode"] })}>
                           <option value="auto">跟随连接地址类型</option>
                           <option value="public">本机公网 IP</option>
                           <option value="internal">本机内网 IP</option>
                         </select>
-                        <p className="serverFieldHelp">这是 SOCKS5 服务器实际看到的入口来源 IP，可独立于上方连接地址选择。选择内网来源时，请在下方填写这台服务器的内网 IP。仅改来源规则无需重装或重启本机 Agent。</p>
                       </Field>}
-                      <p className="serverFieldHelp">代理用于 Agent 接入、心跳、任务与下载，与节点“允许直连”无关。候选节点须已启用、配置已生效，且其服务器已启用 UFW、没有防火墙冲突。面板按所选本机来源 IP 自动放行；经过 NAT 时请填写实际出口 IP。所有在线服务器均可使用代理，需 Agent 0.6.10 或更高版本。</p>
                     </div>
                   </div>
                 </section>
                 <section className="serverFormSection" aria-labelledby="server-network-title">
-                  <h3 id="server-network-title">网络与防火墙</h3>
+                  <h3 id="server-network-title" className="fieldLabelRow">网络与防火墙 <HelpTip label="网络与防火墙" text="公网 IP 或订阅用域名至少填写一项。" /></h3>
                   <div className="formGrid">
                     <Field label="公网 IPv4">
                       <input
@@ -3154,6 +3133,13 @@ function App() {
                         }
                       />
                     </Field>
+                    <div className="serverToggleRow serverFormWide">
+                      <label className="check">
+                        <input type="checkbox" checked={!!serverForm.autoSyncPublicIp} onChange={(e) => setServerForm({ ...serverForm, autoSyncPublicIp: e.target.checked })} />
+                        自动同步 Agent 检测到的公网 IPv4 / IPv6
+                      </label>
+                      <HelpTip label="自动同步公网 IP" text="适用于公网地址会变化的服务器。优先使用 Agent 检测到的公网地址；本机 IPv4 在 NAT 后且直接连接面板时，用面板看到的连接来源回填 IPv4。使用 SOCKS5 代理时不会把代理出口当成本机地址。暂时检测不到的地址不会清空。请确认出站地址也能接受客户端或链路入站连接；CGNAT 无法靠回填开放入站端口。" />
+                    </div>
                     <Field label="订阅用域名">
                       <input
                         value={serverForm.domain || ""}
@@ -3172,26 +3158,21 @@ function App() {
                       />
                     </Field>
                     {serverForm.managementMode !== "offline" && <div className="serverFormWide">
-                      <Field label="节点默认出口网卡">
+                      <Field label="节点默认出口网卡" help="仅控制这台服务器上 sing-box 节点的出口，节点可单独覆盖。修改后会重新应用配置并重启 sing-box；指定网卡不存在或未启用时，保留原配置并报错。">
                         <input maxLength={15} placeholder="留空使用系统路由，例如 ppp0" value={serverForm.outboundInterface || ""} onChange={(e) => setServerForm({ ...serverForm, outboundInterface: e.target.value })} />
                       </Field>
-                      <p className="serverFieldHelp">仅控制这台服务器上 sing-box 节点的出口，节点可单独覆盖。修改后会重新应用配置并重启 sing-box；指定网卡不存在或未启用时，保留原配置并报错。</p>
                       {!!serverForm.outboundInterface?.trim() && !!serverForm.agentVersion && !serverForm.outboundBindingSupport && <p className="serverFieldHelp dangerText">配置可保存；请先升级 Agent 至 0.6.12 后应用出口网卡设置。</p>}
                     </div>}
                     <div className="serverFormWide">
-                      <Field label="防火墙管理">
+                      <Field label="防火墙管理" help={manualFirewall(serverForm) ? "节点和转发可正常部署。面板不修改现有防火墙，端口放行及来源限制需自行配置。" : "由面板管理 UFW 规则，部署节点和转发前需初始化 UFW。"}>
                         <select disabled={serverForm.managementMode === "offline"} value={serverForm.firewallMode || "ufw"} onChange={(e) => setServerForm({ ...serverForm, firewallMode: e.target.value as "ufw" | "manual" })}>
                           <option value="ufw">UFW 托管</option>
                           <option value="manual" disabled={!!serverForm.agentVersion && !serverForm.manualFirewallSupport && !manualFirewall(serverForm)}>手动管理（宿主机 / 安全组 / 其他防火墙）</option>
                         </select>
                       </Field>
-                      <div className="serverFieldHelp" aria-live="polite">
-                        <p>{manualFirewall(serverForm) ? "节点和转发可正常部署。面板不修改现有防火墙，端口放行及来源限制需自行配置。" : "由面板管理 UFW 规则，部署节点和转发前需初始化 UFW。"}</p>
-                        {!!serverForm.agentVersion && !serverForm.manualFirewallSupport && <p>启用手动管理前，请先升级 Agent 至 0.6.4。</p>}
-                      </div>
+                      {!!serverForm.agentVersion && !serverForm.manualFirewallSupport && <p className="serverFieldHelp dangerText">启用手动管理前，请先升级 Agent 至 0.6.4。</p>}
                     </div>
                   </div>
-                  <p className="serverFieldHelp">公网 IP 或订阅用域名至少填写一项。</p>
                 </section>
                 <section className="serverFormSection" aria-labelledby="server-details-title">
                   <h3 id="server-details-title">其他信息</h3>
@@ -3323,6 +3304,13 @@ function App() {
                       <option value="socks5">SOCKS5</option>
                     </select>
                   </Field>
+                  <div className="serverToggleRow nodeSingleUserRow">
+                    <label className="check">
+                      <input type="checkbox" checked={!!nodeForm.singleUser} onChange={(e) => setNodeForm({ ...nodeForm, singleUser: e.target.checked })} />
+                      单用户（订阅共用节点原有凭据）
+                    </label>
+                    <HelpTip label="单用户" text="订阅和复制链接均使用节点的原有密码。流量只能按节点统计；停用或删除订阅不会使已导入客户端的节点凭据失效，需更换节点密码。" />
+                  </div>
                   <Field label="端口 *（1–65535）">
                     <div className="inputWithAction">
                       <input
@@ -4009,7 +3997,7 @@ function App() {
                             <span>{r.name}</span>
                             <small>{routePath(r)}</small>
                             {issue && <small className="routeChoiceIssue">{issue}{selected ? "；请取消选择或调整落地配置" : ""}</small>}
-                            {node && sharedSubscriptionPassword(node) && <small>共享节点密码 · 无法按订阅统计流量</small>}
+                            {node && sharedSubscriptionPassword(node) && <small>共享节点凭据 · 无法按订阅统计流量</small>}
                           </span>
                         </label>;
                     })}
@@ -4042,6 +4030,7 @@ function App() {
                             <small>{n.protocol.toUpperCase()} · {serverName(n.serverId)}</small>
                             {issue && <small className="routeChoiceIssue">{issue}{selected ? "；请取消选择或调整节点配置" : ""}</small>}
                             {!issue && n.status !== "active" && <small>{n.status === "error" ? "配置应用失败，请检查操作记录；可先加入订阅，生效后下发" : "配置待应用；可先加入订阅，生效后下发"}</small>}
+                            {sharedSubscriptionPassword(n) && <small>共享节点凭据 · 无法按订阅统计流量</small>}
                           </span>
                         </label>;
                     })}
@@ -4051,9 +4040,9 @@ function App() {
                 </Field>
                 {subForm.format === "surge" && <p className="hint">Surge 格式输出节点列表，支持传统 SS（如 aes-256-gcm）、AES-GCM 的 SS 2022、ShadowTLS Snell 和 AnyTLS。请通过代理组的 policy-path 引用链接；把此链接当完整配置安装会报“规则必须以 FINAL 结尾”。创建后或在列表“查看链接”中可复制代理组配置。AnyTLS 需要 Surge Mac 6.4.3+ 或 iOS 5.17.0+，默认校验证书。</p>}
                 {subForm.format === "v2rayn" && <p className="hint">v2rayN 格式支持 SS 和 AnyTLS 节点及其链路。复制订阅链接，在 v2rayN 中添加订阅分组并更新订阅；AnyTLS 请使用支持该协议的新版 v2rayN，并选择 sing-box 内核。v2rayN 不支持 Snell / ShadowTLS。</p>}
-                {sharedSubNodes(subForm).length > 0 && <p className="hint">以下 SS 节点沿用节点密码：{sharedSubNodes(subForm).map((n) => n.name).join("、")}。流量只能按节点统计，无法单独撤销某条订阅的节点访问；禁用、到期或轮换订阅链接仅影响订阅下载，撤销已导入客户端的访问需更换节点密码。</p>}
+                {sharedSubNodes(subForm).length > 0 && <p className="hint">以下节点沿用节点凭据：{sharedSubNodes(subForm).map((n) => n.name).join("、")}。流量只能按节点统计，无法单独撤销某条订阅的节点访问；禁用、到期或轮换订阅链接仅影响订阅下载，撤销已导入客户端的访问需更换节点密码。</p>}
                 <p className="hint">链路的订阅地址是首跳服务器的地址和链路端口，协议与登录凭据来自落地节点。</p>
-                <p className="hint">保存后，所选节点（含链路的落地节点）所在服务器的 sing-box 会重启以更新登录凭据，其上所有连接将中断数秒。订阅到期时也会自动执行一次。</p>
+                {subMemberNodes(subForm).some((n) => !sharedSubscriptionPassword(n)) && <p className="hint">保存后，使用独立凭据的节点（含链路的落地节点）所在服务器的 sing-box 会重启以更新登录凭据，其上所有连接将中断数秒。订阅到期时也会自动执行一次。</p>}
                 <button className="primary submit">
                   {subForm.id ? "保存订阅" : "创建订阅"}
                 </button>
@@ -4110,7 +4099,7 @@ function App() {
               <h2>{trafficSub.name} · 订阅流量</h2>
               <button className="closeButton" aria-label="关闭" onClick={() => setTrafficSub(null)}>×</button>
             </div>
-            {sharedSubNodes(trafficSub).length > 0 && <p className="hint">共享密码节点无法按订阅统计，以下数据只包含独立凭据节点。共享节点总流量请在节点列表查看。</p>}
+            {sharedSubNodes(trafficSub).length > 0 && <p className="hint">共享凭据节点无法按订阅统计，以下数据只包含独立凭据节点。共享节点总流量请在节点列表查看。</p>}
             <div className="trafficTotals">
               <div>累计上行<strong>{bytes(trafficSub.uplink || 0)}</strong></div>
               <div>累计下行<strong>{bytes(trafficSub.downlink || 0)}</strong></div>
@@ -4183,13 +4172,66 @@ function ConfirmDialog({
     </div>
   );
 }
+function HelpTip({ label, text, warning = false }: { label: string; text: string; warning?: boolean }) {
+  const [open, setOpen] = useState(false);
+  const root = useRef<HTMLSpanElement>(null);
+  const button = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLSpanElement>(null);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const id = useId();
+  useLayoutEffect(() => {
+    if (!open || !button.current || !panel.current) return;
+    const anchor = button.current.getBoundingClientRect();
+    const width = panel.current.offsetWidth;
+    const height = panel.current.offsetHeight;
+    setPosition({
+      left: Math.max(12, Math.min(anchor.left, window.innerWidth - width - 12)),
+      top: anchor.bottom + height + 8 > window.innerHeight - 12 && anchor.top > height + 20 ? anchor.top - height - 8 : anchor.bottom + 8,
+    });
+  }, [open, text]);
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent) => {
+      if (!root.current?.contains(event.target as globalThis.Node) && !panel.current?.contains(event.target as globalThis.Node)) setOpen(false);
+    };
+    const closeEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    const closeOnScroll = () => setOpen(false);
+    document.addEventListener("pointerdown", closeOutside);
+    document.addEventListener("keydown", closeEscape);
+    document.addEventListener("scroll", closeOnScroll, true);
+    window.addEventListener("resize", closeOnScroll);
+    return () => {
+      document.removeEventListener("pointerdown", closeOutside);
+      document.removeEventListener("keydown", closeEscape);
+      document.removeEventListener("scroll", closeOnScroll, true);
+      window.removeEventListener("resize", closeOnScroll);
+    };
+  }, [open]);
+  return <span className="helpTip" ref={root}>
+    <button ref={button} type="button" className={`helpTipButton${warning ? " helpTipWarning" : ""}`} aria-label={warning ? label : `${label}说明`} aria-expanded={open} aria-controls={open ? id : undefined} aria-describedby={open ? id : undefined} onClick={() => setOpen(!open)}>{warning ? "!" : "?"}</button>
+    {open && createPortal(<span className="helpTipPanel" id={id} role="tooltip" ref={panel} style={position}>{text}</span>, document.body)}
+  </span>;
+}
 const Field = memo(function Field({
   label,
   children,
+  help,
 }: {
   label: string;
   children: React.ReactNode;
+  help?: string;
 }) {
+  const id = useId();
+  if (help) {
+    const controlId = React.isValidElement<{ id?: string }>(children) ? children.props.id || id : id;
+    const control = React.isValidElement<{ id?: string }>(children) ? React.cloneElement(children, { id: controlId }) : children;
+    return <div className="field">
+      <div className="fieldLabelRow"><label htmlFor={controlId}>{label}</label><HelpTip label={label} text={help} /></div>
+      {control}
+    </div>;
+  }
   return (
     <label className="field">
       <span>{label}</span>

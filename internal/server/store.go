@@ -347,6 +347,9 @@ var migrations = [][]string{
 		`CREATE TABLE mui_entry_connection_ips (server_id TEXT NOT NULL, route_id TEXT NOT NULL, node_id TEXT NOT NULL, ip TEXT NOT NULL, at_ms BIGINT NOT NULL, first_seen_ms BIGINT NOT NULL, PRIMARY KEY(server_id,route_id,node_id,ip))`,
 		`CREATE INDEX mui_entry_connection_ips_at ON mui_entry_connection_ips(at_ms)`,
 	},
+	{
+		`ALTER TABLE mui_audit ADD COLUMN ip TEXT NOT NULL DEFAULT ''`,
+	},
 }
 
 func ID() string {
@@ -433,7 +436,11 @@ func (s *Store) SetAppliedDeployment(serverID string, nodes map[string]shared.No
 }
 
 func (s *Store) Audit(action, target, detail string) {
-	if _, err := s.DB.Exec(`INSERT INTO mui_audit(id,at_ms,action,target,detail) VALUES($1,$2,$3,$4,$5)`, ID(), time.Now().UnixMilli(), action, target, detail); err != nil {
+	s.AuditWithIP(action, target, detail, "")
+}
+
+func (s *Store) AuditWithIP(action, target, detail, ip string) {
+	if _, err := s.DB.Exec(`INSERT INTO mui_audit(id,at_ms,action,target,detail,ip) VALUES($1,$2,$3,$4,$5,$6)`, ID(), time.Now().UnixMilli(), action, target, detail, ip); err != nil {
 		// Audit rows must never carry secrets, so logging the failure is safe.
 		log.Printf("audit %s %s: %v", action, target, err)
 	}

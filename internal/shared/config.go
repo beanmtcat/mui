@@ -465,10 +465,11 @@ func SingBoxConfig(nodes []ManagedNode, certDir string, defaultInterface ...stri
 
 func SSMultiUser(method string) bool { return strings.HasPrefix(method, "2022-blake3-") }
 
-// SharedSubscriptionPassword identifies single-user SS nodes. Their existing
-// node password can be delivered in a subscription, but cannot identify which
-// subscription a connection belongs to.
-func SharedSubscriptionPassword(n Node) bool { return n.Protocol == "ss" && !SSMultiUser(n.Method) }
+// SharedSubscriptionPassword identifies nodes that use their original login
+// for every subscription. Their traffic cannot be attributed to a subscriber.
+func SharedSubscriptionPassword(n Node) bool {
+	return n.SingleUser || n.Protocol == "ss" && !SSMultiUser(n.Method)
+}
 
 func ValidateForward(f ForwardRule) error {
 	if strings.TrimSpace(f.Name) == "" || len(f.Name) > 100 {

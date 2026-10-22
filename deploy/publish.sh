@@ -150,6 +150,7 @@ if [[ -z "$2" && ! -s "$root/deploy/.env" ]]; then printf '远程缺少 %s/deplo
 mkdir -p -- "$root"
 [[ "$(cd "$root" && pwd -P)" != / ]] || { echo '发布目录不能指向根目录' >&2; exit 1; }
 [[ ! -e "$root/current" || -L "$root/current" ]] || { echo 'current 必须是发布脚本维护的符号链接' >&2; exit 1; }
+[[ ! -L "$root/releases" ]] || { echo 'releases 不能是符号链接' >&2; exit 1; }
 mkdir -p -- "$root/releases" "$root/deploy" "$root/bin"
 mktemp -d "$root/.publish-XXXXXXXX"
 PREFLIGHT
@@ -227,10 +228,29 @@ if [[ "$service" != backend ]]; then
   "${compose[@]}" exec -T mui-web wget -T 10 -q -O /dev/null http://127.0.0.1:8086/healthz </dev/null
 fi
 "${compose[@]}" ps "${services[@]}"
+previous_name=
+if [[ -L "$root/current" ]]; then
+  previous=$(readlink -f -- "$root/current" || true)
+  previous_name=${previous##*/}
+fi
 next="$root/.current-${release##*/}"
 ln -s -- "$release" "$next"
 mv -fT -- "$next" "$root/current"
+trap - ERR
 printf '\n发布成功：%s\n' "$release"
 printf '生产配置：%s/deploy/.env\n' "$root"
+removed=0
+for old in "$root"/releases/*; do
+  [[ -d "$old" && ! -L "$old" ]] || continue
+  name=${old##*/}
+  [[ "$name" =~ ^[0-9]{8}T[0-9]{6}Z-[[:alnum:]]{8}$ ]] || continue
+  [[ "$name" != "${release##*/}" && "$name" != "$previous_name" ]] || continue
+  if rm -rf -- "$old"; then
+    ((removed+=1))
+  else
+    printf '警告：旧发布目录清理失败：%s\n' "$old" >&2
+  fi
+done
+printf '已清理 %s 个旧发布目录；保留当前版和上一版。\n' "$removed"
 PUBLISH
 stage=
