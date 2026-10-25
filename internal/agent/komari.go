@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"runtime"
 	"strconv"
@@ -25,6 +26,8 @@ import (
 type KomariConfig struct {
 	Endpoint string `json:"endpoint"`
 	Token    string `json:"token"`
+	IPv4     string `json:"ipv4,omitempty"`
+	IPv6     string `json:"ipv6,omitempty"`
 }
 
 // The MUI panel supplies this config over the signed Agent channel. The
@@ -66,7 +69,7 @@ func runKomariManager(ctx context.Context, c Config) {
 		}
 	}
 	defer stop()
-	refresh := func() {
+	refresh := func() bool {
 		latest, err := ReadConfig()
 		if err == nil && latest.ServerID == c.ServerID && latest.Token == c.Token && latest.URL == c.URL {
 			c = latest
@@ -78,15 +81,15 @@ func runKomariManager(ctx context.Context, c Config) {
 			if ctx.Err() == nil {
 				fmt.Fprintln(os.Stderr, "komari config fetch:", err)
 			}
-			return
+			return false
 		}
 		if next == current {
-			return
+			return true
 		}
 		stop()
 		current = next
 		if next.Token == "" {
-			return
+			return true
 		}
 		workerCtx, workerCancel := context.WithCancel(ctx)
 		cancel, done = workerCancel, make(chan struct{})
@@ -94,18 +97,27 @@ func runKomariManager(ctx context.Context, c Config) {
 			defer close(done)
 			runKomari(workerCtx, next)
 		}()
+		return true
 	}
-	refresh()
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	success := refresh()
+	timer := time.NewTimer(komariPollInterval(current, success))
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			refresh()
+		case <-timer.C:
+			success = refresh()
+			timer.Reset(komariPollInterval(current, success))
 		}
 	}
+}
+
+func komariPollInterval(config KomariConfig, fetchSucceeded bool) time.Duration {
+	if fetchSucceeded && config.Token == "" {
+		return 5 * time.Minute
+	}
+	return 30 * time.Second
 }
 
 type komariClient struct {
@@ -152,7 +164,7 @@ func runKomari(ctx context.Context, config KomariConfig) {
 	infoTicker := time.NewTicker(5 * time.Minute)
 	defer infoTicker.Stop()
 	client.sendReport(ctx)
-	client.sendBasicInfo(ctx)
+	client.sendBasicInfo(ctx, config)
 	for {
 		select {
 		case <-ctx.Done():
@@ -160,7 +172,7 @@ func runKomari(ctx context.Context, config KomariConfig) {
 		case <-reportTicker.C:
 			client.sendReport(ctx)
 		case <-infoTicker.C:
-			client.sendBasicInfo(ctx)
+			client.sendBasicInfo(ctx, config)
 		}
 	}
 }
@@ -199,11 +211,10 @@ func (c *komariClient) post(ctx context.Context, payload []byte, out *komariv2.R
 	return nil
 }
 
-func (c *komariClient) sendBasicInfo(ctx context.Context) {
+func (c *komariClient) sendBasicInfo(ctx context.Context, config KomariConfig) {
 	cpu := komariunit.CpuStaticInfo()
 	ram, swap, disk := komariunit.Ram(), komariunit.Swap(), komariunit.Disk()
-	ipv4 := komariPublicAddress(ctx, "udp4", "192.0.2.1:9", "https://api.ipify.org?format=json")
-	ipv6 := komariPublicAddress(ctx, "udp6", "[2001:db8::1]:9", "https://api6.ipify.org?format=json")
+	ipv4, ipv6 := komariBasicIPs(ctx, config, publicAddress, komariPublicAddress)
 	info := map[string]any{
 		"cpu_name": cpu.CPUName, "cpu_cores": cpu.CPUCores,
 		"cpu_physical_cores": cpu.CPUPhysicalCores, "arch": runtime.GOARCH,
@@ -220,12 +231,41 @@ func (c *komariClient) sendBasicInfo(ctx context.Context) {
 	}
 }
 
-// A NAT address is not visible on the host's interfaces. Use a bounded HTTPS
-// lookup only when routing does not reveal a public address.
-func komariPublicAddress(ctx context.Context, network, probe, lookupURL string) string {
-	if local := publicAddress(network, probe); local != "" {
-		return local
+func validKomariPublicIP(raw string, v6 bool) string {
+	ip, err := netip.ParseAddr(raw)
+	if err != nil || !allowedKomariPingIP(ip) || (ip.Unmap().Is6() != v6) {
+		return ""
 	}
+	return ip.Unmap().String()
+}
+
+// Panel-reported addresses avoid third-party lookups. A public address on the
+// local route is the next choice. Only when the panel has neither address do
+// we use the bounded external lookup for a missing address family.
+func komariBasicIPs(ctx context.Context, config KomariConfig, local func(string, string) string, external func(context.Context, string, string) string) (string, string) {
+	ipv4 := validKomariPublicIP(config.IPv4, false)
+	ipv6 := validKomariPublicIP(config.IPv6, true)
+	panelKnown := ipv4 != "" || ipv6 != ""
+	if ipv4 == "" {
+		ipv4 = validKomariPublicIP(local("udp4", "192.0.2.1:9"), false)
+	}
+	if ipv6 == "" {
+		ipv6 = validKomariPublicIP(local("udp6", "[2001:db8::1]:9"), true)
+	}
+	if !panelKnown {
+		if ipv4 == "" {
+			ipv4 = external(ctx, "udp4", "https://api.ipify.org?format=json")
+		}
+		if ipv6 == "" {
+			ipv6 = external(ctx, "udp6", "https://api6.ipify.org?format=json")
+		}
+	}
+	return ipv4, ipv6
+}
+
+// A NAT address is not visible on the host's interfaces. This bounded HTTPS
+// lookup runs only when the panel knows neither public address.
+func komariPublicAddress(ctx context.Context, network, lookupURL string) string {
 	family := "tcp4"
 	if network == "udp6" {
 		family = "tcp6"
@@ -257,12 +297,12 @@ func parseKomariPublicIP(reader io.Reader, family string) string {
 	if err := json.NewDecoder(io.LimitReader(reader, 128)).Decode(&data); err != nil {
 		return ""
 	}
-	ip := net.ParseIP(data.IP)
-	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() ||
-		(family == "tcp4" && ip.To4() == nil) || (family == "tcp6" && ip.To4() != nil) {
+	ip, err := netip.ParseAddr(data.IP)
+	if err != nil || !allowedKomariPingIP(ip) ||
+		(family == "tcp4" && !ip.Unmap().Is4()) || (family == "tcp6" && !ip.Unmap().Is6()) {
 		return ""
 	}
-	return ip.String()
+	return ip.Unmap().String()
 }
 
 func (c *komariClient) sendReport(ctx context.Context) {
@@ -353,36 +393,72 @@ func (c *komariClient) handleEvent(ctx context.Context, event komariv2.Event) bo
 	}
 }
 
-func tcpPingKomari(ctx context.Context, target string) int {
+var komariCGNAT = netip.MustParsePrefix("100.64.0.0/10")
+
+func allowedKomariPingIP(ip netip.Addr) bool {
+	ip = ip.Unmap()
+	return ip.IsValid() && ip.Zone() == "" && ip.IsGlobalUnicast() && !ip.IsPrivate() &&
+		!ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified() && !komariCGNAT.Contains(ip)
+}
+
+// Resolve once, inspect every answer, then dial only the approved literal IP.
+// Rejecting a mixed public/private answer prevents a panel-controlled name
+// from selecting an internal address or changing DNS between check and dial.
+func resolveKomariTCPTarget(ctx context.Context, target string, lookup func(context.Context, string, string) ([]netip.Addr, error)) ([]string, error) {
 	target = strings.TrimSpace(target)
-	if target == "" || strings.ContainsAny(target, "/ \t\r\n") {
-		return -1
+	if target == "" || strings.ContainsAny(target, "/@% \t\r\n") {
+		return nil, errors.New("invalid target")
 	}
-	address := target
-	if _, _, err := net.SplitHostPort(target); err != nil {
-		if ip := net.ParseIP(target); ip != nil {
-			address = net.JoinHostPort(ip.String(), "80")
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		if ip, parseErr := netip.ParseAddr(target); parseErr == nil && ip.Zone() == "" {
+			host, port = ip.String(), "80"
 		} else if strings.Contains(target, ":") {
-			return -1
+			return nil, errors.New("invalid host or port")
 		} else {
-			address = net.JoinHostPort(target, "80")
+			host, port = target, "80"
 		}
 	}
-	_, port, err := net.SplitHostPort(address)
-	if err != nil {
-		return -1
+	if host == "" {
+		return nil, errors.New("empty host")
 	}
 	portNumber, err := strconv.Atoi(port)
 	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return -1
+		return nil, errors.New("invalid port")
 	}
+	var ips []netip.Addr
+	if ip, err := netip.ParseAddr(host); err == nil {
+		ips = []netip.Addr{ip}
+	} else {
+		ips, err = lookup(ctx, "ip", host)
+		if err != nil || len(ips) == 0 {
+			return nil, errors.New("DNS lookup failed")
+		}
+	}
+	addresses := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		if !allowedKomariPingIP(ip) {
+			return nil, errors.New("target address is not public")
+		}
+		addresses = append(addresses, net.JoinHostPort(ip.Unmap().String(), port))
+	}
+	return addresses, nil
+}
+
+func tcpPingKomari(ctx context.Context, target string) int {
 	call, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	start := time.Now()
-	conn, err := (&net.Dialer{}).DialContext(call, "tcp", address)
+	addresses, err := resolveKomariTCPTarget(call, target, net.DefaultResolver.LookupNetIP)
 	if err != nil {
 		return -1
 	}
-	_ = conn.Close()
-	return int(time.Since(start).Milliseconds())
+	for _, address := range addresses {
+		start := time.Now()
+		conn, err := (&net.Dialer{}).DialContext(call, "tcp", address)
+		if err == nil {
+			_ = conn.Close()
+			return int(time.Since(start).Milliseconds())
+		}
+	}
+	return -1
 }

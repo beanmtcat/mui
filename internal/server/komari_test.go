@@ -16,7 +16,7 @@ func TestKomariSettingsAndPerServerTokenDelivery(t *testing.T) {
 	}
 	create := func(name, token string) (string, map[string]string) {
 		t.Helper()
-		body := map[string]any{"name": name, "roles": []string{"exit"}, "country": "SG", "ipv4": "203.0.113.10"}
+		body := map[string]any{"name": name, "roles": []string{"exit"}, "country": "SG", "ipv4": "8.8.8.8"}
 		if token != "" {
 			body["komariToken"] = token
 		}
@@ -40,7 +40,7 @@ func TestKomariSettingsAndPerServerTokenDelivery(t *testing.T) {
 	if code, out, _ := p.do("GET", "/api/servers", nil, nil); code != 200 || strings.Contains(Marshal(out), "per-server-private-token") {
 		t.Fatalf("server list exposed token: %d %v", code, out)
 	}
-	if code, out, _ := p.do("GET", "/agent/komari", nil, firstAgent); code != 200 || out["endpoint"] != "https://komari.example.com" || out["token"] != "per-server-private-token" {
+	if code, out, _ := p.do("GET", "/agent/komari", nil, firstAgent); code != 200 || out["endpoint"] != "https://komari.example.com" || out["token"] != "per-server-private-token" || out["ipv4"] != "8.8.8.8" {
 		t.Fatalf("first Agent config: %d %v", code, out)
 	}
 	if code, out, _ := p.do("GET", "/agent/komari", nil, secondAgent); code != 200 || out["token"] != "" || out["endpoint"] != "" {
@@ -49,6 +49,14 @@ func TestKomariSettingsAndPerServerTokenDelivery(t *testing.T) {
 	server, err := p.store.Server(firstID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	server.DetectedIPv4 = "1.1.1.1"
+	server.DetectedIPv6 = "2606:4700:4700::1111"
+	if err := p.store.PutServer(server); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := p.do("GET", "/agent/komari", nil, firstAgent); code != 200 || out["ipv4"] != "8.8.8.8" || out["ipv6"] != "2606:4700:4700::1111" {
+		t.Fatalf("Agent did not use configured IP before detected fallback: %d %v", code, out)
 	}
 	var update map[string]any
 	if err := json.Unmarshal([]byte(Marshal(server)), &update); err != nil {
@@ -75,5 +83,16 @@ func TestKomariSettingsAndPerServerTokenDelivery(t *testing.T) {
 	}
 	if code, out, _ := p.do("GET", "/agent/komari", nil, firstAgent); code != 200 || out["token"] != "" || out["endpoint"] != "" {
 		t.Fatalf("cleared token remained active: %d %v", code, out)
+	}
+}
+
+func TestKomariPanelIPRejectsPrivateAndCGNAT(t *testing.T) {
+	if got := komariPanelIP("192.168.1.2", "8.8.8.8", false); got != "8.8.8.8" {
+		t.Fatalf("private configured IP hid public detected IP: %q", got)
+	}
+	for _, raw := range []string{"127.0.0.1", "169.254.169.254", "100.64.10.2", "0.0.0.0"} {
+		if got := komariPanelIP(raw, "", false); got != "" {
+			t.Errorf("accepted unsafe IPv4 %s: %q", raw, got)
+		}
 	}
 }

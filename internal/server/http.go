@@ -3758,7 +3758,9 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 	if shared.ManualFirewall(server.FirewallMode) && !server.ManualFirewallSupport {
 		allowApply = false
 	}
-	if allowApply && server.AgentProxyNodeID != "" {
+	// Only a pending proxy switch must wait for the proxy host's source rule.
+	// An unchanged proxy must not stall unrelated node or forward applies.
+	if allowApply && server.AgentProxySwitchPending && server.AgentProxyNodeID != "" {
 		ready, err := a.agentProxyAccessLive(server)
 		if err != nil {
 			errorJSON(w, 500, err.Error())

@@ -143,3 +143,32 @@ func TestAgentProxyRoleRemovalRetainsSafetyChecks(t *testing.T) {
 		t.Fatalf("proxy cycle accepted: %d %v", code, out)
 	}
 }
+
+func TestUnchangedAgentProxyDoesNotBlockOtherApplies(t *testing.T) {
+	p, _, _, node := proxyRoleFixture(t)
+	id, auth := p.enroll("entry-with-existing-proxy")
+	p.newAgent(auth)
+	p.applyAll(auth)
+	server, err := p.store.Server(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Roles = []string{shared.RoleEntry}
+	server.IPv4 = "198.51.100.88"
+	server.AgentProxyNodeID = node.ID
+	server.AgentProxySupport = true
+	server.AgentProxySwitchPending = false
+	if err := p.store.PutServer(server); err != nil {
+		t.Fatal(err)
+	}
+	ready, err := p.app.agentProxyAccessLive(server)
+	if err != nil || ready {
+		t.Fatalf("fixture unexpectedly has proxy source access: %v, %v", ready, err)
+	}
+	if err := p.app.queueApply(id, "nodes.apply"); err != nil {
+		t.Fatal(err)
+	}
+	if code, job, _ := p.do("GET", "/agent/job", nil, auth); code != 200 || job["kind"] != "nodes.apply" {
+		t.Fatalf("unrelated apply was blocked by unchanged proxy: %d %v", code, job)
+	}
+}

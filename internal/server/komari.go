@@ -3,6 +3,7 @@ package server
 import (
 	"database/sql"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -138,7 +139,7 @@ func (a *App) agentKomari(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if endpoint == "" {
-		writeJSON(w, 200, map[string]string{"endpoint": "", "token": ""})
+		writeJSON(w, 200, map[string]string{"endpoint": "", "token": "", "ipv4": "", "ipv6": ""})
 		return
 	}
 	token, err := a.Store.KomariToken(id)
@@ -147,7 +148,26 @@ func (a *App) agentKomari(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if token == "" {
-		endpoint = ""
+		writeJSON(w, 200, map[string]string{"endpoint": "", "token": "", "ipv4": "", "ipv6": ""})
+		return
 	}
-	writeJSON(w, 200, map[string]string{"endpoint": endpoint, "token": token})
+	server, err := a.Store.Server(id)
+	if err != nil {
+		errorJSON(w, 404, "服务器不存在")
+		return
+	}
+	ipv4 := komariPanelIP(server.IPv4, server.DetectedIPv4, false)
+	ipv6 := komariPanelIP(server.IPv6, server.DetectedIPv6, true)
+	writeJSON(w, 200, map[string]string{"endpoint": endpoint, "token": token, "ipv4": ipv4, "ipv6": ipv6})
+}
+
+func komariPanelIP(configured, detected string, v6 bool) string {
+	for _, raw := range []string{configured, detected} {
+		ip := net.ParseIP(raw)
+		if ip == nil || !publicUnicast(ip) || (ip.To4() == nil) != v6 {
+			continue
+		}
+		return ip.String()
+	}
+	return ""
 }

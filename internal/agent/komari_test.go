@@ -7,9 +7,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	komariv2 "github.com/komari-monitor/komari-agent/protocol/v2"
 )
@@ -41,7 +43,7 @@ func TestFetchKomariConfigFromPanel(t *testing.T) {
 			t.Errorf("unexpected Agent request: %s %s", r.Method, r.URL.Path)
 		}
 		if calls.Add(1) == 1 {
-			_, _ = io.WriteString(w, `{"endpoint":"https://komari.example.com","token":"private-token"}`)
+			_, _ = io.WriteString(w, `{"endpoint":"https://komari.example.com","token":"private-token","ipv4":"8.8.8.8","ipv6":"2606:4700:4700::1111"}`)
 		} else {
 			_, _ = io.WriteString(w, `{"endpoint":"","token":""}`)
 		}
@@ -49,12 +51,24 @@ func TestFetchKomariConfigFromPanel(t *testing.T) {
 	defer server.Close()
 	config := Config{URL: server.URL, ServerID: "server-1", Token: "mui-token"}
 	got, err := fetchKomariConfig(context.Background(), config)
-	if err != nil || got.Endpoint != "https://komari.example.com" || got.Token != "private-token" {
+	if err != nil || got.Endpoint != "https://komari.example.com" || got.Token != "private-token" || got.IPv4 != "8.8.8.8" || got.IPv6 != "2606:4700:4700::1111" {
 		t.Fatalf("fetch configured Agent: %+v %v", got, err)
 	}
 	got, err = fetchKomariConfig(context.Background(), config)
 	if err != nil || got != (KomariConfig{}) {
 		t.Fatalf("tokenless Agent must stay disabled: %+v %v", got, err)
+	}
+}
+
+func TestKomariPollInterval(t *testing.T) {
+	if got := komariPollInterval(KomariConfig{}, true); got != 5*time.Minute {
+		t.Fatalf("unconfigured interval: %v", got)
+	}
+	if got := komariPollInterval(KomariConfig{}, false); got != 30*time.Second {
+		t.Fatalf("failed fetch retry interval: %v", got)
+	}
+	if got := komariPollInterval(KomariConfig{Token: "configured"}, true); got != 30*time.Second {
+		t.Fatalf("configured interval: %v", got)
 	}
 }
 
@@ -98,6 +112,45 @@ func TestKomariOnlyTCPTypeMayRunPing(t *testing.T) {
 	}
 	if got := tcpPingKomari(context.Background(), "127.0.0.1:0"); got != -1 {
 		t.Fatalf("invalid TCP port: %d", got)
+	}
+}
+
+func TestKomariTCPPingRejectsInternalTargets(t *testing.T) {
+	lookup := func(_ context.Context, _, host string) ([]netip.Addr, error) {
+		switch host {
+		case "public.example":
+			return []netip.Addr{netip.MustParseAddr("8.8.8.8")}, nil
+		case "private.example":
+			return []netip.Addr{netip.MustParseAddr("192.168.1.10")}, nil
+		case "mixed.example":
+			return []netip.Addr{netip.MustParseAddr("8.8.8.8"), netip.MustParseAddr("169.254.169.254")}, nil
+		default:
+			return nil, errors.New("unexpected name")
+		}
+	}
+	for _, target := range []string{
+		"127.0.0.1:443", "[::1]:443", "10.0.0.2:443", "172.16.0.1:443",
+		"192.168.1.1:443", "169.254.169.254:80", "[fe80::1]:80", "[fd00::1]:80",
+		"100.64.0.1:443", "100.127.255.254:443", "0.0.0.0:80", "[::]:80",
+		"private.example:443", "mixed.example:443",
+	} {
+		if addresses, err := resolveKomariTCPTarget(context.Background(), target, lookup); err == nil {
+			t.Errorf("accepted blocked target %q: %v", target, addresses)
+		}
+	}
+	for _, test := range []struct{ target, want string }{
+		{"8.8.8.8:53", "8.8.8.8:53"},
+		{"public.example:443", "8.8.8.8:443"},
+		{"public.example", "8.8.8.8:80"},
+		{"[2606:4700:4700::1111]:443", "[2606:4700:4700::1111]:443"},
+	} {
+		addresses, err := resolveKomariTCPTarget(context.Background(), test.target, lookup)
+		if err != nil || len(addresses) != 1 || addresses[0] != test.want {
+			t.Errorf("target %q: got %v, %v; want %q", test.target, addresses, err, test.want)
+		}
+	}
+	if got := tcpPingKomari(context.Background(), "169.254.169.254:80"); got != -1 {
+		t.Fatalf("metadata address returned %d", got)
 	}
 }
 
@@ -158,11 +211,33 @@ func TestParseKomariPublicIP(t *testing.T) {
 		{`{"ip":"202.187.152.50"}`, "tcp4", "202.187.152.50"},
 		{`{"ip":"2001:b011:9801:f420:be24:11ff:fee3:6f98"}`, "tcp6", "2001:b011:9801:f420:be24:11ff:fee3:6f98"},
 		{`{"ip":"192.168.1.1"}`, "tcp4", ""},
+		{`{"ip":"100.64.1.1"}`, "tcp4", ""},
 		{`{"ip":"202.187.152.50"}`, "tcp6", ""},
 		{`{"ip":"broken"}`, "tcp4", ""},
 	} {
 		if got := parseKomariPublicIP(strings.NewReader(test.body), test.family); got != test.want {
 			t.Errorf("body=%s family=%s: got %q, want %q", test.body, test.family, got, test.want)
 		}
+	}
+}
+
+func TestKomariBasicIPsPreferPanelWithoutExternalLookup(t *testing.T) {
+	queries := 0
+	local := func(string, string) string { return "" }
+	external := func(context.Context, string, string) string {
+		queries++
+		return "9.9.9.9"
+	}
+	ipv4, ipv6 := komariBasicIPs(context.Background(), KomariConfig{IPv4: "8.8.8.8", IPv6: "2606:4700:4700::1111"}, local, external)
+	if ipv4 != "8.8.8.8" || ipv6 != "2606:4700:4700::1111" || queries != 0 {
+		t.Fatalf("panel IPs not preferred: %q %q; external calls=%d", ipv4, ipv6, queries)
+	}
+	_, _ = komariBasicIPs(context.Background(), KomariConfig{IPv4: "8.8.8.8"}, local, external)
+	if queries != 0 {
+		t.Fatalf("external lookup ran while panel knows an address: %d", queries)
+	}
+	_, _ = komariBasicIPs(context.Background(), KomariConfig{}, local, external)
+	if queries != 2 {
+		t.Fatalf("missing panel IPs did not try both external lookups: %d", queries)
 	}
 }
