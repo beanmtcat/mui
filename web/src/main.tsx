@@ -401,7 +401,7 @@ function App() {
     >(null),
     [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [certFilesBusy, setCertFilesBusy] = useState({ pem: false, key: false });
-  const [serverForm, setServerForm] = useState<Partial<Server>>(emptyServer),
+  const [serverForm, setServerForm] = useState<Partial<Server> & { komariToken?: string }>(emptyServer),
     [nodeForm, setNodeForm] = useState<Partial<Node> & { password?: string; shadowTlsPassword?: string }>(
       emptyNode,
     ),
@@ -444,6 +444,7 @@ function App() {
   const [installArch, setInstallArch] = useState("amd64");
   const localInstallGuide = installMethod === "standalone" ? installInfo?.standaloneInstall : installInfo?.offlineInstall;
   const [firewallServer, setFirewallServer] = useState(""),
+    [komariEndpoint, setKomariEndpoint] = useState(""),
     [passwordForm, setPasswordForm] = useState({ current: "", next: "" }),
     [totpOff, setTotpOff] = useState({ password: "", code: "" });
   const [summary, setSummary] = useState<{
@@ -517,6 +518,7 @@ function App() {
       load<Customer>("/api/customers", setCustomers),
       api<Record<string, string>>("/api/agent/release").then(setAgentReleases).catch(() => setAgentReleases({})),
       api<Record<string, string>>("/api/core/release").then(setCoreReleases).catch(() => setCoreReleases({})),
+      api<{ endpoint: string }>("/api/settings/komari").then((value) => setKomariEndpoint(value.endpoint)).catch((e) => { failures.push((e as Error).message); }),
     ]);
     // The paged logs go back to their first page: whatever was just done is at the top.
     opLog.reload();
@@ -1854,6 +1856,8 @@ function App() {
                             </button>
                           ) : (
                             <button
+                              disabled={!n.direct}
+                              title={!n.direct ? "该节点未开启允许直连；请编辑节点开启，或通过链路订阅使用" : "复制节点直连链接"}
                               onClick={() =>
                                 act(async () => {
                                   const v = await api<{ uri: string }>(
@@ -2746,6 +2750,20 @@ function App() {
         )}
         {tab === "settings" && (
           <section className="panel settings">
+            <h2>Komari 监控</h2>
+            <p>所有服务器共用一个 Komari 面板地址；每台服务器的 Agent token 在服务器配置中填写。</p>
+            <form className="komariSettingsForm" onSubmit={(e) => {
+              e.preventDefault();
+              void act(async () => {
+                const saved = await mutation<{ endpoint: string }>("/api/settings/komari", "PUT", { endpoint: komariEndpoint });
+                setKomariEndpoint(saved.endpoint);
+              }, "Komari 面板地址已保存");
+            }}>
+              <label htmlFor="komari-endpoint">Komari 面板地址</label>
+              <input id="komari-endpoint" type="url" placeholder="https://komari.example.com" value={komariEndpoint} onChange={(e) => setKomariEndpoint(e.target.value)} />
+              <small>留空会停用 Komari 上报；有地址但服务器未填写 token 时，该服务器也不会启动 Komari 监控。配置变更会自动下发。</small>
+              <button className="primary">保存 Komari 地址</button>
+            </form>
             <h2>账户安全</h2>
             <p>建议启用动态验证码以保护管理面板。</p>
             {expiring.length > 0 && (
@@ -3112,6 +3130,12 @@ function App() {
                         </select>
                       </Field>}
                     </div>
+                    <div className="serverFormWide">
+                      <Field label="Komari Agent token" help="从 Komari 面板取得此服务器的 Agent token。安装后由 MUI 面板自动下发；没有 token 就不会启动 Komari 监控。编辑时留空会保留原 token。">
+                        <input type="password" autoComplete="off" placeholder={serverForm.komariTokenSet ? "已配置；留空保持不变" : "选填，留空不启动 Komari"} value={serverForm.komariToken || ""} onChange={(e) => setServerForm({ ...serverForm, komariToken: e.target.value || undefined })} />
+                      </Field>
+                      <div className="serverFieldHelp">{serverForm.komariTokenSet ? "已配置 token" : "未配置 token"}{serverForm.komariTokenSet && <button type="button" className="ghost" onClick={() => setServerForm({ ...serverForm, komariToken: "", komariTokenSet: false })}>清除 token</button>}</div>
+                    </div>
                   </div>
                 </section>
                 <section className="serverFormSection" aria-labelledby="server-network-title">
@@ -3140,7 +3164,7 @@ function App() {
                       </label>
                       <HelpTip label="自动同步公网 IP" text="适用于公网地址会变化的服务器。优先使用 Agent 检测到的公网地址；本机 IPv4 在 NAT 后且直接连接面板时，用面板看到的连接来源回填 IPv4。使用 SOCKS5 代理时不会把代理出口当成本机地址。暂时检测不到的地址不会清空。请确认出站地址也能接受客户端或链路入站连接；CGNAT 无法靠回填开放入站端口。" />
                     </div>
-                    <Field label="订阅用域名">
+                    <Field label="订阅与链路用域名">
                       <input
                         value={serverForm.domain || ""}
                         onChange={(e) =>
@@ -3671,7 +3695,7 @@ function App() {
                 const senders = servers.filter((s) => senderIds.includes(s.id));
                 const receivers = servers.filter((s) => receiverIds.includes(s.id));
                 const sourceInternal = sourceMode === "internal" || (!sourceMode || sourceMode === "auto") && internal;
-                const targetAddress = (s: Server) => internal ? s.internalAddress : s.ipv4 || s.ipv6 || s.domain;
+                const targetAddress = (s: Server) => internal ? s.internalAddress : s.domain || s.ipv4 || s.ipv6;
                 const targets = receivers.map(targetAddress);
                 const useV4 = targets.some((v) => !v || !v.includes(":"));
                 const useV6 = targets.some((v) => !v || v.includes(":") || !/^\d+\.\d+\.\d+\.\d+$/.test(v));

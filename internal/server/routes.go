@@ -74,10 +74,16 @@ func routeServers(rt shared.Route) []string {
 }
 
 // hopAddress is how a previous hop reaches a server: its internal address
-// when asked to, otherwise its public IPv4, IPv6 or domain.
+// when asked to, otherwise its public IPv4, IPv6 or domain. A server opted
+// into dynamic public IPs is reached by its domain first, so forwards follow
+// its address through DNS. Others keep literal IPs: an existing domain may be
+// a CDN or subscription name, and switching would rewrite every route.
 func hopAddress(s shared.Server, internal bool) string {
 	if internal {
 		return s.InternalAddress
+	}
+	if s.AutoSyncPublicIP && s.Domain != "" {
+		return s.Domain
 	}
 	for _, v := range []string{s.IPv4, s.IPv6, s.Domain} {
 		if v != "" {

@@ -1133,6 +1133,20 @@ form.totpBox {
 .totpBox input {
   width: 220px;
 }
+.komariSettingsForm {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  margin: 12px 0 24px;
+}
+.komariSettingsForm label,
+.komariSettingsForm small {
+  grid-column: 1 / -1;
+}
+.komariSettingsForm input {
+  width: 100%;
+  min-width: 0;
+}
 
 /* Login */
 .loginShell {

@@ -304,6 +304,7 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	defer func() { client.CloseIdleConnections() }()
+	go runKomariManager(ctx, c)
 	refreshClient := func() {
 		next, err := ReadConfig()
 		if err != nil {

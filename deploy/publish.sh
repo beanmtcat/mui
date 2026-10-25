@@ -92,7 +92,7 @@ if [[ "$COMPOSE_FILES" == *compose.web.yaml* && "$service" != frontend ]]; then
 fi
 # Explicit allowlist: no Git metadata, local .env, SSH/signing keys, TLS keys,
 # database files, node_modules or build caches can enter the source archive.
-files=(go.mod go.sum .dockerignore cmd internal web/src web/package.json web/package-lock.json
+files=(go.mod go.sum THIRD_PARTY_NOTICES.md .dockerignore cmd internal web/src web/package.json web/package-lock.json
   web/tsconfig.json web/vite.config.ts web/index.html deploy/Mui.Dockerfile deploy/Web.Dockerfile
   deploy/Agent.Dockerfile deploy/build-agent.sh deploy/compose.yaml deploy/compose.web.yaml
   deploy/compose.backend.yaml deploy/nginx deploy/.env.example deploy/web.env.example

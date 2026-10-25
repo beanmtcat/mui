@@ -32,6 +32,55 @@ func TestRouteSourcesMatchDestinationFamily(t *testing.T) {
 	}
 }
 
+func TestRouteForwardFollowsLandingDomainWhenPublicIPChanges(t *testing.T) {
+	l := newRouteLab(t)
+	if code, out := l.route(map[string]any{"name": "dynamic exit", "entryServerId": l.entry, "nodeId": l.nodeID, "enabled": true, "hops": []map[string]any{{"serverIds": []string{l.t1}}}}); code != 201 {
+		t.Fatalf("route: %d %v", code, out)
+	}
+	forward := l.forwards(l.t1)[0]
+	if got := forward.Targets[0].Host; got != "198.51.100.4" {
+		t.Fatalf("initial target = %q", got)
+	}
+	exit, err := l.p.store.Server(l.exit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A domain alone keeps the literal target: existing routes are not
+	// rewritten to depend on DNS when the panel upgrades.
+	exit.Domain = "dynamic.example.com"
+	if err := l.p.store.PutServer(exit); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewApp(l.p.store, "https://mui.example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if got := l.forwards(l.t1)[0].Targets[0].Host; got != "198.51.100.4" {
+		t.Fatalf("static server switched to its domain: %q", got)
+	}
+	exit.AutoSyncPublicIP = true
+	if err := l.p.store.PutServer(exit); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewApp(l.p.store, "https://mui.example.test"); err != nil {
+		t.Fatal(err)
+	}
+	forward = l.forwards(l.t1)[0]
+	if got := forward.Targets[0].Host; got != exit.Domain {
+		t.Fatalf("domain did not replace literal target: %q", got)
+	}
+	exit.IPv4 = "198.51.100.99"
+	if err := l.p.store.PutServer(exit); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.p.app.syncRoutes(); err != nil {
+		t.Fatal(err)
+	}
+	forward = l.forwards(l.t1)[0]
+	if got := forward.Targets[0].Host; got != exit.Domain {
+		t.Fatalf("dynamic IP replaced domain target: %q", got)
+	}
+}
+
 func TestRouteDesiredCanonicalSourcesForCurrentAgent(t *testing.T) {
 	l := newRouteLab(t)
 	entry, _ := l.p.store.Server(l.entry)

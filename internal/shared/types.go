@@ -26,6 +26,9 @@ type Server struct {
 	IPv4     string   `json:"ipv4"`
 	IPv6     string   `json:"ipv6"`
 	Domain   string   `json:"domain"`
+	// Set only on administrator responses; the token itself lives encrypted
+	// outside the server document and is never returned to the browser.
+	KomariTokenSet bool `json:"komariTokenSet,omitempty"`
 	// AutoSyncPublicIP replaces configured IPs with valid addresses reported
 	// by the Agent. Absent on existing servers, so static addresses stay manual.
 	AutoSyncPublicIP bool `json:"autoSyncPublicIp,omitempty"`

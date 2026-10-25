@@ -6,7 +6,7 @@ React + Go 的多服务器节点面板，前端由 Nginx 独立部署，Go 后�
 
 Surge 的节点订阅通过代理组 `policy-path` 引用。面板“查看链接”提供可复制的代理组配置；[导入步骤](docs/surge-import.md)。
 
-- 服务器档案：名称、国家、地区、城市、服务商、标签、备注、IPv4/IPv6、订阅域名，以及类型（入口、线路、中转、落地，可多选）和内网地址；一次性接入令牌、在线状态、系统、架构、核心/Agent 版本、UFW 和统计状态。动态家宽可开启“自动同步公网 IP”：优先回填 Agent 上报的有效公网 IPv4/IPv6；本机 IPv4 在 NAT 后且 Agent 直接连接面板时，使用面板看到的公网连接来源作为 IPv4。通过面板配置的 SOCKS5 代理连接时不使用该回退，避免把代理出口当成服务器地址。地址改变后重新同步链路和来源规则；暂时检测不到某一地址族时保留其原值。此选项默认关闭；回填的地址仍需能接受入站连接，CGNAT 无法仅靠回填开放端口。
+- 服务器档案：名称、国家、地区、城市、服务商、标签、备注、IPv4/IPv6、订阅域名，以及类型（入口、线路、中转、落地，可多选）和内网地址；一次性接入令牌、在线状态、系统、架构、核心/Agent 版本、UFW 和统计状态。动态家宽可开启“自动同步公网 IP”：优先回填 Agent 上报的有效公网 IPv4/IPv6；本机 IPv4 在 NAT 后且 Agent 直接连接面板时，使用面板看到的公网连接来源作为 IPv4。通过面板配置的 SOCKS5 代理连接时不使用该回退，避免把代理出口当成服务器地址。地址改变后重新同步链路和来源规则；暂时检测不到某一地址族时保留其原值。此选项默认关闭；回填的地址仍需能接受入站连接，CGNAT 无法仅靠回填开放端口。开启且填写了订阅域名时，链路上一跳改为通过该域名连接本机，转发进程按 DNS 跟随地址变化；未开启的服务器仍按填写的 IP 连接，域名须解析到本机真实地址，不能是 CDN 代理域名。
 - 节点：增删改、启停、端口冲突检查、SS 2022 密钥校验、AnyTLS 证书上传与验证；证书统一管理并可跨服务器复用，私钥仅随引用它的节点配置下发；新建节点及模板的端口默认在 50000–60000 范围，可点击骰子按钮重新随机生成，新建节点会避开已知的同服务器节点和 SSH 端口；Agent 校验 sing-box 配置、管理端口规则、重启并探测监听，失败回滚。
 - 节点模板：保存 SS、Snell 或 AnyTLS 的常用协议、端口、连接参数及可选密码 / PSK；Snell 模板还可保存 ShadowTLS v3 的 SNI / 握手域名与独立密码。模板密钥加密存储，选用时填入新节点表单；模板未保存密码时，表单会为新节点生成并显示独立密码。SS 2022 生成按钮按加密方式产生 16 或 32 字节的 Base64 密钥；AnyTLS 按 TLS 域名从统一证书库匹配证书，节点也可手动选择证书。UFW 放行策略只在具体节点上设置，不随模板保存或带入。支持从现有节点保存模板，以及编辑、删除模板；修改模板不会改动已创建的节点。
 - 流量：按节点入站 tag 和订阅用户分别从 sing-box V2Ray API 采样上/下行；Agent 本地缓存、实例重启识别、幂等上报。节点和订阅各有累计流量与近 24 小时折线图。Agent 还读取默认网卡的收发字节，面板显示服务器网络累计流量。
@@ -185,6 +185,8 @@ docker compose --env-file .env -f compose.web.yaml up -d --build
 Go 后端可直接通过 `go run ./cmd/server` 或编译后的二进制运行，生产 `.env` 设置 `MUI_LISTEN=127.0.0.1:8087`。前端在 `web/` 执行 `npm ci && npm run build` 后，将 `web/dist/` 内容复制到 `/var/www/mui/`。将 `deploy/nginx/routes.conf` 放到 `/etc/nginx/mui/routes.conf`，将 `deploy/nginx/mui-host.conf` 放到 `/etc/nginx/conf.d/mui.conf`，内层默认只监听 `127.0.0.1:8086`，修改 Go 后端地址，外层转发到该端口。内层只信任同机外层 Nginx，外层在别处时需调整监听地址和可信代理 IP。后端 `.env` 的 `MUI_PUBLIC_URL` 填公开 HTTPS 地址，`MUI_TRUSTED_PROXIES` 填 Nginx 的来源 IP（同机为 `127.0.0.1/32`）。执行 `nginx -t` 后重载 Nginx。
 
 Agent 独立安装并运行 `mui-agent-helper.service`（root，仅接受本机 Agent 的白名单操作）和 `mui-agent.service`（账户 `mui-agent`），无需 sing-box 或转发进程。添加第一条启用的转发规则后，Agent 才创建并启动 `mui-forward.service`（账户 `mui-forward`）；最后一条规则停用或删除后，服务会停止并禁用。落地服务器另安装 `mui-sing-box.service`（账户 `mui-core`）；中转服务器建节点时可按需安装该核心。排查时可用 `journalctl -u mui-agent -u mui-agent-helper -f`，有转发时再加 `-u mui-forward`，落地服务器再加 `-u mui-sing-box`。Agent 配置在 `/etc/mui-agent`，核心配置与证书在 `/etc/mui-core`，转发配置在 `/etc/mui-forward`，统计缓存在 `/var/lib/mui-agent`。已有 PostgreSQL 的备份与恢复见下文“备份与恢复”。
+
+同一 `mui-agent` 进程还可向 Komari 面板上报监控数据并执行 TCP Ping，无需另起 `komari-agent`。在左侧“设置”填写全局 Komari 地址，在各服务器配置中填写对应 token；Agent 安装后自动领取，没有 token 就不启动 Komari 上报。安全范围见 [Komari 接入说明](docs/komari-agent.md)。
 
 在线中转服务器也可创建节点：先在服务器列表或新建节点弹窗点击“安装 sing-box”，成功后保留中转类型，节点支持订阅并可作为链路终点。纯转发中转接入时仍只安装 Agent。入口、线路服务器点击“安装 sing-box 并设为落地”后会添加落地类型。有节点时必须保留中转或落地类型，已安装的 sing-box 不会自动卸载。
 

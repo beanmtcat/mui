@@ -137,6 +137,13 @@ func NewApp(s *Store, publicURL string) (*App, error) {
 		}
 		app.trusted = append(app.trusted, network)
 	}
+	// Reconcile stored forwards on startup as well as after edits. A release
+	// may change how route targets are selected even when no server is edited.
+	// A failure here must not keep the panel from starting; the next edit or
+	// agent report retries the sync.
+	if err := app.syncRoutes(); err != nil {
+		log.Printf("reconcile routes: %v", err)
+	}
 	return app, nil
 }
 
@@ -316,6 +323,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/totp/enable", a.require(a.totpEnable))
 	mux.HandleFunc("POST /api/totp/disable", a.require(a.totpDisable))
 	mux.HandleFunc("POST /api/password", a.require(a.changePassword))
+	mux.HandleFunc("GET /api/settings/komari", a.require(a.komariSetting))
+	mux.HandleFunc("PUT /api/settings/komari", a.require(a.komariSetting))
 	mux.HandleFunc("GET /api/servers", a.require(a.servers))
 	mux.HandleFunc("POST /api/servers", a.require(a.servers))
 	mux.HandleFunc("PATCH /api/servers/{id}", a.require(a.serverByID))
@@ -381,6 +390,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/audit", a.require(a.audit))
 	mux.HandleFunc("GET /s/{token}", a.subscriptionDownload)
 	mux.HandleFunc("POST /agent/enroll", a.agentEnroll)
+	mux.HandleFunc("GET /agent/komari", a.agentAuth(a.agentKomari))
 	mux.HandleFunc("GET /agent/job", a.agentAuth(a.agentJob))
 	mux.HandleFunc("POST /agent/report", a.agentAuth(a.agentReport))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
@@ -992,15 +1002,31 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
+		komariTokens, err := a.Store.KomariTokenFlags()
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
 		for i := range list {
 			list[i].Status = serverStatus(list[i])
+			list[i].KomariTokenSet = komariTokens[list[i].ID]
 		}
 		paginateList(w, r, list, func(s shared.Server) string { return s.ID })
 		return
 	}
-	var in shared.Server
-	if !readJSON(w, r, &in) {
+	var input serverInput
+	if !readJSON(w, r, &input) {
 		return
+	}
+	in := input.Server
+	komariToken := ""
+	if input.KomariToken != nil {
+		var err error
+		komariToken, err = validateKomariToken(*input.KomariToken)
+		if err != nil {
+			errorJSON(w, 400, err.Error())
+			return
+		}
 	}
 	if !shared.ValidFirewallMode(in.FirewallMode) {
 		errorJSON(w, 400, "防火墙管理模式无效")
@@ -1055,6 +1081,14 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
+	}
+	if komariToken != "" {
+		if err := a.Store.SetKomariToken(srv.ID, komariToken); err != nil {
+			_, _ = a.Store.DB.Exec(`DELETE FROM mui_servers WHERE id=$1`, srv.ID)
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		srv.KomariTokenSet = true
 	}
 	a.auditRequest(r, "server.create", srv.ID, srv.Name)
 	if srv.AgentProxyNodeID != "" {
@@ -1123,7 +1157,7 @@ func (a *App) purgeServer(id string) error {
 		`DELETE FROM mui_nodes WHERE server_id=$1`, `DELETE FROM mui_firewall_rules WHERE server_id=$1`, `DELETE FROM mui_forwards WHERE server_id=$1`,
 		`DELETE FROM mui_operations WHERE server_id=$1`, `DELETE FROM mui_server_traffic WHERE server_id=$1`, `DELETE FROM mui_server_totals WHERE server_id=$1`, `DELETE FROM mui_server_applied WHERE server_id=$1`,
 		`DELETE FROM mui_connection_ips WHERE server_id=$1`, `DELETE FROM mui_entry_connection_ips WHERE server_id=$1`,
-		`DELETE FROM mui_servers WHERE id=$1`,
+		`DELETE FROM mui_komari_tokens WHERE server_id=$1`, `DELETE FROM mui_servers WHERE id=$1`,
 	} {
 		if _, err = tx.Exec(stmt, id); err != nil {
 			return err
@@ -1290,9 +1324,19 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
-	var in shared.Server
-	if !readJSON(w, r, &in) {
+	var input serverInput
+	if !readJSON(w, r, &input) {
 		return
+	}
+	in := input.Server
+	var komariToken *string
+	if input.KomariToken != nil {
+		clean, err := validateKomariToken(*input.KomariToken)
+		if err != nil {
+			errorJSON(w, 400, err.Error())
+			return
+		}
+		komariToken = &clean
 	}
 	if in.ManagementMode == "" {
 		in.ManagementMode = old.ManagementMode
@@ -1431,6 +1475,19 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
+	if komariToken != nil {
+		if err := a.Store.SetKomariToken(id, *komariToken); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		a.auditRequest(r, "server.komari-token", id, map[bool]string{true: "已设置", false: "已清除"}[*komariToken != ""])
+	}
+	flags, err := a.Store.KomariTokenFlags()
+	if err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
+	old.KomariTokenSet = flags[id]
 	if outboundChanged {
 		if err = a.markOutboundChangePending(before, old); err != nil {
 			errorJSON(w, 500, err.Error())
@@ -2111,6 +2168,10 @@ func (a *App) share(w http.ResponseWriter, r *http.Request) {
 	n, err := a.Store.Node(r.PathValue("id"))
 	if err != nil {
 		errorJSON(w, 404, "节点不存在")
+		return
+	}
+	if !n.Direct {
+		errorJSON(w, 409, "该节点未开启允许直连；请在节点编辑中开启，或通过链路订阅使用")
 		return
 	}
 	server, _ := a.Store.Server(n.ServerID)

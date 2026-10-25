@@ -350,6 +350,10 @@ var migrations = [][]string{
 	{
 		`ALTER TABLE mui_audit ADD COLUMN ip TEXT NOT NULL DEFAULT ''`,
 	},
+	{
+		`CREATE TABLE IF NOT EXISTS mui_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS mui_komari_tokens (server_id TEXT PRIMARY KEY, token_enc TEXT NOT NULL)`,
+	},
 }
 
 func ID() string {

@@ -42,6 +42,7 @@ export type Server = {
   ipv6: string;
   autoSyncPublicIp?: boolean;
   domain: string;
+	komariTokenSet?: boolean;
   status: string;
   os: string;
   arch: string;
