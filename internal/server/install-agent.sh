@@ -3,16 +3,17 @@ set -eu
 umask 077
 
 usage() {
-  echo 'usage: sh INSTALL_SCRIPT PANEL_URL SERVER_ID ENROLL_TOKEN|- node|relay [RELEASE_PUBLIC_KEY] [PROXY_DIRECTORY]' >&2
+  echo 'usage: sh INSTALL_SCRIPT PANEL_URL SERVER_ID ENROLL_TOKEN|- node|relay [RELEASE_PUBLIC_KEY] [PROXY_DIRECTORY] [GITHUB_RELEASE_VERSION]' >&2
   exit 2
 }
-[ "$#" -ge 4 ] && [ "$#" -le 6 ] || usage
+[ "$#" -ge 4 ] && [ "$#" -le 7 ] || usage
 panel_url=$1
 server_id=$2
 enroll_token=$3
 purpose=$4
 release_key=${5:-}
 proxy_dir=${6:-}
+release_version=${7:-}
 # The caller created these credential files with umask 077.
 if [ -n "$proxy_dir" ]; then
   test -f "$proxy_dir/proxy.json" && test -f "$proxy_dir/curl.conf" || { echo 'missing proxy files' >&2; exit 1; }
@@ -49,21 +50,40 @@ for tool in curl sha256sum mktemp; do
   command -v "$tool" >/dev/null 2>&1 || { echo "$tool is required" >&2; exit 1; }
 done
 
-workdir="$(mktemp -d)"
-trap 'rm -rf "$workdir"' EXIT HUP INT TERM
+tempdir="$(mktemp -d)"
+workdir=$tempdir
+trap 'rm -rf "$tempdir"' EXIT HUP INT TERM
 base="${panel_url%/}/download/$arch"
 files='mui-agent SHA256SUMS'
 if [ "$purpose" = node ]; then files="$files sing-box"; fi
 # With a release key the agent itself checks the manifest signature before it
 # installs anything, and pins the key for later upgrades.
 if [ -n "$release_key" ]; then files="$files SHA256SUMS.sig"; fi
-for name in $files; do
+if [ -n "$release_version" ]; then
+  printf '%s' "$release_version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' || { echo 'invalid GitHub release version' >&2; exit 1; }
+  command -v tar >/dev/null 2>&1 || { echo 'tar is required' >&2; exit 1; }
+  archive="https://github.com/beanmtcat/mui/releases/download/v$release_version/mui-agent-$release_version-linux-$arch.tar.gz"
   if [ -n "$proxy_dir" ]; then
-    curl --config "$proxy_dir/curl.conf" --fail --silent --show-error --location --output "$workdir/$name" "$base/$name"
+    curl --config "$proxy_dir/curl.conf" --fail --silent --show-error --location --retry 3 --output "$tempdir/release.tar.gz" "$archive"
   else
-    curl --fail --silent --show-error --location --output "$workdir/$name" "$base/$name"
+    curl --fail --silent --show-error --location --retry 3 --output "$tempdir/release.tar.gz" "$archive"
   fi
-done
+  set --
+  for name in $files; do set -- "$@" "$arch/$name"; done
+  tar -xzf "$tempdir/release.tar.gz" -C "$tempdir" "$@"
+  for name in $files; do
+    test -f "$tempdir/$arch/$name" && test ! -L "$tempdir/$arch/$name" || { echo "invalid release file: $name" >&2; exit 1; }
+  done
+  workdir="$tempdir/$arch"
+else
+  for name in $files; do
+    if [ -n "$proxy_dir" ]; then
+      curl --config "$proxy_dir/curl.conf" --fail --silent --show-error --location --output "$workdir/$name" "$base/$name"
+    else
+      curl --fail --silent --show-error --location --output "$workdir/$name" "$base/$name"
+    fi
+  done
+fi
 # Strictly verify every downloaded binary against the manifest -- never with
 # --ignore-missing, which would silently skip a file whose entry is absent
 # from the manifest. The manifest also lists files this install does not

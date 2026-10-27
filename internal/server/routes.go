@@ -103,11 +103,16 @@ func clientAddress(s shared.Server) string {
 	return ""
 }
 
-// sourceAddresses are the IPs a server's traffic can arrive from at the next
-// hop: its internal address on a private link, otherwise its configured and
-// detected public addresses. Filter by the next-hop destination address family;
-// names may resolve to either family. A name is no source a firewall can use.
+// sourceAddresses keeps the original destination-family behavior for routes
+// saved before SourceFamily existed.
 func sourceAddresses(s shared.Server, internal bool, targets ...string) []string {
+	return sourceAddressesFamily(s, internal, "", targets...)
+}
+
+// sourceAddressesFamily lists the sender IPs the next hop may admit. Explicit
+// family selection is intersected with the destination family, because an
+// IPv4 connection cannot arrive from an IPv6 source (and vice versa).
+func sourceAddressesFamily(s shared.Server, internal bool, family string, targets ...string) []string {
 	ipv4, ipv6 := len(targets) == 0, len(targets) == 0
 	for _, target := range targets {
 		ip := net.ParseIP(target)
@@ -118,6 +123,11 @@ func sourceAddresses(s shared.Server, internal bool, targets ...string) []string
 		} else {
 			ipv6 = true
 		}
+	}
+	if family == "ipv4" {
+		ipv6 = false
+	} else if family == "ipv6" {
+		ipv4 = false
 	}
 	candidates := []string{s.IPv4, s.IPv6, s.DetectedIPv4, s.DetectedIPv6}
 	if internal {
@@ -134,6 +144,10 @@ func sourceAddresses(s shared.Server, internal bool, targets ...string) []string
 
 func validRouteSourceMode(mode string) bool {
 	return mode == "" || mode == "auto" || mode == "public" || mode == "internal"
+}
+
+func validRouteSourceFamily(family string) bool {
+	return family == "" || family == "ipv4" || family == "ipv6" || family == "both"
 }
 
 func routeSourceInternal(destinationInternal bool, mode string) bool {
@@ -199,6 +213,9 @@ func (w routeWorld) checkRouteShape(rt shared.Route) error {
 	if !validRouteSourceMode(rt.NodeSourceMode) {
 		return errors.New("落地 UFW 来源地址模式无效")
 	}
+	if !validRouteSourceFamily(rt.NodeSourceFamily) {
+		return errors.New("落地 UFW 来源地址族无效")
+	}
 	entry, ok := w.servers[rt.EntryServerID]
 	if !ok {
 		return errors.New("首跳服务器不存在")
@@ -216,6 +233,9 @@ func (w routeWorld) checkRouteShape(rt shared.Route) error {
 	for i, hop := range rt.Hops {
 		if !validRouteSourceMode(hop.SourceMode) {
 			return fmt.Errorf("第 %d 跳的 UFW 来源地址模式无效", i+1)
+		}
+		if !validRouteSourceFamily(hop.SourceFamily) {
+			return fmt.Errorf("第 %d 跳的 UFW 来源地址族无效", i+1)
 		}
 		if len(hop.ServerIDs) == 0 || len(hop.ServerIDs) > 16 {
 			return fmt.Errorf("第 %d 跳需要 1–16 台服务器", i+1)
@@ -252,7 +272,7 @@ func (w routeWorld) checkRouteShape(rt shared.Route) error {
 	}
 	exit, ok := w.servers[node.ServerID]
 	if !ok || !shared.CanHostNodes(exit) {
-		return errors.New("落地节点必须位于在线管理的中转或落地服务器")
+		return errors.New("落地节点必须位于在线中转、在线落地或外部节点服务器")
 	}
 	if seen[exit.ID] {
 		return fmt.Errorf("落地服务器 %s 不能同时是本链路的一跳", exit.Name)
@@ -275,7 +295,7 @@ func (w routeWorld) checkRouteShape(rt shared.Route) error {
 	for _, hop := range rt.Hops {
 		for _, id := range hop.ServerIDs {
 			if !shared.ManualFirewall(w.servers[id].FirewallMode) {
-				if err := w.checkSources(previous, routeSourceInternal(hop.Internal, hop.SourceMode), hopAddress(w.servers[id], hop.Internal)); err != nil {
+				if err := w.checkSources(previous, routeSourceInternal(hop.Internal, hop.SourceMode), hop.SourceFamily, hopAddress(w.servers[id], hop.Internal)); err != nil {
 					return err
 				}
 			}
@@ -285,17 +305,17 @@ func (w routeWorld) checkRouteShape(rt shared.Route) error {
 	if shared.ManualFirewall(exit.FirewallMode) {
 		return nil
 	}
-	return w.checkSources(previous, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), hopAddress(exit, rt.NodeInternal))
+	return w.checkSources(previous, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), rt.NodeSourceFamily, hopAddress(exit, rt.NodeInternal))
 }
 
-func (w routeWorld) checkSources(group []string, internal bool, targets ...string) error {
+func (w routeWorld) checkSources(group []string, internal bool, family string, targets ...string) error {
 	for _, id := range group {
-		if len(sourceAddresses(w.servers[id], internal, targets...)) == 0 {
+		if len(sourceAddressesFamily(w.servers[id], internal, family, targets...)) == 0 {
 			kind := "公网 IP"
 			if internal {
 				kind = "内网 IP（不能只填域名）"
 			}
-			return fmt.Errorf("服务器 %s 缺少与下一跳地址族匹配、可用于防火墙的%s", w.servers[id].Name, kind)
+			return fmt.Errorf("服务器 %s 缺少与所选来源及下一跳地址族匹配、可用于防火墙的%s", w.servers[id].Name, kind)
 		}
 	}
 	return nil
@@ -413,7 +433,7 @@ func (w routeWorld) routeForwards(rt shared.Route) []shared.ForwardRule {
 				// outbound target may use a different family.
 				destination := hopAddress(w.servers[id], incoming.Internal)
 				policy = "closed"
-				if list := w.groupSources(groups[k-1], internal, destination); len(list) > 0 && w.checkSources(groups[k-1], internal, destination) == nil {
+				if list := w.groupSources(groups[k-1], internal, incoming.SourceFamily, destination); len(list) > 0 && w.checkSources(groups[k-1], internal, incoming.SourceFamily, destination) == nil {
 					policy, sources = "restricted", strings.Join(list, ",")
 				}
 			}
@@ -432,10 +452,10 @@ func (w routeWorld) routeForwards(rt shared.Route) []shared.ForwardRule {
 	return out
 }
 
-func (w routeWorld) groupSources(group []string, internal bool, targets ...string) []string {
+func (w routeWorld) groupSources(group []string, internal bool, family string, targets ...string) []string {
 	var out []string
 	for _, id := range group {
-		for _, ip := range sourceAddresses(w.servers[id], internal, targets...) {
+		for _, ip := range sourceAddressesFamily(w.servers[id], internal, family, targets...) {
 			if !slices.Contains(out, ip) {
 				out = append(out, ip)
 			}
@@ -456,7 +476,7 @@ func (w routeWorld) nodeRouteSources(nodeID string) string {
 		if len(rt.Hops) > 0 {
 			last = rt.Hops[len(rt.Hops)-1].ServerIDs
 		}
-		for _, ip := range w.groupSources(last, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), hopAddress(w.servers[w.nodes[nodeID].ServerID], rt.NodeInternal)) {
+		for _, ip := range w.groupSources(last, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), rt.NodeSourceFamily, hopAddress(w.servers[w.nodes[nodeID].ServerID], rt.NodeInternal)) {
 			if !slices.Contains(out, ip) {
 				out = append(out, ip)
 			}
@@ -525,7 +545,9 @@ func (a *App) syncRoutes() error {
 			if err = a.Store.PutNode(n, password); err != nil {
 				return err
 			}
-			queue[n.ServerID] = "nodes.apply"
+			if !shared.ExternalManaged(w.servers[n.ServerID]) {
+				queue[n.ServerID] = "nodes.apply"
+			}
 		}
 	}
 	for id, kind := range queue {
@@ -595,6 +617,9 @@ func routeStatus(rt shared.Route, forwards []shared.ForwardRule) string {
 // only the node login is insufficient when adding a new entry to an existing node.
 func (a *App) routeExitAccessLive(rt shared.Route, world routeWorld) (bool, error) {
 	node := world.nodes[rt.NodeID]
+	if shared.ExternalManaged(world.servers[node.ServerID]) {
+		return true, nil // The seller controls the exit firewall.
+	}
 	applied, known, err := a.Store.AppliedDeployment(node.ServerID)
 	if err != nil || !known {
 		return false, err
@@ -614,10 +639,10 @@ func (a *App) routeExitAccessLive(rt shared.Route, world routeWorld) (bool, erro
 	if len(rt.Hops) > 0 {
 		last = rt.Hops[len(rt.Hops)-1].ServerIDs
 	}
-	if err := world.checkSources(last, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), hopAddress(world.servers[node.ServerID], rt.NodeInternal)); err != nil {
+	if err := world.checkSources(last, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), rt.NodeSourceFamily, hopAddress(world.servers[node.ServerID], rt.NodeInternal)); err != nil {
 		return false, nil
 	}
-	for _, source := range world.groupSources(last, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), hopAddress(world.servers[node.ServerID], rt.NodeInternal)) {
+	for _, source := range world.groupSources(last, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), rt.NodeSourceFamily, hopAddress(world.servers[node.ServerID], rt.NodeInternal)) {
 		addr, err := netip.ParseAddr(source)
 		if err != nil {
 			return false, nil

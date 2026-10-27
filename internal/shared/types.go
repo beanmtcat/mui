@@ -248,14 +248,14 @@ func HasRole(s Server, role string) bool {
 // CanHostNodes separates node placement from route hop roles. Offline-managed
 // transit servers only run the standalone forwarder and cannot host nodes.
 func CanHostNodes(s Server) bool {
-	return !OfflineManaged(s) && (HasRole(s, RoleExit) || HasRole(s, RoleTransit))
+	return ExternalManaged(s) && HasRole(s, RoleExit) || !NoAgentManaged(s) && (HasRole(s, RoleExit) || HasRole(s, RoleTransit))
 }
 
 // InstallsCore says whether the enrollment installer includes sing-box: an
 // exit always does, and a transit keeps the core it already installed so a
 // repair reinstall does not strand its nodes.
 func InstallsCore(s Server) bool {
-	return HasRole(s, RoleExit) || CanHostNodes(s) && s.CoreBuild != ""
+	return !NoAgentManaged(s) && (HasRole(s, RoleExit) || CanHostNodes(s) && s.CoreBuild != "")
 }
 
 // Route carries clients from a first-hop server through zero or more middle
@@ -273,9 +273,12 @@ type Route struct {
 	// NodeSourceMode selects the last hop's address used by the exit UFW
 	// allowlist, independently of the destination address selection.
 	NodeSourceMode string `json:"nodeSourceMode,omitempty"`
-	Port           int    `json:"port"`
-	Enabled        bool   `json:"enabled"`
-	Notes          string `json:"notes"`
+	// NodeSourceFamily limits the exit allowlist to IPv4, IPv6 or both.
+	// Empty keeps the pre-existing destination-family behavior.
+	NodeSourceFamily string `json:"nodeSourceFamily,omitempty"`
+	Port             int    `json:"port"`
+	Enabled          bool   `json:"enabled"`
+	Notes            string `json:"notes"`
 	// Filled in for the list view: whether every hop has applied its forward.
 	Status string `json:"status,omitempty"`
 }
@@ -291,6 +294,9 @@ type RouteHop struct {
 	// SourceMode selects the previous hop's UFW source: auto, public or
 	// internal. It does not bind the outgoing connection to an interface.
 	SourceMode string `json:"sourceMode,omitempty"`
+	// SourceFamily limits the UFW allowlist to IPv4, IPv6 or both. Empty
+	// preserves the pre-existing destination-family behavior.
+	SourceFamily string `json:"sourceFamily,omitempty"`
 }
 
 type Customer struct {
@@ -398,6 +404,7 @@ type DesiredState struct {
 	Signature         string         `json:"signature"`
 	UpgradeSHA256     string         `json:"upgradeSha256,omitempty"`
 	CoreUpgradeSHA256 string         `json:"coreUpgradeSha256,omitempty"`
+	UpgradeRelease    string         `json:"upgradeRelease,omitempty"`
 	Nodes             []ManagedNode  `json:"nodes"`
 	Rules             []FirewallRule `json:"rules"`
 	Forwards          []ForwardRule  `json:"forwards"`

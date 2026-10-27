@@ -16,7 +16,7 @@ export type InstallGuide = {
 };
 export const roleLabels: Record<Role, string> = { entry: "入口", line: "线路", transit: "中转", exit: "落地" };
 export type Server = {
-  managementMode?: "online" | "offline";
+  managementMode?: "online" | "offline" | "external";
   managementMigrationFrom?: "online" | "offline";
   offlineExportedRevision?: number;
   offlineExportedAt?: string;
@@ -75,7 +75,8 @@ export type Server = {
   ufwRules?: string[] | null;
 };
 export const canHostNodes = (server: Partial<Server>) =>
-  server.managementMode !== "offline" && !!server.roles?.some((r) => r === "exit" || r === "transit");
+  (server.managementMode === "external" && !!server.roles?.includes("exit") ||
+    server.managementMode !== "offline" && server.managementMode !== "external" && !!server.roles?.some((r) => r === "exit" || r === "transit"));
 
 export type Node = {
   id: string;
@@ -191,7 +192,8 @@ export type Subscription = {
   linkAvailable?: boolean;
 };
 export type RouteSourceMode = "auto" | "public" | "internal";
-export type RouteHop = { serverIds: string[]; balance: "failover" | "round-robin"; internal: boolean; sourceMode?: RouteSourceMode };
+export type RouteSourceFamily = "ipv4" | "ipv6" | "both";
+export type RouteHop = { serverIds: string[]; balance: "failover" | "round-robin"; internal: boolean; sourceMode?: RouteSourceMode; sourceFamily?: RouteSourceFamily };
 export type Route = {
   id: string;
   name: string;
@@ -200,6 +202,7 @@ export type Route = {
   nodeId: string;
   nodeInternal: boolean;
   nodeSourceMode?: RouteSourceMode;
+  nodeSourceFamily?: RouteSourceFamily;
   port: number;
   enabled: boolean;
   notes: string;

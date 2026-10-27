@@ -3,6 +3,7 @@ package shared
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -57,7 +58,8 @@ func TestUFWLineCustomRule(t *testing.T) {
 		"[ 2] 7000:7010/udp              DENY IN     Anywhere":       "7000-7010 udp deny  ipv4",
 		"[ 3] 9000/tcp (v6)              ALLOW IN    2001:db8::/32":  "9000-9000 tcp allow 2001:db8::/32 ipv6",
 		"[ 7] 7000/udp (v6)              DENY IN     Anywhere (v6)":  "7000-7000 udp deny  ipv6",
-		"[ 4] 8080                       ALLOW IN    Anywhere":       "",
+		"[ 4] 8080                       ALLOW IN    Anywhere":       "8080-8080 tcp allow  ipv4; 8080-8080 udp allow  ipv4",
+		"[ 8] 8080 (v6)                  ALLOW IN    Anywhere (v6)":  "8080-8080 tcp allow  ipv6; 8080-8080 udp allow  ipv6",
 		"[ 5] OpenSSH                    ALLOW IN    Anywhere":       "",
 		"[ 6] 9100/tcp                   LIMIT IN    Anywhere":       "",
 	} {
@@ -65,11 +67,14 @@ func TestUFWLineCustomRule(t *testing.T) {
 		if !ok {
 			t.Fatalf("%q did not parse", line)
 		}
-		rule, ok := l.CustomRule()
-		got := ""
+		rules, ok := l.CustomRules()
+		var parts []string
 		if ok {
-			got = fmt.Sprintf("%d-%d %s %s %s %s", rule.PortFrom, rule.PortTo, rule.Network, rule.Action, rule.Source, rule.Family)
+			for _, rule := range rules {
+				parts = append(parts, fmt.Sprintf("%d-%d %s %s %s %s", rule.PortFrom, rule.PortTo, rule.Network, rule.Action, rule.Source, rule.Family))
+			}
 		}
+		got := strings.Join(parts, "; ")
 		if got != want {
 			t.Fatalf("%q: %q, want %q", line, got, want)
 		}

@@ -3,6 +3,7 @@ data/
 web/node_modules/
 web/dist/
 bin/
+dist/release/
 .cache/
 *.db
 *.sqlite

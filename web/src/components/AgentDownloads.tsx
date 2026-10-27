@@ -11,8 +11,9 @@ const descriptions: Record<FileName, string> = {
   "SHA256SUMS.sig": "发布签名，启用签名校验时需要",
 };
 
-export default function AgentDownloads({ initialArch = "amd64", onClose, onCopy, screenshotMode, redact }: {
+export default function AgentDownloads({ initialArch = "amd64", releaseVersion = "", releaseBuilds = {}, onClose, onCopy, screenshotMode, redact }: {
   initialArch?: string; onClose: () => void; onCopy: (value: string) => void;
+  releaseVersion?: string; releaseBuilds?: Record<string, string>;
   screenshotMode: boolean; redact: (value: string) => string;
 }) {
   const [arch, setArch] = useState(initialArch === "arm64" ? "arm64" : "amd64");
@@ -22,6 +23,7 @@ export default function AgentDownloads({ initialArch = "amd64", onClose, onCopy,
   // Check only when this dialog opens, the architecture changes, or the user
   // retries. HEAD does not transfer the large binary and needs no enrollment.
   useEffect(() => {
+    if (releaseVersion) return;
     const controller = new AbortController();
     let disposed = false;
     const timeout = setTimeout(() => controller.abort(), 15000);
@@ -41,11 +43,15 @@ export default function AgentDownloads({ initialArch = "amd64", onClose, onCopy,
       if (!disposed) { setFiles(Object.fromEntries(entries)); setCheckedArch(arch); }
     });
     return () => { disposed = true; clearTimeout(timeout); controller.abort(); };
-  }, [arch, attempt]);
-  const loading = checkedArch !== arch;
-  const ready = !loading && files["mui-agent"]?.available && files.SHA256SUMS?.available;
+  }, [arch, attempt, releaseVersion]);
+  const loading = !releaseVersion && checkedArch !== arch;
+  const ready = releaseVersion ? true : !loading && !!files["mui-agent"]?.available && !!files.SHA256SUMS?.available;
   const downloadDir = `mui-install-${arch}`;
-  const command = `(\nset -eu\nmkdir -p '${downloadDir}'\n${fileNames.filter((name) => files[name]?.available).map((name) => `curl -fL --retry 3 --connect-timeout 15 '${location.origin}/download/${arch}/${name}' -o '${downloadDir}/${name}'`).join("\n")}\n)`;
+  const archiveName = `mui-agent-${releaseVersion}-linux-${arch}.tar.gz`;
+  const archiveURL = `https://github.com/beanmtcat/mui/releases/download/v${releaseVersion}/${archiveName}`;
+  const command = releaseVersion
+    ? `(\nset -eu\nmkdir -p '${downloadDir}'\ncurl -fL --retry 3 --connect-timeout 15 '${archiveURL}' -o '${downloadDir}/${archiveName}'\ntar -xzf '${downloadDir}/${archiveName}' -C '${downloadDir}' --strip-components=1 '${arch}/mui-agent' '${arch}/SHA256SUMS' '${arch}/SHA256SUMS.sig'\n)`
+    : `(\nset -eu\nmkdir -p '${downloadDir}'\n${fileNames.filter((name) => files[name]?.available).map((name) => `curl -fL --retry 3 --connect-timeout 15 '${location.origin}/download/${arch}/${name}' -o '${downloadDir}/${name}'`).join("\n")}\n)`;
   const view = <div className="overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }} onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); onClose(); } }}>
     <div className="modal installModal" role="dialog" aria-modal="true" aria-labelledby="agent-download-title">
       <div className="modalHead"><h2 id="agent-download-title">下载 Agent</h2><button className="closeButton" aria-label="关闭" onClick={onClose}>×</button></div>
@@ -59,13 +65,17 @@ export default function AgentDownloads({ initialArch = "amd64", onClose, onCopy,
         </label>
         <p className="hint">在目标机执行 <code>uname -m</code> 可以确认架构。</p>
         <div className="agentDownloadList" aria-live="polite">
-          {fileNames.map((name) => <div className="agentDownloadRow" key={name}>
+          {releaseVersion ? <div className="agentDownloadRow">
+            <div><strong>{archiveName}</strong><small>GitHub Release 归档，包含 Agent、sing-box、摘要和签名</small></div>
+            <a href={archiveURL} target="_blank" rel="noreferrer">从 GitHub 下载</a>
+          </div> : fileNames.map((name) => <div className="agentDownloadRow" key={name}>
             <div><strong>{name}</strong><small>{descriptions[name]}</small></div>
             {loading ? <span className="hint">检查中…</span> : files[name]?.available ? <a href={`/download/${arch}/${name}`} download={name}>下载{files[name]?.size ? `（${bytes(files[name]!.size!)}）` : ""}</a> : <span className="hint">{files[name]?.message || "不可用"}</span>}
           </div>)}
         </div>
-        {!loading && !ready && <p className="hint">面板尚未提供该架构的完整文件，或下载服务暂不可用。缺少发布文件时，需要先发布包含 Agent 的版本。</p>}
-        {!loading && ready && !files["SHA256SUMS.sig"]?.available && <p className="hint">签名文件未提供。已固定发布公钥的目标机需要有效签名文件才能安装或升级。</p>}
+        {!loading && !ready && <p className="hint">该架构的发布文件暂不可用，请确认 GitHub Release 归档已发布且摘要、签名有效。</p>}
+        {!!releaseVersion && !releaseBuilds[arch] && <p className="hint">面板尚未验证该架构的 GitHub 归档：{releaseBuilds[arch + "Error"] || "请确认文件已发布"}。下载后仍需核对摘要与签名。</p>}
+        {!releaseVersion && !loading && ready && !files["SHA256SUMS.sig"]?.available && <p className="hint">签名文件未提供。已固定发布公钥的目标机需要有效签名文件才能安装或升级。</p>}
         <div className="headerActions">
           <button className="primary" disabled={!ready} onClick={() => onCopy(command)}>复制本机下载命令</button>
           <button className="ghost" disabled={loading} onClick={() => setAttempt((n) => n + 1)}>重新检查</button>

@@ -304,7 +304,23 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	defer func() { client.CloseIdleConnections() }()
-	go runKomariManager(ctx, c)
+	komariCtx, stopKomari := context.WithCancel(ctx)
+	defer stopKomari()
+	go runKomariManager(komariCtx, c)
+	revoked := false
+	markRevoked := func(err error) {
+		var response *serverStatusError
+		if errors.As(err, &response) && response.Status == http.StatusGone {
+			revoked = true
+			stopKomari()
+		}
+	}
+	waitAfterRevocation := func() error {
+		fmt.Fprintln(os.Stderr, "Agent 凭据已由面板吊销；停止通信，等待本机重新接入或卸载。")
+		client.CloseIdleConnections()
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	refreshClient := func() {
 		next, err := ReadConfig()
 		if err != nil {
@@ -354,6 +370,7 @@ func Run(ctx context.Context) error {
 	reportJobResult := func(result shared.AgentReport, job shared.Job) (sent bool) {
 		headers := map[string]string{"X-Server-ID": c.ServerID, "Authorization": "Bearer " + c.Token}
 		if err := sendJSON(ctx, client, "POST", c.URL+"/agent/report", result, headers, nil, c.Token); err != nil {
+			markRevoked(err)
 			fmt.Fprintln(os.Stderr, "job report:", err)
 			// The panel refused this result for good (the job is gone, or it
 			// predates the current job protocol). Resending it every cycle would
@@ -499,9 +516,13 @@ func Run(ctx context.Context) error {
 				state.NetworkPending = copySlice(state.NetworkPending[networkBatch:])
 				_ = saveTraffic(state)
 			} else {
+				markRevoked(err)
 				fmt.Fprintln(os.Stderr, "report:", err)
 				loopFailed = true
 			}
+		}
+		if revoked {
+			return waitAfterRevocation()
 		}
 
 		// Pending job: a persisted result is (re)sent every loop; a
@@ -521,15 +542,22 @@ func Run(ctx context.Context) error {
 				}
 			}
 		}
+		if revoked {
+			return waitAfterRevocation()
+		}
 
 		// Job poll stays on the fast loop.
 		var job shared.Job
 		{
 			headers := map[string]string{"X-Server-ID": c.ServerID, "Authorization": "Bearer " + c.Token}
 			if err := sendJSON(ctx, client, "GET", c.URL+"/agent/job", nil, headers, &job, c.Token); err != nil {
+				markRevoked(err)
 				fmt.Fprintln(os.Stderr, "poll:", err)
 				loopFailed = true
 			}
+		}
+		if revoked {
+			return waitAfterRevocation()
 		}
 		if job.ID != "" {
 			if job.ServerID != c.ServerID {

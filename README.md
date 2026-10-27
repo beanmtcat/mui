@@ -1,10 +1,14 @@
 # MUI 节点管理面板
 
-React + Go 的多服务器节点面板，前端由 Nginx 独立部署，Go 后端提供接口。每台 Linux 服务器运行 Go Agent 和一个 sing-box 实例，面板负责期望配置、任务、流量与订阅；Agent 只主动连向面板，不开放远程控制端口。首版支持 Shadowsocks、Snell v5/v6、AnyTLS 和 UFW。
+React + Go 的多服务器节点面板，前端由 Nginx 独立部署，Go 后端提供接口。在线管理服务器运行 Go Agent 和 sing-box；卖家提供的外部节点也可只录入连接信息，不安装 Agent。面板负责期望配置、任务、流量与订阅；Agent 只主动连向面板，不开放远程控制端口。首版支持 Shadowsocks、Snell v5/v6、AnyTLS 和 UFW。
 
 ## 功能
 
 Surge 的节点订阅通过代理组 `policy-path` 引用。面板“查看链接”提供可复制的代理组配置；[导入步骤](docs/surge-import.md)。
+
+左侧“帮助”页可搜索、新增、编辑和删除常见问题。答案支持普通文字、行内反引号代码及以三个反引号包围的多行代码块；代码块可一键复制。条目保存在面板数据库中，并记录编辑操作到审计日志。
+
+卖家只提供节点时，在“新建服务器”选择 **外部节点（卖家提供，无需安装）**，填写卖家的 IP 或域名，再到节点页录入原始协议、端口和密码。外部节点固定为单用户，支持直连订阅及作为链路落地；面板不生成接入令牌、不部署节点或防火墙、不采集卖家服务器的流量，也不能确认实时连通性。卖家变更凭据时需在面板同步修改；链路最后一跳的来源放行仍须由卖家处理。
 
 - 服务器档案：名称、国家、地区、城市、服务商、标签、备注、IPv4/IPv6、订阅域名，以及类型（入口、线路、中转、落地，可多选）和内网地址；一次性接入令牌、在线状态、系统、架构、核心/Agent 版本、UFW 和统计状态。动态家宽可开启“自动同步公网 IP”：优先回填 Agent 上报的有效公网 IPv4/IPv6；本机 IPv4 在 NAT 后且 Agent 直接连接面板时，使用面板看到的公网连接来源作为 IPv4。通过面板配置的 SOCKS5 代理连接时不使用该回退，避免把代理出口当成服务器地址。地址改变后重新同步链路和来源规则；暂时检测不到某一地址族时保留其原值。此选项默认关闭；回填的地址仍需能接受入站连接，CGNAT 无法仅靠回填开放端口。开启且填写了订阅域名时，链路上一跳改为通过该域名连接本机，转发进程按 DNS 跟随地址变化；未开启的服务器仍按填写的 IP 连接，域名须解析到本机真实地址，不能是 CDN 代理域名。
 - 节点：增删改、启停、端口冲突检查、SS 2022 密钥校验、AnyTLS 证书上传与验证；证书统一管理并可跨服务器复用，私钥仅随引用它的节点配置下发；新建节点及模板的端口默认在 50000–60000 范围，可点击骰子按钮重新随机生成，新建节点会避开已知的同服务器节点和 SSH 端口；Agent 校验 sing-box 配置、管理端口规则、重启并探测监听，失败回滚。
@@ -76,10 +80,24 @@ CREATE DATABASE mui WITH OWNER mui ENCODING 'UTF8';
 1. 复制 `deploy/.env.example` 为 `deploy/.env`，填写 `MUI_PUBLIC_URL`（对外的 `https://` 地址），以及已有数据库的 `MUI_DB_HOST`、`MUI_DB_PORT`、`MUI_DB_NAME`、`MUI_DB_USER`、`MUI_DB_PASSWORD` 和 `MUI_DB_SSLMODE`。在数据库中提前创建库和用户（见上文 SQL）；独立生成 `MUI_SECRET` 和管理员密码。`MUI_SECRET` 必须稳定保存，丢失后数据库中的节点密钥与证书私钥无法解密。
    数据库地址必须从容器内可访问：宿主机 PostgreSQL 可填 `host.docker.internal`（Compose 已配置 Linux 宿主机映射），其他服务器填其内网 IP 或域名。`127.0.0.1` 在容器内指后端容器自身。PostgreSQL 需监听对应网卡并允许该客户端连接；不使用数据库 TLS 的可信内网实例可将 `MUI_DB_SSLMODE` 设为 `disable`。
 2. 保持 `MUI_BIND=127.0.0.1:8086`。在已有外层 Nginx 的面板域名 HTTPS `server` 块中加入 `deploy/nginx/mui-edge.location.conf` 的转发配置（已有 `location /` 时替换该块），检查 `nginx -t` 后重载外层 Nginx。证书及 HTTPS 跳转继续由外层管理；内层不配置证书。远程 Agent 访问外部 HTTPS 地址。外层默认与前端容器在同一台主机；若在另一台主机或容器，调整上游地址和 `MUI_BIND`，并将内层入口限制为仅外层可访问。
-3. 在有 Docker Buildx 的构建机运行 `deploy/build-agent.sh amd64` 和/或 `deploy/build-agent.sh arm64`。脚本默认构建 Agent 0.6.17 和 sing-box v1.14.2；第二个参数指定 sing-box 的 `vX.Y.Z` 版本，第三个参数指定 Agent 的 `X.Y.Z` 正式版本（如 `deploy/build-agent.sh amd64 v1.14.2 0.6.17`）。正式构建会注入版本号，直接从源码运行 Agent 才显示 `-dev`。脚本构建带 `with_v2ray_api`、`with_clash_api` 的核心，同时构建 Agent，并生成 `SHA256SUMS`。把所需架构的整个 `bin/<架构>/` 目录放到**面板服务器**的仓库 `bin/` 下，无需复制到每台目标服务器。
+3. 在有 Docker Buildx 的构建机运行 `deploy/build-agent.sh amd64` 和/或 `deploy/build-agent.sh arm64`。脚本默认构建 Agent 0.6.21 和 sing-box v1.14.2；第二个参数指定 sing-box 的 `vX.Y.Z` 版本，第三个参数指定 Agent 的 `X.Y.Z` 正式版本（如 `deploy/build-agent.sh amd64 v1.14.2 0.6.21`）。构建脚本要求 Git 工作区干净、提交中的 Agent 版本与指定版本一致。脚本构建带 `with_v2ray_api`、`with_clash_api` 的核心，同时构建 Agent，并生成 `SHA256SUMS`。默认本地发布模式把所需架构的整个 `bin/<架构>/` 目录放到**面板服务器**的仓库 `bin/` 下；GitHub 直下模式见下节。
 4. 在 `deploy` 目录运行 `docker compose --env-file .env -f compose.yaml up -d --build`。内层 Nginx 提供页面及接口代理，Go 容器只读挂载 `../bin`，通过 Nginx 的 `/download/` 路径提供安装脚本和构建产物。当前 Compose 使用已有的外部网络 `docker_default`，启动前需确认网络存在。用 `docker network inspect docker_default --format '{{json .IPAM.Config}}'` 查看真实网段和网关；`MUI_PROXY_SUBNET` 仅作为 Go 的默认可信代理范围，填写实际网段或单独设置 `MUI_TRUSTED_PROXIES`，修改它不会创建或更改外部网络。`MUI_EDGE_PROXY_CIDR` 则填写外层 Nginx 的实际来源地址。
-5. 目标机支持 Ubuntu 22.04/24.04/26.04、Debian 12/13（systemd），以及 Alpine 3.19+（OpenRC），需要 OpenSSH、`curl`、`sha256sum` 和 `ss`。Alpine 依赖安装、服务管理及小内存机器优化见 [Agent 运维说明](docs/agent-operations.md)。UFW 托管时需安装 UFW（`apt-get install ufw`）；手动管理无需 UFW，安装 iproute2 提供 `ss`。Agent 0.6.3 起同时核对实际 SSH TCP 监听、SSH socket 和 `sshd -T` 配置，无法确认实际监听时拒绝初始化 UFW。LXC 内按容器真实监听端口放行，不能将宿主机映射端口当作容器端口。面板新建服务器时选择类型：带落地类型的下载并安装 Agent 与 sing-box；只做入口、线路、中转的只下载 Agent，不创建 sing-box 账户或服务。在目标机执行显示的一次性接入命令；命令先下载安装脚本，再通过标准输入传递一次性接入 token；token 不会放进子进程参数，不需要手动设置环境变量。它从面板下载适配架构的文件，按 `SHA256SUMS` 校验后安装。令牌 10 分钟有效；超时可重新生成。面板的 `MUI_PUBLIC_URL` 在面板服务器的 `.env` 中配置，必须是目标机可访问的 HTTPS 地址。
+5. 目标机支持 Ubuntu 22.04/24.04/26.04、Debian 11/12/13（systemd），以及 Alpine 3.19+（OpenRC），需要 OpenSSH、`curl`、`sha256sum` 和 `ss`；GitHub 直下模式还需要 `tar`。Debian 11 从 Agent 0.6.20 起支持；0.6.19 的发行版检查仍会拒绝它。Debian 11 已结束官方 LTS 安全更新，建议升级至 Debian 12/13；若仍使用 Debian 11，应自行安排 Extended LTS。Alpine 依赖安装、服务管理及小内存机器优化见 [Agent 运维说明](docs/agent-operations.md)。UFW 托管时需安装 UFW（`apt-get install ufw`）；手动管理无需 UFW，安装 iproute2 提供 `ss`。Agent 0.6.3 起同时核对实际 SSH TCP 监听、SSH socket 和 `sshd -T` 配置，无法确认实际监听时拒绝初始化 UFW。LXC 内按容器真实监听端口放行，不能将宿主机映射端口当作容器端口。面板新建服务器时选择类型：带落地类型的下载并安装 Agent 与 sing-box；只做入口、线路、中转的只下载 Agent，不创建 sing-box 账户或服务。在目标机执行显示的一次性接入命令；命令先从面板获取小型安装脚本，再通过标准输入传递一次性接入 token；token 不会放进子进程参数，不需要手动设置环境变量。构建文件按已配置的发布模式从面板或 GitHub 下载，按 `SHA256SUMS` 和已配置的发布签名校验后安装。令牌 10 分钟有效；超时可重新生成。面板的 `MUI_PUBLIC_URL` 在面板服务器的 `.env` 中配置，必须是目标机可访问的 HTTPS 地址。
 6. Agent 上线后，UFW 托管服务器在面板执行“初始化 UFW”；手动管理服务器跳过此步，自行配置宿主机或安全组放行。启用 UFW 会按默认策略拒绝 SSH 以外的入站连接；机器上若有别的对外服务，初始化后立即在防火墙页为它们添加允许规则。若机器上 firewalld、nftables、netfilter-persistent 或 shorewall 正在运行，Agent 会拒绝写入 UFW 并在面板提示冲突。AnyTLS 先上传对应域名的 PEM 证书链和私钥。端口从云安全组放行后才能从公网访问。
+
+### 从 GitHub Release 直接下载 Agent
+
+设置 `MUI_AGENT_RELEASE_VERSION=0.6.21` 后，在线接入命令仍从**当前面板**获取 `/download/install.sh`，脚本按第七个参数指定的版本让**目标服务器直接**从 GitHub Release 下载对应架构的压缩包并验证签名、哈希。Agent 0.6.19 起的一键升级也从 GitHub 下载。面板只读取归档以校验和显示可用构建，不向目标服务器提供二进制；`/download/<架构>/...` 在此模式下返回 404。接入和任务通信仍走面板。
+
+目标服务器必须能访问 GitHub Release；访问不了时，为该服务器配置 Agent SOCKS5 代理，或使用“手工安装”把同一 Release 的归档上传到服务器。面板访问 GitHub 失败时，页面会快速显示错误，并在五分钟内复用该失败结果。旧的 `v0.6.18`、`v0.6.19`、`v0.6.20` 标签指向未包含 GitHub 分发代码的提交，不应再用于在线接入。
+
+发布顺序：
+
+1. 在包含安装脚本和 Agent 0.6.21 代码的**干净提交**上构建并签名 amd64、arm64：`./deploy/build-agent.sh amd64 v1.14.2 0.6.21` 和 `./deploy/build-agent.sh arm64 v1.14.2 0.6.21`。已固定发布公钥的 Agent 必须继续使用同一私钥。
+2. 运行 `./deploy/release-agent.sh 0.6.21`；脚本检查工作区干净、提交内的 Agent 版本号和标签相同，再创建标签与 GitHub Release。确认两个归档均可下载，且标签指向构建所用的提交。
+3. 然后把面板服务器 `deploy/.env` 中的 `MUI_AGENT_RELEASE_VERSION` 改为 `0.6.21`，确认 `MUI_RELEASE_PUBLIC_KEY` 与签名私钥匹配，再发布面板。版本号必须与 Release 标签一致；无需 `--with-agent`。未升级到支持 GitHub 下载的旧 Agent 需用新接入命令重装一次。
+
+版本号固定到一个 Release，不会自动跟随 `latest`。发布后不要重新打包或替换归档，否则已缓存的摘要和服务器下载的文件可能不一致。
 
 `MUI_EDGE_PROXY_CIDR` 填外层 Nginx 连接内层容器时的实际来源；Linux 宿主机 Nginx 通常对应 Docker 网桥网关，不能直接沿用示例地址。外层 Nginx 在其他容器、其他主机或 Docker Desktop 时同样需按实际来源调整。内层只信任该来源的客户端 IP 和 HTTP/HTTPS 转发头，再将确认后的信息传给 Go。`MUI_PUBLIC_URL` 始终填写外部 HTTPS 地址，以生成正确的订阅链接、安装命令和登录 Cookie。仅本机 HTTP 预览时才改为 `http://127.0.0.1:8086`。
 
@@ -112,7 +130,7 @@ MUI_PUBLIC_URL=https://mui.example.com,https://mui-alt.example.com
    | `SHA256SUMS` | 同一发布版本的文件摘要，必需 |
    | `SHA256SUMS.sig` | 面板启用发布签名时必需 |
 
-   同一套文件必须来自同一架构、同一发布版本，不能混用其他渠道的 sing-box。下载链接来自面板的 `/download/amd64/` 或 `/download/arm64/`，不包含接入令牌。
+   同一套文件必须来自同一架构、同一发布版本，不能混用其他渠道的 sing-box。默认本地发布模式的下载链接来自面板的 `/download/amd64/` 或 `/download/arm64/`；启用 GitHub 直下模式时，弹窗提供对应架构的 GitHub 归档，上传到目标机 `~/mui-install/` 后，手工安装命令会先解包再校验。下载链接不包含接入令牌。
 3. 在目标机创建目录：
 
    ```bash
@@ -126,13 +144,13 @@ MUI_PUBLIC_URL=https://mui.example.com,https://mui-alt.example.com
    ```
 
 4. 复制弹窗中的“手工安装命令”，在目标机用上传文件的同一用户执行。命令已包含服务器 ID、发布公钥和本次接入令牌，不需要设置环境变量；先检查文件和摘要，再调用本地 `mui-agent install` 验证签名、接入并安装 systemd 服务。root 不需要 sudo，普通用户自动使用 sudo。
-5. 接入令牌有效期为 10 分钟。若上传耗时导致过期，关闭弹窗后重新生成命令即可；文件发布版本未改变时无需重复下载。修复安装会重启 Agent，运行中的 sing-box 也可能重启。
+5. 接入令牌有效期为 10 分钟，且只能使用一次。每次重新打开“首次接入 / 手动修复”都会生成新令牌，并让之前复制的命令立即失效。若上传耗时导致过期，关闭弹窗后重新生成命令即可；文件发布版本未改变时无需重复下载。修复安装会重启 Agent，运行中的 sing-box 也可能重启。
 
 程序安装到 `/usr/local/bin/mui-agent`，配置保存在 `/etc/mui-agent/config.json`，服务为 `mui-agent` 和 `mui-agent-helper`；落地额外安装 `/usr/local/bin/sing-box` 与 `mui-sing-box` 服务。不要把临时目录中的接入命令或配置文件发给其他人。目标系统及依赖要求与在线安装一致：systemd、OpenSSH、iproute2（提供 `ss`），UFW 只在选择托管时需要。
 
 ### 完全离线转发（无需连接面板）
 
-**Agent 下载入口**：“服务器”或“端口转发”页面右上角的“下载 Agent”，按目标服务器架构选择 amd64 / arm64，下载 `mui-agent`、`SHA256SUMS` 和签名文件。离线配置弹窗也提供同一入口，无需先导出配置。
+**Agent 下载入口**：“服务器”或“端口转发”页面右上角的“下载 Agent”，按目标服务器架构选择 amd64 / arm64。默认本地发布模式下载 `mui-agent`、`SHA256SUMS` 和签名文件；GitHub 直下模式下载对应架构的归档，解包后得到这些文件。离线配置弹窗也提供同一入口，无需先导出配置。
 
 Agent 0.6.7 支持离线入口 / 中转参与面板链路和订阅。新建服务器时选“离线管理”，在面板保存链路或转发，再到服务器列表“离线配置”导出 `mui-offline.json`。把配置和对应架构的 Agent、摘要、签名上传到目标机，运行弹窗安装命令即可，无需回传文件。离线各跳导出当前配置、在线各跳和落地配置生效后，相关链路可进入订阅。面板只记录导出状态，目标机是否已应用或连通需自行确认；后续修改通过 `mui-agent offline apply` 加载新导出的配置。
 
@@ -212,6 +230,7 @@ Agent **0.6.15** 起（修复 0.6.14 的所有来源规则冲突），UFW 托管
 | `MUI_DB_URL` | 可选完整连接 URL，优先于上述分项配置；未配置任何 PostgreSQL 参数时使用 SQLite `data/mui.db` |
 | `MUI_PUBLIC_URL` | 对外 HTTPS 地址，支持逗号分隔多个；第一个为默认，链接随当前已配置域名生成，见“多域名访问” |
 | `MUI_AGENT_BIN_DIR` | 安装文件目录，默认 `bin`；按 `amd64`、`arm64` 子目录存放三个构建产物 |
+| `MUI_AGENT_RELEASE_VERSION` | 设置如 `0.6.21` 后启用 GitHub Release 直下；要求 `MUI_RELEASE_PUBLIC_KEY`，目标服务器直接下载对应版本的归档，面板不再提供二进制下载 |
 | `MUI_LISTEN` | Go 后端监听地址，生产容器为 `:8087`；本地开发使用 `127.0.0.1:8080` |
 | `MUI_BIND` | Nginx 前端 HTTP 的宿主机端口映射，默认 `127.0.0.1:8086` → Nginx 容器 `:8086`，供已有外层 Nginx 转发 |
 | `MUI_BACKEND_URL` | Nginx 的 Go 上游地址，默认 `http://mui-service:8087`；可指向另一台服务器，不加末尾斜线 |
@@ -283,7 +302,7 @@ pg_restore -h db.example.com -p 5432 -U mui -W -d mui --no-owner mui.dump
 - **监听**：链路转发使用双栈通配监听；系统支持 IPv6 时可接收 IPv4 和 IPv6，只有 IPv4 的系统继续监听 IPv4。
 - **端口**：整条链路所有跳使用同一个端口。留空时优先使用落地节点的端口，它在某一跳被占用时自动换一个每一跳都空闲的随机端口；手填的端口被占用会直接报错。
 - **负载均衡**：一跳选多台服务器即为一组，上一跳把新连接发给其中健康的服务器。主备模式优先用排在前面的，轮询模式轮流分配。转发进程每 5 秒用 TCP 连接探测各台，连续 2 次失败即停用，连续 2 次成功即恢复；客户端连接某台失败时立即停用该台并改连下一台。UDP 会话在所用服务器停用时迁移到可用的服务器，主备模式下首选服务器恢复后迁回。
-- **内网地址**：服务器填写内网地址后，每段链路的“连接地址”可选择接收方的公网或内网地址。每段的“防火墙来源”独立选择发送方的公网或内网 IP，默认按连接地址类型选择；界面展示双方机器名和具体地址。专线访问下一跳公网地址、实际来源却是入口内网 IP 时，保留公网目标并选择“发送方内网 IP”。来源选项只控制放行规则，不绑定出站地址；需要来源限制时，发送方必须填写实际 IP，仅有域名无法生成规则。
+- **内网地址**：服务器填写内网地址后，每段链路的“连接地址”可选择接收方的公网或内网地址。每段的“防火墙来源”独立选择发送方的公网或内网 IP，默认按连接地址类型选择；还可选择放行 IPv4、IPv6 或两者，新建链路默认 IPv4，旧链路保留原来的按接收地址族选择行为。界面展示双方机器名和具体地址。专线访问下一跳公网地址、实际来源却是入口内网 IP 时，保留公网目标并选择“发送方内网 IP”。来源选项只控制放行规则，不绑定出站地址；需要来源限制时，发送方必须填写实际 IP，仅有域名无法生成规则。
 - **防火墙**：以下自动规则仅用于 UFW 托管服务器；手动管理服务器由管理员配置访问限制。首跳端口对所有来源开放；中间跳只放行所选类型的上一跳服务器地址；节点未开启“允许直连”时，端口放行链路最后一跳，以及使用此 SOCKS5 的 Agent 来源；两者都没有时不对外开放。Agent 使用 SOCKS5 不要求开启客户端直连。公网来源使用填写的公网 IPv4/IPv6 和 Agent 检测到的同地址族地址，内网来源使用发送方的内网 IP。服务器的出口 IP 与填写的公网 IP 不一致时（例如 NAT 机），请把出口 IP 填进公网 IPv4，否则下一跳会拒绝它的连接。
 - **订阅**：订阅可以包含链路和开启“允许直连”的节点。链路条目的地址是首跳服务器的订阅域名或公网地址、端口是链路端口，协议、登录凭据和 TLS 名称来自落地节点，所以流量仍按订阅统计。首跳和每组至少一台服务器的转发生效、落地节点已应用该订阅的登录且防火墙已放行最后一跳后，链路才会出现在订阅里。
 - 节点、服务器和链路互相引用时，被链路使用的节点和服务器不能删除，被订阅使用的链路不能删除，正在被链路使用的服务器不能去掉对应类型。

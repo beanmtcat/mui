@@ -52,13 +52,13 @@ func (a *App) offlineInstallAt(publicURL, serverID, token string, server shared.
 	if server.AgentProxyNodeID != "" {
 		guide.ProxyNotice = "已按本机所选的公网 / 内网来源生成 SOCKS5 放行规则，不要求节点开启客户端直连。请先在操作记录中确认代理服务器的配置任务成功，再执行接入命令。来源类型可独立于 SOCKS5 连接地址设置；经过 NAT 时请在服务器档案填写实际出口 IP。"
 	}
-	guide.Downloads = installDownloads(publicURL, files)
+	guide.Downloads = installDownloads(publicURL, files, a.releaseVersion)
 	proxyPrelude, proxyFlag, proxyErr := a.installProxyPrelude(server, false)
 	if proxyErr != nil {
 		guide.Command = "printf '%s\\n' " + shellQuote(proxyErr.Error()) + " >&2; exit 1"
 		return guide
 	}
-	guide.Command = localInstallPrelude(files, binaries) + proxyPrelude +
+	guide.Command = localInstallPrelude(files, binaries, a.releaseVersion) + proxyPrelude +
 		"\"$@\" ./mui-agent install " + shellQuote(publicURL) + " " + shellQuote(serverID) + " - " + shellQuote(core) + " " + shellQuote(a.releaseKeyB64) + proxyFlag + " --token-stdin <<'MUI_ENROLLMENT_TOKEN'\n" + token + "\nMUI_ENROLLMENT_TOKEN\n" +
 		"printf '%s\\n' 'MUI Agent 安装完成。'\n)"
 	return guide
@@ -69,7 +69,7 @@ func (a *App) standaloneInstallAt(publicURL string) offlineInstallGuide {
 	if a.releaseKeyB64 != "" {
 		files = append(files, "SHA256SUMS.sig")
 	}
-	guide := offlineInstallGuide{Downloads: installDownloads(publicURL, files), Signed: a.releaseKeyB64 != "", ExampleConfig: shared.OfflineForwardExample}
+	guide := offlineInstallGuide{Downloads: installDownloads(publicURL, files, a.releaseVersion), Signed: a.releaseKeyB64 != "", ExampleConfig: shared.OfflineForwardExample}
 	// An upgrade goes through the installed agent, which checks the new
 	// binary against the release key it pinned before running it; the new
 	// binary checking itself would prove nothing.
@@ -77,7 +77,7 @@ func (a *App) standaloneInstallAt(publicURL string) offlineInstallGuide {
 	if a.releaseKeyB64 != "" {
 		install += " --release-key " + shellQuote(a.releaseKeyB64)
 	}
-	guide.Command = localInstallPrelude(files, []string{"mui-agent"}) +
+	guide.Command = localInstallPrelude(files, []string{"mui-agent"}, a.releaseVersion) +
 		"if \"$@\" test -f /etc/mui-forward/offline.json && \"$@\" test -x /usr/local/bin/mui-agent; then\n" +
 		"  \"$@\" /usr/local/bin/mui-agent offline upgrade --binary ./mui-agent --config ./forwards.json\n" +
 		"else\n  " + install + "\nfi\n" +
@@ -85,12 +85,26 @@ func (a *App) standaloneInstallAt(publicURL string) offlineInstallGuide {
 	return guide
 }
 
-func installDownloads(publicURL string, files []string) []installDownload {
+func installDownloads(publicURL string, files []string, releaseVersion string) []installDownload {
 	downloads := []installDownload{}
 	for _, arch := range []string{"amd64", "arm64"} {
 		download := installDownload{Arch: arch, Files: []installFile{}}
 		var cmd strings.Builder
 		cmd.WriteString("(\nset -eu\nmkdir -p \"$HOME/" + manualInstallDirectory + "\"\n")
+		if releaseVersion != "" {
+			url, _ := shared.GitHubReleaseArchive(releaseVersion, arch)
+			name := fmt.Sprintf("mui-agent-%s-linux-%s.tar.gz", releaseVersion, arch)
+			download.Files = append(download.Files, installFile{Name: name, URL: url})
+			cmd.WriteString("curl -fL --retry 3 --connect-timeout 15 " + shellQuote(url) + " -o \"$HOME/" + manualInstallDirectory + "/" + name + "\"\n")
+			cmd.WriteString("tar -xzf \"$HOME/" + manualInstallDirectory + "/" + name + "\" -C \"$HOME/" + manualInstallDirectory + "\" --strip-components=1")
+			for _, file := range files {
+				cmd.WriteString(" " + shellQuote(arch+"/"+file))
+			}
+			cmd.WriteString("\n)")
+			download.Command = cmd.String()
+			downloads = append(downloads, download)
+			continue
+		}
 		for _, name := range files {
 			url := publicURL + "/download/" + arch + "/" + name
 			download.Files = append(download.Files, installFile{Name: name, URL: url})
@@ -103,9 +117,26 @@ func installDownloads(publicURL string, files []string) []installDownload {
 	return downloads
 }
 
-func localInstallPrelude(files, binaries []string) string {
+func localInstallPrelude(files, binaries []string, releaseVersion string) string {
 	var cmd strings.Builder
 	cmd.WriteString("(\nset -eu\numask 077\ncd \"$HOME/" + manualInstallDirectory + "\"\n")
+	cmd.WriteString("case \"$(uname -m)\" in x86_64|amd64) mui_arch=amd64;; aarch64|arm64) mui_arch=arm64;; *) printf '%s\\n' '不支持的 CPU 架构' >&2; exit 1;; esac\n")
+	if releaseVersion != "" {
+		cmd.WriteString("mui_archive=\"mui-agent-" + releaseVersion + "-linux-$mui_arch.tar.gz\"\n")
+	} else {
+		cmd.WriteString("set -- mui-agent-*-linux-\"$mui_arch\".tar.gz\n")
+		cmd.WriteString("if [ -f \"$1\" ]; then\n  [ \"$#\" -eq 1 ] || { printf '%s\\n' '找到多个 Agent 归档，请只保留当前版本的归档。' >&2; exit 1; }\n  mui_archive=$1\nelse\n  mui_archive=\nfi\n")
+	}
+	cmd.WriteString("if [ -n \"$mui_archive\" ] && [ -f \"$mui_archive\" ]; then\n  tar -xzf \"$mui_archive\" -C . --strip-components=1")
+	for _, file := range files {
+		cmd.WriteString(" \"$mui_arch/" + file + "\"")
+	}
+	cmd.WriteString("\nelif [ -d \"$mui_arch\" ] && [ -f \"$mui_arch/mui-agent\" ]; then\n")
+	for _, file := range files {
+		cmd.WriteString("  test -f \"$mui_arch/" + file + "\" && test ! -L \"$mui_arch/" + file + "\" || { printf '%s\\n' " + shellQuote("归档目录缺少 "+file+"，请重新解压同一版本的全部文件。") + " >&2; exit 1; }\n")
+		cmd.WriteString("  cp -- \"$mui_arch/" + file + "\" " + shellQuote(file) + "\n")
+	}
+	cmd.WriteString("fi\n")
 	// Some browsers save text downloads with an extra .txt suffix. Normalize
 	// only when the canonical filename is absent; never replace an existing
 	// manifest or skip its checksum/signature checks.

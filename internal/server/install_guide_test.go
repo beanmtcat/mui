@@ -1,6 +1,8 @@
 package server
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -77,6 +79,8 @@ func TestOfflineInstallCommand(t *testing.T) {
 		standalone bool
 		proxy      bool
 		online     bool
+		archive    bool
+		nested     bool
 		textSuffix bool
 		breakFile  string
 	}{
@@ -89,6 +93,8 @@ func TestOfflineInstallCommand(t *testing.T) {
 		{name: "standalone root", standalone: true},
 		{name: "standalone sudo", standalone: true, sudo: true},
 		{name: "browser txt suffix root", standalone: true, textSuffix: true},
+		{name: "release archive replaces stale flat files", archive: true},
+		{name: "extracted architecture directory", nested: true},
 		{name: "browser txt suffix sudo", sudo: true, textSuffix: true},
 		{name: "browser txt suffix corrupt agent", textSuffix: true, breakFile: "corrupt-agent"},
 		{name: "corrupt agent", breakFile: "corrupt-agent"},
@@ -104,7 +110,7 @@ func TestOfflineInstallCommand(t *testing.T) {
 			if err := os.Mkdir(dir, 0700); err != nil {
 				t.Fatal(err)
 			}
-			for _, name := range []string{"grep", "chmod", "mv", "mktemp", "rm", "sh", "wc", "cp"} {
+			for _, name := range []string{"grep", "chmod", "mv", "mktemp", "rm", "sh", "wc", "cp", "uname", "tar"} {
 				path, err := exec.LookPath(name)
 				if err != nil {
 					t.Fatal(err)
@@ -216,6 +222,52 @@ grep -q '"password":"proxy-password"' "$proxy_file"
 					}
 				}
 			}
+			if tc.archive || tc.nested {
+				arch := runtime.GOARCH
+				if arch != "amd64" && arch != "arm64" {
+					t.Skip("test requires supported architecture")
+				}
+				names := []string{"mui-agent", "sing-box", "SHA256SUMS", "SHA256SUMS.sig"}
+				if tc.archive {
+					file, err := os.Create(filepath.Join(dir, "mui-agent-0.6.19-linux-"+arch+".tar.gz"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					gz := gzip.NewWriter(file)
+					tw := tar.NewWriter(gz)
+					for _, name := range names {
+						data, err := os.ReadFile(filepath.Join(dir, name))
+						if err != nil {
+							t.Fatal(err)
+						}
+						if err := tw.WriteHeader(&tar.Header{Name: arch + "/" + name, Mode: 0600, Size: int64(len(data)), Typeflag: tar.TypeReg}); err != nil {
+							t.Fatal(err)
+						}
+						if _, err := tw.Write(data); err != nil {
+							t.Fatal(err)
+						}
+					}
+					if err := tw.Close(); err != nil {
+						t.Fatal(err)
+					}
+					if err := gz.Close(); err != nil {
+						t.Fatal(err)
+					}
+					if err := file.Close(); err != nil {
+						t.Fatal(err)
+					}
+					_ = os.WriteFile(filepath.Join(dir, "mui-agent"), []byte("old stale file"), 0600)
+				} else {
+					if err := os.Mkdir(filepath.Join(dir, arch), 0700); err != nil {
+						t.Fatal(err)
+					}
+					for _, name := range names {
+						if err := os.Rename(filepath.Join(dir, name), filepath.Join(dir, arch, name)); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			}
 			switch tc.breakFile {
 			case "corrupt-agent":
 				_ = os.WriteFile(filepath.Join(dir, "mui-agent"), []byte(stub+"# corrupt\n"), 0600)
@@ -228,6 +280,7 @@ grep -q '"password":"proxy-password"' "$proxy_file"
 			}
 			if tc.online {
 				os.WriteFile(filepath.Join(dir, "install.sh"), installAgentScript, 0600)
+				os.Remove(filepath.Join(tools, "uname"))
 				os.WriteFile(filepath.Join(tools, "uname"), []byte("#!/bin/sh\ncase \"$1\" in -s) echo Linux;; -m) echo x86_64;; esac\n"), 0755)
 				curl := `#!/bin/sh
 set -eu

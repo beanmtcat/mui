@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"mui/internal/shared"
@@ -21,11 +23,25 @@ func (a *App) releaseHash(arch string) (string, error) {
 }
 
 func (a *App) artifactHash(arch, name string) (string, error) {
+	return a.artifactHashContext(context.Background(), arch, name)
+}
+
+func (a *App) artifactHashContext(ctx context.Context, arch, name string) (string, error) {
 	if arch != "amd64" && arch != "arm64" {
 		return "", errors.New("unsupported architecture")
 	}
 	if name != "mui-agent" && name != "sing-box" {
 		return "", errors.New("unsupported release artifact")
+	}
+	if a.releaseVersion != "" {
+		info, err := a.githubRelease(ctx, arch)
+		if err != nil {
+			return "", err
+		}
+		if name == "mui-agent" {
+			return info.AgentHash, nil
+		}
+		return info.CoreHash, nil
 	}
 	dir := filepath.Join(a.agentBinDir, arch)
 	if info, err := os.Lstat(dir); err != nil || !info.IsDir() {
@@ -75,23 +91,49 @@ func (a *App) artifactHash(arch, name string) (string, error) {
 }
 
 func (a *App) agentRelease(w http.ResponseWriter, r *http.Request) {
-	builds := map[string]string{}
-	for _, arch := range []string{"amd64", "arm64"} {
-		if hash, err := a.releaseHash(arch); err == nil {
-			builds[arch] = hash
-		}
-	}
-	writeJSON(w, 200, builds)
+	writeJSON(w, 200, a.releaseBuilds(r.Context(), "mui-agent"))
 }
 
 func (a *App) coreRelease(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, a.releaseBuilds(r.Context(), "sing-box"))
+}
+
+// Both architectures are checked in parallel under one request deadline. A
+// stalled GitHub connection cannot make the second architecture wait another
+// full timeout, and requests sharing an architecture join one fetch.
+func (a *App) releaseBuilds(parent context.Context, artifact string) map[string]string {
 	builds := map[string]string{}
-	for _, arch := range []string{"amd64", "arm64"} {
-		if hash, err := a.artifactHash(arch, "sing-box"); err == nil {
-			builds[arch] = hash
-		}
+	if artifact == "mui-agent" && a.releaseVersion != "" {
+		builds["releaseVersion"] = a.releaseVersion
 	}
-	writeJSON(w, 200, builds)
+	ctx, cancel := context.WithTimeout(parent, githubReleaseRequestTimeout)
+	defer cancel()
+	var mu sync.Mutex
+	var group sync.WaitGroup
+	for _, arch := range []string{"amd64", "arm64"} {
+		group.Add(1)
+		go func(arch string) {
+			defer group.Done()
+			hash, err := a.artifactHashContext(ctx, arch, artifact)
+			mu.Lock()
+			defer mu.Unlock()
+			if err == nil {
+				builds[arch] = hash
+			} else if a.releaseVersion != "" {
+				builds[arch+"Error"] = err.Error()
+			}
+		}(arch)
+	}
+	group.Wait()
+	return builds
+}
+
+func supportsGitHubRelease(version string) bool {
+	var major, minor, patch int
+	if n, _ := fmt.Sscanf(version, "%d.%d.%d", &major, &minor, &patch); n != 3 {
+		return false
+	}
+	return major > 0 || minor > 6 || minor == 6 && patch >= 19
 }
 
 func (a *App) queueAgentUpgrade(serverID, ip string) (shared.Operation, error) {
@@ -112,6 +154,9 @@ func (a *App) queueBinaryUpgrade(serverID, kind, ip string) (shared.Operation, e
 	}
 	if shared.OfflineManaged(server) {
 		return shared.Operation{}, errors.New("离线服务器请下载新版 Agent 和对应摘要、签名文件，上传后由本机已安装的 /usr/local/bin/mui-agent offline upgrade --binary ./mui-agent 执行升级")
+	}
+	if a.releaseVersion != "" && !supportsGitHubRelease(server.AgentVersion) {
+		return shared.Operation{}, errors.New("当前 Agent 尚不支持从 GitHub Release 升级；请先用新版接入命令重装一次")
 	}
 	var artifact, current string
 	var state shared.DesiredState
@@ -161,6 +206,7 @@ func (a *App) queueBinaryUpgrade(serverID, kind, ip string) (shared.Operation, e
 	} else {
 		state.CoreUpgradeSHA256 = hash
 	}
+	state.UpgradeRelease = a.releaseVersion
 	if err = a.Store.PutOperation(op, state); err != nil {
 		return shared.Operation{}, err
 	}

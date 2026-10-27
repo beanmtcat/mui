@@ -152,7 +152,7 @@ Agent 0.4.0 起还支持独立的 `core.upgrade` 任务。面板固定同架构 
 - 中心与 Agent 使用 HTTPS 加高熵令牌身份认证；一次性接入令牌短期有效，Agent 凭据可撤销和轮换。
 - Agent 不提供任意 shell 执行 API；只接受结构化、白名单操作。配置写入临时文件并原子替换；服务和防火墙操作限制路径与参数。
 - 节点密钥加密存储，密钥材料不进入常规日志；数据库使用已有 PostgreSQL 实例的备份策略，生产 Compose 不部署数据库或备份服务，`MUI_SECRET` 须与数据库备份分开、离线保存；升级可回退。
-- 支持 Ubuntu 22.04/24.04/26.04、Debian 12/13（systemd），以及 Alpine 3.19+（OpenRC），amd64/arm64；UFW 托管另需安装 UFW。不满足系统条件的服务器在接入时报告“不支持”，避免半安装状态。中心服务以容器方式部署，数据库迁移随版本执行；Agent、转发和 sing-box 按主机服务管理器使用 systemd 或 OpenRC，延时回滚任务独立于 Agent 生命周期。512 MiB 环境自动设置各进程的 Go 软内存目标，保留权限隔离。
+- 支持 Ubuntu 22.04/24.04/26.04、Debian 11/12/13（systemd），以及 Alpine 3.19+（OpenRC），amd64/arm64；UFW 托管另需安装 UFW。Debian 11 已结束官方 LTS 安全更新，部署时应升级系统或安排 Extended LTS。不满足系统条件的服务器在接入时报告“不支持”，避免半安装状态。中心服务以容器方式部署，数据库迁移随版本执行；Agent、转发和 sing-box 按主机服务管理器使用 systemd 或 OpenRC，延时回滚任务独立于 Agent 生命周期。512 MiB 环境自动设置各进程的 Go 软内存目标，保留权限隔离。
 
 ## 7. 实施顺序与验收
 
@@ -166,7 +166,7 @@ Agent 0.4.0 起还支持独立的 `core.upgrade` 任务。面板固定同架构 
 
 ## 8. 开发基线与外部准备
 
-- **当前范围**：Ubuntu 22.04/24.04/26.04、Debian 12/13、Alpine 3.19+；SS、Snell v5/v6、AnyTLS；按节点及订阅用户统计；sing-box、Surge 与 v2rayN 订阅；仅管理 UFW。流量限额、自动证书签发和其他订阅格式尚未实现。客户管理与 IP 观测见第 10 节。
+- **当前范围**：Ubuntu 22.04/24.04/26.04、Debian 11/12/13、Alpine 3.19+；SS、Snell v5/v6、AnyTLS；按节点及订阅用户统计；sing-box、Surge 与 v2rayN 订阅；仅管理 UFW。流量限额、自动证书签发和其他订阅格式尚未实现。客户管理与 IP 观测见第 10 节。
 - **仓库组织**：`web/` 为 React + TypeScript 前端；`cmd/server/` 与 `cmd/agent/` 为两个 Go 入口；`internal/` 保存后端与 Agent 的私有实现，其中 `internal/shared/types.go` 是面板与 Agent 之间消息契约的唯一定义；`deploy/` 保存中心服务和 Agent 的部署文件。
 - **开始编码**：可用本地 PostgreSQL、模拟 Agent 和测试证书完成前后端、数据模型与任务流程；真实服务器环境不是开始编码的前置条件。
 - **联调和上线前需提供**：面板 HTTPS 域名、至少一台测试服务器、用于 AnyTLS 的域名和证书，以及目标客户端版本。真实环境的信息只影响联调与部署，不阻止按本方案开始开发。

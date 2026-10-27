@@ -118,12 +118,57 @@ func TestHostRulesAdoptedInOneBatch(t *testing.T) {
 	if len(rules) != 1 || rules[0].PortFrom != 9000 || rules[0].Network != "tcp" || rules[0].Source != "203.0.113.0/24" || rules[0].Action != "allow" || rules[0].Status != "active" {
 		t.Fatalf("adopted rule: %+v", rules)
 	}
-	// A rule a custom rule cannot express refuses the batch before anything is queued.
-	if code, out, _ := p.do("POST", "/api/servers/"+id+"/ufw/adopt", map[string]any{"rules": []string{"8080                       ALLOW IN    Anywhere"}}, nil); code != 409 {
-		t.Fatalf("adopting a TCP+UDP rule: %d %v", code, out)
+	// A protected SSH rule still cannot be adopted.
+	if code, out, _ := p.do("POST", "/api/servers/"+id+"/ufw/adopt", map[string]any{"rules": []string{"2222/tcp                   ALLOW IN    Anywhere"}}, nil); code != 409 {
+		t.Fatalf("adopting an SSH rule: %d %v", code, out)
 	}
 	if code, _, _ := p.do("GET", "/agent/job", nil, agent); code == 200 {
 		t.Fatal("a refused batch must queue nothing")
+	}
+}
+
+func TestHostDualProtocolRuleCanBeEditedOrAdopted(t *testing.T) {
+	for _, tc := range []struct {
+		name, path string
+		body       func(string) map[string]any
+	}{
+		{name: "edit", path: "/api/firewall", body: func(id string) map[string]any {
+			return map[string]any{"serverId": id, "portFrom": 8080, "portTo": 8080, "network": "tcp+udp", "action": "allow", "family": "ipv4", "replaceHostRule": "8080                       ALLOW IN    Anywhere"}
+		}},
+		{name: "adopt", path: "/api/servers/", body: func(string) map[string]any {
+			return map[string]any{"rules": []string{"8080                       ALLOW IN    Anywhere"}}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, id, agent := hostRuleServer(t)
+			path := tc.path
+			if tc.name == "adopt" {
+				path += id + "/ufw/adopt"
+			}
+			if code, out, _ := p.do("POST", path, tc.body(id), nil); code != 201 {
+				t.Fatalf("convert: %d %v", code, out)
+			}
+			if first := p.applyNext(agent, "success"); first["kind"] != "ufw.delete" {
+				t.Fatalf("first job: %v", first["kind"])
+			}
+			if second := p.applyNext(agent, "success"); second["kind"] != "firewall.apply" {
+				t.Fatalf("second job: %v", second["kind"])
+			}
+			rules, err := p.store.Rules(id)
+			if err != nil || len(rules) != 2 || rules[0].PortFrom != 8080 || rules[1].PortFrom != 8080 {
+				t.Fatalf("expected two panel rules: %+v %v", rules, err)
+			}
+			protocols := map[string]bool{}
+			for _, rule := range rules {
+				protocols[rule.Network] = true
+				if rule.Family != "ipv4" || rule.Action != "allow" {
+					t.Fatalf("unexpected converted rule: %+v", rule)
+				}
+			}
+			if !protocols["tcp"] || !protocols["udp"] {
+				t.Fatalf("both protocols were not preserved: %+v", rules)
+			}
+		})
 	}
 }
 

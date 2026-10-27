@@ -27,6 +27,7 @@ services:
       # The frontend is the only public entry point on this network.
       MUI_TRUSTED_PROXIES: ${MUI_TRUSTED_PROXIES:-${MUI_PROXY_SUBNET:-172.30.17.0/24}}
       MUI_RELEASE_PUBLIC_KEY: ${MUI_RELEASE_PUBLIC_KEY:-}
+      MUI_AGENT_RELEASE_VERSION: ${MUI_AGENT_RELEASE_VERSION:-}
       MUI_TRAFFIC_RETENTION_DAYS: ${MUI_TRAFFIC_RETENTION_DAYS:-90}
       MUI_LISTEN: :8087
     # Allow Linux containers to reach a PostgreSQL instance on the host.

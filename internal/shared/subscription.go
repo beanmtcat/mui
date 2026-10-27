@@ -153,7 +153,7 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 				lines = append(lines, fmt.Sprintf("%s = anytls, %s, %d, password=%s, sni=%s", n.Name, address, n.Port, item.Password, n.TLSName))
 			case "snell":
 				// A per-user Snell key is a sing-box extension Surge cannot send.
-				if n.ShadowTLSHost == "" || item.ShadowTLSPassword == "" || item.UserKey != "" {
+				if item.UserKey != "" || n.ShadowTLSHost != "" && item.ShadowTLSPassword == "" || n.ShadowTLSHost == "" && !n.SingleUser {
 					excluded = append(excluded, n.Name+": Surge 订阅中的 Snell 节点需启用 ShadowTLS，且服务器 Agent 需为新版")
 					continue
 				}
@@ -161,7 +161,10 @@ func RenderSubscription(format string, items []SubscriptionItem) ([]byte, []stri
 				if SnellVersion(n) == 5 && n.Obfs == "http" {
 					line += ", obfs=http"
 				}
-				lines = append(lines, line+fmt.Sprintf(", shadow-tls-password=%s, shadow-tls-sni=%s, shadow-tls-version=3", item.ShadowTLSPassword, n.ShadowTLSHost))
+				if n.ShadowTLSHost != "" {
+					line += fmt.Sprintf(", shadow-tls-password=%s, shadow-tls-sni=%s, shadow-tls-version=3", item.ShadowTLSPassword, n.ShadowTLSHost)
+				}
+				lines = append(lines, line)
 			default:
 				excluded = append(excluded, n.Name+": Surge 订阅不支持该协议")
 			}

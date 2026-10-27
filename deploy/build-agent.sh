@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 arch="${1:-amd64}"
 core_version="${2:-v1.14.2}"
-agent_version="${3:-0.6.17}"
+agent_version="${3:-0.6.21}"
 release_key=${MUI_RELEASE_KEY:-"$(pwd)/deploy/.secrets/release.key"}
 case "$arch" in amd64|arm64) ;; *) echo "usage: $0 [amd64|arm64] [sing-box version, for example v1.14.2] [agent version, for example 0.6.7]" >&2; exit 2;; esac
 if [[ ! "$core_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -16,6 +16,13 @@ if [[ ! "$agent_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "agent version must be a stable X.Y.Z release, for example 0.6.7" >&2
   exit 2
 fi
+[[ -z "$(git status --porcelain --untracked-files=all)" ]] || { echo 'release build requires a clean Git worktree' >&2; exit 1; }
+source_commit=$(git rev-parse HEAD)
+source_version=$(git show "$source_commit:internal/agent/version.go" | sed -n 's/^var Version = "\([^"]*\)"$/\1/p')
+[[ "$source_version" == "$agent_version" ]] || {
+  echo "Agent version in commit $source_commit is $source_version, expected $agent_version" >&2
+  exit 1
+}
 if [[ -n "${MUI_RELEASE_KEY:-}" && ! -f "$release_key" ]]; then
   echo "release signing key not found: $release_key" >&2
   exit 1
@@ -50,4 +57,13 @@ if [[ -f "$release_key" ]]; then
 else
   echo "warning: no release key at $release_key; bin/$arch is UNSIGNED (agents that pinned a release key will refuse it)" >&2
 fi
+mkdir -p dist/release
+archive="dist/release/mui-agent-$agent_version-linux-$arch.tar.gz"
+# macOS bsdtar otherwise adds LIBARCHIVE.xattr.com.apple.provenance headers
+# that GNU tar on Linux warns about during manual extraction.
+tar_flags=()
+if tar --version 2>/dev/null | grep -q bsdtar; then tar_flags=(--no-xattrs --no-acls --no-mac-metadata); fi
+COPYFILE_DISABLE=1 tar ${tar_flags[@]+"${tar_flags[@]}"} -czf "$archive" -C bin "$arch"
+printf '%s\n' "$source_commit" > "$archive.commit"
 printf 'Built Agent %s: bin/%s/mui-agent; sing-box %s: bin/%s/sing-box\n' "$agent_version" "$arch" "$core_version" "$arch"
+printf 'GitHub Release archive: %s\n' "$archive"

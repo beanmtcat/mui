@@ -193,3 +193,9 @@ func VersionAtLeast(have, need string) bool {
 }
 
 func OfflineManaged(s Server) bool { return s.ManagementMode == "offline" }
+
+// ExternalManaged is a seller-provided endpoint. The panel stores its
+// connection details but has no process, firewall, or user control there.
+func ExternalManaged(s Server) bool { return s.ManagementMode == "external" }
+
+func NoAgentManaged(s Server) bool { return OfflineManaged(s) || ExternalManaged(s) }

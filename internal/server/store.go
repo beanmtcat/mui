@@ -354,6 +354,27 @@ var migrations = [][]string{
 		`CREATE TABLE IF NOT EXISTS mui_settings (key TEXT PRIMARY KEY, value TEXT NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS mui_komari_tokens (server_id TEXT PRIMARY KEY, token_enc TEXT NOT NULL)`,
 	},
+	{
+		`CREATE TABLE IF NOT EXISTS mui_help_articles (id TEXT PRIMARY KEY, question TEXT NOT NULL, answer TEXT NOT NULL, position INTEGER NOT NULL DEFAULT 0, updated_at BIGINT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS mui_idx_help_articles_position ON mui_help_articles(position,id)`,
+		`INSERT INTO mui_help_articles(id,question,answer,position,updated_at) VALUES('faq-compose-update','Docker Compose 怎样更新镜像？','使用远端镜像的 Compose 项目，在部署目录执行：
+
+` + "```sh" + `
+docker compose pull
+docker compose up -d
+` + "```" + `
+
+仅执行 docker compose up -d 不会主动拉取远端的新镜像。MUI 项目在部署机从源码构建镜像，请使用项目的 ` + "`./deploy/publish.sh`" + ` 发布。',10,0) ON CONFLICT(id) DO NOTHING`,
+		`INSERT INTO mui_help_articles(id,question,answer,position,updated_at) VALUES('faq-agent-upgrade','为什么 Agent 升级按钮是灰色的？','先确认面板已发布对应 CPU 架构的 Agent 构建文件。需要重新构建并发布时，在项目目录执行：
+
+` + "```sh" + `
+./deploy/build-agent.sh amd64
+./deploy/publish.sh --with-agent
+` + "```" + `
+
+ARM64 服务器将 amd64 换成 arm64。已是当前构建、Agent 不支持自更新或已有升级任务时，按钮也会不可用。',20,0) ON CONFLICT(id) DO NOTHING`,
+		`INSERT INTO mui_help_articles(id,question,answer,position,updated_at) VALUES('faq-ufw-protected','UFW 规则显示“SSH 保护”是什么意思？','这条主机规则可能放行 SSH 端口。为防止远程失联，面板不提供修改和删除操作；需要调整时，请登录服务器检查 UFW 规则和 SSH 实际端口。',30,0) ON CONFLICT(id) DO NOTHING`,
+	},
 }
 
 func ID() string {
@@ -657,6 +678,14 @@ func (s *Store) Server(id string) (shared.Server, error) {
 }
 func (s *Store) PutServer(v shared.Server) error {
 	_, err := s.DB.Exec(`UPDATE mui_servers SET data=$1,revision=$2 WHERE id=$3`, Marshal(v), v.Revision, v.ID)
+	return err
+}
+
+// A previously copied installer must not keep its old core selection after
+// the server's role changes. Save the new role and revoke that one-time guide
+// in the same statement.
+func (s *Store) PutServerAndInvalidateEnrollment(v shared.Server) error {
+	_, err := s.DB.Exec(`UPDATE mui_servers SET data=$1,revision=$2,enroll_hash='',enroll_expires=0 WHERE id=$3`, Marshal(v), v.Revision, v.ID)
 	return err
 }
 func (s *Store) Nodes(serverID string) ([]shared.Node, error) {

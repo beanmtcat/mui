@@ -30,6 +30,71 @@ func TestRouteSourcesMatchDestinationFamily(t *testing.T) {
 			}
 		})
 	}
+	if got := sourceAddressesFamily(s, false, "ipv6", "198.51.100.4"); len(got) != 0 {
+		t.Fatalf("IPv6 source selected for IPv4 destination: %v", got)
+	}
+	if got := sourceAddressesFamily(s, false, "ipv4", "exit.example.com"); !slices.Equal(got, []string{s.IPv4}) {
+		t.Fatalf("IPv4-only DNS source = %v", got)
+	}
+}
+
+func TestRouteSourceFamilySelection(t *testing.T) {
+	l := newRouteLab(t)
+	entry, _ := l.p.store.Server(l.entry)
+	entry.IPv6 = "2001:db8::1"
+	if err := l.p.store.PutServer(entry); err != nil {
+		t.Fatal(err)
+	}
+	middle, _ := l.p.store.Server(l.t1)
+	middle.IPv6, middle.Domain, middle.AutoSyncPublicIP = "2001:db8::2", "middle.example.com", true
+	if err := l.p.store.PutServer(middle); err != nil {
+		t.Fatal(err)
+	}
+	exit, _ := l.p.store.Server(l.exit)
+	exit.Domain, exit.AutoSyncPublicIP = "exit.example.com", true
+	if err := l.p.store.PutServer(exit); err != nil {
+		t.Fatal(err)
+	}
+	body := map[string]any{
+		"name": "family", "entryServerId": l.entry, "nodeId": l.nodeID, "enabled": true,
+		"hops": []map[string]any{{"serverIds": []string{l.t1}}},
+	}
+	code, created := l.route(body)
+	if code != 201 {
+		t.Fatalf("legacy route: %d %v", code, created)
+	}
+	check := func(wantMiddle, wantExit string) {
+		t.Helper()
+		if got := l.forwards(l.t1)[0].FirewallSources; got != wantMiddle {
+			t.Fatalf("middle sources = %q, want %q", got, wantMiddle)
+		}
+		node, err := l.p.store.Node(l.nodeID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if node.RouteSources != wantExit {
+			t.Fatalf("exit sources = %q, want %q", node.RouteSources, wantExit)
+		}
+	}
+	check(entry.IPv4+","+entry.IPv6, middle.IPv4+","+middle.IPv6)
+	id := created["id"].(string)
+	for _, tc := range []struct{ family, middle, exit string }{
+		{"ipv4", entry.IPv4, middle.IPv4},
+		{"ipv6", entry.IPv6, middle.IPv6},
+		{"both", entry.IPv4 + "," + entry.IPv6, middle.IPv4 + "," + middle.IPv6},
+	} {
+		body["nodeSourceFamily"] = tc.family
+		body["hops"] = []map[string]any{{"serverIds": []string{l.t1}, "sourceFamily": tc.family}}
+		code, out, _ := l.p.do("PATCH", "/api/routes/"+id, body, nil)
+		if code != 200 {
+			t.Fatalf("select %s: %d %v", tc.family, code, out)
+		}
+		check(tc.middle, tc.exit)
+	}
+	body["nodeSourceFamily"] = "invalid"
+	if code, _, _ := l.p.do("PATCH", "/api/routes/"+id, body, nil); code != 400 {
+		t.Fatalf("invalid address family: %d", code)
+	}
 }
 
 func TestRouteForwardFollowsLandingDomainWhenPublicIPChanges(t *testing.T) {

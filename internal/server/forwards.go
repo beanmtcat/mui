@@ -147,6 +147,9 @@ func (a *App) queueForwardApply(serverID string) error {
 }
 
 func (a *App) checkForward(f shared.ForwardRule, server shared.Server) error {
+	if shared.ExternalManaged(server) {
+		return errors.New("外部节点服务器由卖家管理，不能在其上创建端口转发")
+	}
 	if shared.ForwardNetworkIncludes(f.Network, "tcp") {
 		if err := sshPortError(server, f.Port, f.Port); err != nil {
 			return err

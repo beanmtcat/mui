@@ -134,21 +134,27 @@ func (l UFWLine) AdmitsSSH(sshPorts []int) bool {
 	return false
 }
 
-// CustomRule turns a host rule into the custom rule the panel would write for
-// it, or reports false when a custom rule cannot express it: no port, both
-// protocols, an application profile, REJECT/LIMIT, or an unusual source.
-func (l UFWLine) CustomRule() (FirewallRule, bool) {
-	if l.AllPorts || l.App != "" || len(l.Protos) != 1 || (l.Action != "ALLOW" && l.Action != "DENY") || strings.ContainsAny(l.Source, " \t") {
-		return FirewallRule{}, false
+// CustomRules converts one host rule into one or two panel rules. UFW rules
+// without a protocol cover both TCP and UDP; panel rules store them separately.
+func (l UFWLine) CustomRules() ([]FirewallRule, bool) {
+	if l.AllPorts || l.App != "" || len(l.Protos) == 0 || len(l.Protos) > 2 || (l.Action != "ALLOW" && l.Action != "DENY") || strings.ContainsAny(l.Source, " \t") {
+		return nil, false
 	}
-	rule := FirewallRule{PortFrom: l.PortFrom, PortTo: l.PortTo, Network: l.Protos[0], Action: strings.ToLower(l.Action), Family: "ipv4"}
-	if l.V6 {
-		rule.Family = "ipv6"
+	rules := make([]FirewallRule, 0, len(l.Protos))
+	for _, proto := range l.Protos {
+		if proto != "tcp" && proto != "udp" {
+			return nil, false
+		}
+		rule := FirewallRule{PortFrom: l.PortFrom, PortTo: l.PortTo, Network: proto, Action: strings.ToLower(l.Action), Family: "ipv4"}
+		if l.V6 {
+			rule.Family = "ipv6"
+		}
+		if l.Source != "Anywhere" {
+			rule.Source = l.Source
+		}
+		rules = append(rules, rule)
 	}
-	if l.Source != "Anywhere" {
-		rule.Source = l.Source
-	}
-	return rule, true
+	return rules, true
 }
 
 // RuleFamilyError checks a custom rule's address family against its source.

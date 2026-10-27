@@ -131,7 +131,7 @@ func manifestMinVersion(manifest []byte) (semver, bool, error) {
 
 // The root helper takes the download URL from its root-owned config, never
 // from the unprivileged worker's request. The task pins the file's SHA-256.
-func downloadUpgradeArtifact(name, expected string, maxSize int64) (string, error) {
+func downloadUpgradeArtifact(name, expected string, maxSize int64, releaseVersion ...string) (string, error) {
 	if name != "mui-agent" && name != "sing-box" {
 		return "", errors.New("unsupported upgrade artifact")
 	}
@@ -151,6 +151,9 @@ func downloadUpgradeArtifact(name, expected string, maxSize int64) (string, erro
 	c, err := ReadConfig()
 	if err != nil {
 		return "", err
+	}
+	if len(releaseVersion) > 0 && releaseVersion[0] != "" {
+		return downloadGitHubUpgradeArtifact(c.AgentProxy, name, expected, maxSize, releaseVersion[0], key)
 	}
 	base, err := validatePanelURL(c.URL)
 	if err != nil {
@@ -239,8 +242,8 @@ func randomUnitSuffix() string {
 	return hex.EncodeToString(b[:])
 }
 
-func upgradeAgent(expected string) error {
-	candidate, err := downloadUpgradeArtifact("mui-agent", expected, maxAgentBinarySize)
+func upgradeAgent(expected string, releaseVersion ...string) error {
+	candidate, err := downloadUpgradeArtifact("mui-agent", expected, maxAgentBinarySize, releaseVersion...)
 	if err != nil {
 		return err
 	}
@@ -321,8 +324,8 @@ func upgradeAgent(expected string) error {
 
 // upgradeCore validates the candidate against the live configuration before
 // replacing the binary. A failed restart restores the previous executable.
-func upgradeCore(expected string) error {
-	candidate, err := downloadUpgradeArtifact("sing-box", expected, maxCoreBinarySize)
+func upgradeCore(expected string, releaseVersion ...string) error {
+	candidate, err := downloadUpgradeArtifact("sing-box", expected, maxCoreBinarySize, releaseVersion...)
 	if err != nil {
 		return err
 	}

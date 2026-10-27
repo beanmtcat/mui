@@ -21,6 +21,7 @@ import {
   type Route,
   type RouteHop,
   type RouteSourceMode,
+  type RouteSourceFamily,
   type Role,
   type InstallGuide,
   roleLabels,
@@ -31,6 +32,7 @@ import OfflineManager from "./components/OfflineManager";
 import AgentDownloads from "./components/AgentDownloads";
 import ManagementMigration from "./components/ManagementMigration";
 import CertificateFileField from "./components/CertificateFileField";
+import HelpPage from "./components/HelpPage";
 import { screenshotText, screenshotView } from "./components/screenshot";
 // Heavy / rarely-used UI split out of the main bundle and lazy-loaded:
 // TrafficChart (dashboard + traffic modals) and QRCode (TOTP setup only).
@@ -53,6 +55,7 @@ type Tab =
   | "connections"
   | "operations"
   | "audit"
+  | "help"
   | "settings";
 // Pages that only exist as an entry of a sub-menu have no icon of their own.
 type SubPage = "accesses" | "connections" | "audit";
@@ -85,13 +88,30 @@ const tabs: { id: Exclude<Tab, SubPage>; label: string; icon: IconName; children
     ],
   },
   { id: "settings", label: "设置", icon: "settings" },
+  { id: "help", label: "帮助", icon: "help" },
 ];
-// The page lives in the URL hash (#servers, #routes, ...) so that a reload
-// stays on it and the browser's back and forward buttons move between pages.
+// The page and its selected server live in the URL hash so reload and browser
+// history keep the same server context (for example #nodes?server=...).
 const tabIds = new Set<string>(tabs.flatMap((t) => [t.id, ...(t.children || []).map((c) => c.id)]));
+function pageFromHash(): { tab: Tab; serverId: string } {
+  const hash = location.hash.slice(1);
+  const question = hash.indexOf("?");
+  let id = "";
+  try {
+    id = decodeURIComponent(question < 0 ? hash : hash.slice(0, question));
+  } catch {
+    // A malformed hash falls back to the dashboard.
+  }
+  return {
+    tab: tabIds.has(id) ? id as Tab : "dashboard",
+    serverId: question < 0 ? "" : new URLSearchParams(hash.slice(question + 1)).get("server") || "",
+  };
+}
 function tabFromHash(): Tab {
-  const id = decodeURIComponent(location.hash.slice(1));
-  return tabIds.has(id) ? (id as Tab) : "dashboard";
+  return pageFromHash().tab;
+}
+function serverFromHash(): string {
+  return pageFromHash().serverId;
 }
 const emptyServer: Partial<Server> = {
   managementMode: "online",
@@ -166,8 +186,7 @@ function subscriptionNodeIssue(format: string | undefined, node: Node): string {
   if (node.protocol === "ss") {
     if (format === "surge" && node.method === "2022-blake3-chacha20-poly1305") return "Surge 不支持 2022-blake3-chacha20-poly1305，请使用 AES 方式";
   }
-  // Surge reaches Snell nodes through ShadowTLS.
-  if (format === "surge" && node.protocol === "snell" && !node.shadowTlsHost) return "Surge 的 Snell 节点需要启用 ShadowTLS";
+  if (format === "surge" && node.protocol === "snell" && !node.shadowTlsHost && !node.singleUser) return "托管 Snell 节点的 Surge 订阅需要 ShadowTLS";
   return "";
 }
 function subscriptionNodeEligible(format: string | undefined, node: Node) {
@@ -257,6 +276,7 @@ function Icon({ name }: { name: IconName }) {
     customers: <><circle cx="9" cy="8" r="3" /><path d="M3 20v-2a6 6 0 0 1 12 0v2H3Z" /><circle cx="18" cy="9" r="2" /><path d="M17 15a5 5 0 0 1 4 5" /></>,
     operations: <><path d="M4 4v6h6M4.8 10a8 8 0 1 1-.2 5M12 7v5l3 2" /></>,
     settings: <><circle cx="12" cy="12" r="3" /><path d="M10 2h4l.6 2.2 2 .8 2-.9 2.8 2.8-.9 2 .8 2L23 11v4l-2.2.6-.8 2 .9 2-2.8 2.8-2-.9-2 .8L14 24h-4l-.6-2.2-2-.8-2 .9-2.8-2.8.9-2-.8-2L1 15v-4l2.2-.6.8-2-.9-2L6.9 3.6l2 .9 2-.8L10 2Z" transform="translate(0 -1) scale(1 .95)" /></>,
+    help: <><path d="M3 4h7a4 4 0 0 1 4 4v13a4 4 0 0 0-4-2H3V4Zm18 0h-5a4 4 0 0 0-4 4v13a4 4 0 0 1 4-2h5V4Z" /></>,
     logout: <><path d="M10 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h5M14 17l5-5-5-5M19 12H9" /></>,
   };
   return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
@@ -311,10 +331,9 @@ function hostRuleAdmitsSSH(r: HostRule, sshPorts: number[]) {
 }
 // A rule added on the host outside the panel that the panel may remove.
 const hostRuleRemovable = (r: HostRule, sshPorts: number[]) => !r.tag && !hostRuleAdmitsSSH(r, sshPorts);
-// What a custom rule can express: one port range, one protocol, allow/deny,
-// one source.
+// A host rule without /tcp or /udp becomes two panel rules on adoption.
 const hostRuleConvertible = (r: HostRule) =>
-  !r.allPorts && !r.app && r.network !== "" && (r.action === "ALLOW" || r.action === "DENY") && !/\s/.test(r.source);
+  !r.allPorts && !r.app && (r.action === "ALLOW" || r.action === "DENY") && !/\s/.test(r.source);
 const emptyRule: Partial<FirewallRule> = {
   serverId: "",
   portFrom: 443,
@@ -330,9 +349,15 @@ const emptyForward: Partial<ForwardRule> = {
   serverId: "", name: "", network: "tcp", listen: "0.0.0.0", port: 50000,
   targets: [{ host: "", port: 443 }], balance: "failover", firewallPolicy: "restricted", firewallSources: "", enabled: true,
 };
-const emptyRoute: Partial<Route> = { name: "", entryServerId: "", hops: [], nodeId: "", nodeInternal: false, port: 0, enabled: true, notes: "" };
+const emptyRoute: Partial<Route> = { name: "", entryServerId: "", hops: [], nodeId: "", nodeInternal: false, nodeSourceFamily: "ipv4", port: 0, enabled: true, notes: "" };
 const roleOrder: Role[] = ["entry", "line", "transit", "exit"];
 const rolesText = (roles: Role[] | undefined) => roleOrder.filter((r) => roles?.includes(r)).map((r) => roleLabels[r]).join(" / ") || "未设置";
+const supportsGitHubUpgrade = (version: string) => {
+  const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);
+  if (!match) return false;
+  const [major, minor, patch] = match.slice(1).map(Number);
+  return major > 0 || minor > 6 || (minor === 6 && patch >= 19);
+};
 // Forward targets are edited as one "host:port" per line; IPv6 hosts go in
 // brackets.
 const targetsText = (targets: ForwardRule["targets"] | undefined) =>
@@ -360,6 +385,7 @@ function App() {
   const [authed, setAuthed] = useState<boolean | null>(null),
     [totpEnabled, setTotpEnabled] = useState(false),
     [tab, setTab] = useState<Tab>(tabFromHash);
+  const [currentServerId, setCurrentServerId] = useState(serverFromHash);
   const [opServer, setOpServer] = useState(""),
     [opKind, setOpKind] = useState(""),
     [auditQuery, setAuditQuery] = useState(""),
@@ -391,6 +417,10 @@ function App() {
     [subs, setSubs] = useState<Subscription[]>([]),
     [customers, setCustomers] = useState<Customer[]>([]),
     [operations, setOperations] = useState<Operation[]>([]),
+    [fwHistory, setFwHistory] = useState<Operation[]>([]),
+    [fwHistoryServerId, setFwHistoryServerId] = useState(""),
+    [fwHistoryError, setFwHistoryError] = useState(""),
+    [fwHistoryRevision, setFwHistoryRevision] = useState(0),
     [agentReleases, setAgentReleases] = useState<Record<string, string>>({}),
     [coreReleases, setCoreReleases] = useState<Record<string, string>>({});
   const [error, setError] = useState(""),
@@ -443,7 +473,7 @@ function App() {
   const [installMethod, setInstallMethod] = useState<"online" | "offline" | "standalone">("online");
   const [installArch, setInstallArch] = useState("amd64");
   const localInstallGuide = installMethod === "standalone" ? installInfo?.standaloneInstall : installInfo?.offlineInstall;
-  const [firewallServer, setFirewallServer] = useState(""),
+  const [firewallServer, setFirewallServer] = useState(serverFromHash),
     [komariEndpoint, setKomariEndpoint] = useState(""),
     [passwordForm, setPasswordForm] = useState({ current: "", next: "" }),
     [totpOff, setTotpOff] = useState({ password: "", code: "" });
@@ -453,13 +483,13 @@ function App() {
   }>({ today: { uplink: 0, downlink: 0 }, month: { uplink: 0, downlink: 0 } });
   const [dashSeries, setDashSeries] = useState<TrafficPoint[]>([]),
     [ranking, setRanking] = useState<{ nodes: Usage[]; subscriptions: Usage[] }>({ nodes: [], subscriptions: [] });
-  const [nodeServerFilter, setNodeServerFilter] = useState(""),
+  const [nodeServerFilter, setNodeServerFilter] = useState(serverFromHash),
     [nodeProtocolFilter, setNodeProtocolFilter] = useState("");
   const [serverFilters, setServerFilters] = useState<Record<ServerFilterField, string>>({
     country: "", provider: "", region: "", city: "",
   });
   const [forwardFilters, setForwardFilters] = useState({
-    query: "", serverId: "", network: "", source: "", status: "",
+    query: "", serverId: serverFromHash(), network: "", source: "", status: "",
   });
   const [password, setPassword] = useState(""),
     [code, setCode] = useState(""),
@@ -525,6 +555,7 @@ function App() {
     auditLog.reload();
     accessLog.reload();
     connectionLog.reload();
+    setFwHistoryRevision((revision) => revision + 1);
     if (failures.length) {
       setError(failures[0] + (failures.length > 1 ? `（另有 ${failures.length - 1} 项加载失败）` : ""));
       if (manual) setNotice("");
@@ -535,10 +566,19 @@ function App() {
     }
   }, [loadAll, opLog, auditLog, accessLog, connectionLog]);
   useEffect(() => {
-    if (tabFromHash() !== tab) history.pushState(null, "", "#" + tab);
-  }, [tab]);
+    const nextHash = `#${tab}${currentServerId ? `?server=${encodeURIComponent(currentServerId)}` : ""}`;
+    if (location.hash !== nextHash) history.pushState(null, "", nextHash);
+  }, [tab, currentServerId]);
   useEffect(() => {
-    const follow = () => setTab(tabFromHash());
+    const follow = () => {
+      const page = pageFromHash();
+      setTab(page.tab);
+      setCurrentServerId(page.serverId);
+      setNodeServerFilter(page.serverId);
+      setNodeProtocolFilter("");
+      setFirewallServer(page.serverId);
+      setForwardFilters((old) => old.serverId === page.serverId ? old : { query: "", serverId: page.serverId, network: "", source: "", status: "" });
+    };
     window.addEventListener("popstate", follow);
     window.addEventListener("hashchange", follow);
     return () => {
@@ -546,6 +586,12 @@ function App() {
       window.removeEventListener("hashchange", follow);
     };
   }, []);
+  useEffect(() => {
+    if (tab === "firewall" && !currentServerId && servers[0]) {
+      setCurrentServerId(servers[0].id);
+      setFirewallServer(servers[0].id);
+    }
+  }, [tab, currentServerId, servers]);
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("mui-theme", theme);
@@ -617,6 +663,7 @@ function App() {
             ]);
             setServers(s);
             setRules(f);
+            setFwHistoryRevision((revision) => revision + 1);
             break;
           }
           case "forwards": {
@@ -681,6 +728,13 @@ function App() {
   }, [trafficSub?.id]);
   const activeNodes = useMemo(() => nodes.filter((n) => n.status === "active" && n.enabled), [nodes]);
   const onlineServers = useMemo(() => servers.filter((s) => s.status === "online"), [servers]);
+  const agentServers = useMemo(() => servers.filter((s) => s.managementMode !== "offline" && s.managementMode !== "external"), [servers]);
+  const upgradingAgentIDs = useMemo(() => new Set(operations
+    .filter((o) => o.kind === "agent.upgrade" && ["queued", "running", "activating"].includes(o.status))
+    .map((o) => o.serverId)), [operations]);
+  const updatingAgentIDs = useMemo(() => new Set(operations
+    .filter((o) => o.kind === "nodes.apply" && ["queued", "running"].includes(o.status))
+    .map((o) => o.serverId)), [operations]);
   const forwardServerIDs = useMemo(() => new Set(forwards.map((f) => f.serverId)), [forwards]);
   // Issues needing attention; ordinary traffic sampling states are not alerts.
   const serverWarnings = useCallback((s: Server) => {
@@ -698,6 +752,25 @@ function App() {
     return out;
   }, []);
   const fwServer = useMemo(() => servers.find((s) => s.id === firewallServer) || servers[0], [servers, firewallServer]);
+  useEffect(() => {
+    if (!authed || tab !== "firewall" || !fwServer?.id) return;
+    const serverId = fwServer.id;
+    let active = true;
+    setFwHistoryServerId((current) => current === serverId ? current : "");
+    setFwHistoryError("");
+    Promise.all(["firewall.apply", "ufw.init", "ufw.delete"].map((kind) =>
+      api<Operation[]>(`/api/operations?serverId=${encodeURIComponent(serverId)}&kind=${kind}&limit=8`),
+    )).then((groups) => {
+      if (!active) return;
+      setFwHistory(groups.flat().sort((a, b) => b.id.localeCompare(a.id)).slice(0, 8));
+      setFwHistoryServerId(serverId);
+    }).catch((e) => {
+      if (!active) return;
+      setFwHistoryError((e as Error).message);
+      setFwHistoryServerId(serverId);
+    });
+    return () => { active = false; };
+  }, [authed, tab, fwServer?.id, fwHistoryRevision]);
   const fwNodes = useMemo(() => nodes.filter(
     (n) => n.serverId === fwServer?.id && n.enabled && !n.deleting,
   ), [nodes, fwServer]);
@@ -716,11 +789,12 @@ function App() {
   const hostSelected = useMemo(() => hostSelectable.filter((r) => hostPicked.includes(r.rule)), [hostSelectable, hostPicked]);
   useEffect(() => setHostPicked([]), [fwServer?.id]);
   const selectedNodeServer = servers.find((s) => s.id === nodeForm.serverId);
-  const nodeCoreMissing = !!selectedNodeServer && canHostNodes(selectedNodeServer) && !selectedNodeServer.coreBuild &&
+  const externalNode = selectedNodeServer?.managementMode === "external";
+  const nodeCoreMissing = !!selectedNodeServer && !externalNode && canHostNodes(selectedNodeServer) && !selectedNodeServer.coreBuild &&
     (!!selectedNodeServer.agentVersion || !selectedNodeServer.roles?.includes("exit"));
   const selectedFormServer = servers.find((s) => s.id === serverForm.id);
   const serverManagementChanged = !!selectedFormServer && (selectedFormServer.managementMode === "offline") !== (serverForm.managementMode === "offline");
-  const serverProxyEnabled = serverForm.managementMode !== "offline";
+  const serverProxyEnabled = !["offline", "external"].includes(serverForm.managementMode || "online");
   const serverProxyOptions = nodes.filter((n) => n.protocol === "socks5").map((node) => {
     const host = servers.find((s) => s.id === node.serverId);
     const reason = node.serverId === serverForm.id ? "不能代理自身" : node.deleting ? "正在删除" : !node.enabled ? "已停用" :
@@ -735,15 +809,8 @@ function App() {
     ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status));
   const nodeCoreInstalling = operations.some((o) => o.serverId === nodeForm.serverId &&
     ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status));
-  const nodeFirewallUnsupported = !!nodeForm.firewallPolicy && nodeForm.firewallPolicy !== "all" &&
+  const nodeFirewallUnsupported = !externalNode && !!nodeForm.firewallPolicy && nodeForm.firewallPolicy !== "all" &&
     !servers.find((s) => s.id === nodeForm.serverId)?.nodeFirewallPolicies;
-  const fwHistory = useMemo(() => operations
-    .filter(
-      (o) =>
-        o.serverId === fwServer?.id &&
-        (o.kind === "firewall.apply" || o.kind === "ufw.init"),
-    )
-    .slice(0, 8), [operations, fwServer]);
   const visibleNodes = useMemo(() => nodes.filter(
     (n) =>
       (!nodeServerFilter || n.serverId === nodeServerFilter) &&
@@ -873,10 +940,12 @@ function App() {
   };
   const openNode = (n?: Node) => {
     clearSelectedTemplate();
+    const newServerId = servers.find((s) => s.id === nodeServerFilter)?.id || servers.find((s) => canHostNodes(s))?.id || "";
+    const sellerNode = servers.find((s) => s.id === newServerId)?.managementMode === "external";
     setNodeForm(
       n
         ? { ...n, snellPort: n.snellPort || 20000 + n.port % 10000, password: "", shadowTlsPassword: "" }
-        : { ...emptyNode, serverId: servers.find((s) => canHostNodes(s))?.id || "" },
+        : { ...emptyNode, serverId: newServerId, singleUser: sellerNode, direct: sellerNode, firewallPolicy: sellerNode ? "manual" : "all" },
     );
     setModal("node");
   };
@@ -1009,12 +1078,13 @@ function App() {
         );
         setModal(null);
         if (serverForm.managementMode === "offline") { setOfflineServer(result.server); return; }
+        if (serverForm.managementMode === "external") { goTo("nodes", result.server.id); return; }
         setInstallMethod("online");
         setInstallArch("amd64");
         setInstallInfo({ ...result, serverName: serverForm.name || "新服务器" });
         return;
       }
-    }, serverManagementChanged ? "管理方式已保存；请按迁移指南在目标机完成切换" : serverFormCoreMissing ? "服务器类型已保存；尚未安装 sing-box，请在服务器列表安装后创建节点" : "服务器已保存");
+    }, serverManagementChanged ? "管理方式已保存；请按迁移指南在目标机完成切换" : serverForm.managementMode === "external" ? "外部节点服务器已保存；请录入卖家提供的节点" : serverFormCoreMissing ? "服务器类型已保存；尚未安装 sing-box，请在服务器列表安装后创建节点" : "服务器已保存");
     if (ok && serverForm.id) close();
   };
   const submitNode = async (e: React.FormEvent) => {
@@ -1027,7 +1097,7 @@ function App() {
             nodeForm.id ? "PATCH" : "POST",
             { ...nodeForm, ...(nodeForm.id ? {} : { templateId: selectedTemplate }), ...(manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) ? { firewallPolicy: "manual", firewallSources: "" } : {}) },
           ),
-        nodeFirewallUnsupported || nodeForm.protocol === "snell" && !servers.find((s) => s.id === nodeForm.serverId)?.snellFixedPort
+        externalNode ? "外部节点已保存；面板不会配置卖家服务器或采集其流量" : nodeFirewallUnsupported || nodeForm.protocol === "snell" && !servers.find((s) => s.id === nodeForm.serverId)?.snellFixedPort
           ? "配置已保存，等待 Agent 更新后应用；原 UFW 规则仍会生效"
           : "配置已保存，等待 Agent 应用",
       )
@@ -1075,7 +1145,7 @@ function App() {
   };
   const editHostRule = (server: Server, r: HostRule) => {
     setRuleForm({
-      ...emptyRule, serverId: server.id, portFrom: r.portFrom, portTo: r.portTo, network: r.network || "tcp",
+      ...emptyRule, serverId: server.id, portFrom: r.portFrom, portTo: r.portTo, network: r.network || "tcp+udp",
       source: r.source === "Anywhere" ? "" : r.source, action: r.action === "DENY" ? "deny" : "allow", comment: "", replaceHostRule: r.rule,
       family: r.v6 ? "ipv6" : "ipv4",
     });
@@ -1117,7 +1187,7 @@ function App() {
     if (await act(() => mutation(path, forwardForm.id ? "PATCH" : "POST", body), message)) close();
   };
   const openForward = (f?: ForwardRule) => {
-    const form = f ? { ...f } : { ...emptyForward, serverId: servers[0]?.id || "" };
+    const form = f ? { ...f } : { ...emptyForward, serverId: servers.find((s) => s.id === forwardFilters.serverId && s.managementMode !== "external")?.id || servers.find((s) => s.managementMode !== "external")?.id || "" };
     setForwardForm(form);
     setForwardTargets(targetsText(form.targets));
     setModal("forward");
@@ -1192,7 +1262,7 @@ function App() {
       return deleteItem("/api/servers/" + s.id, "服务器");
     setConfirmation({
       title: "强制删除服务器",
-      message: `服务器「${s.name}」已离线，无法确认节点已停止。\n强制删除会同时移除它的节点、转发、规则和流量记录，且不可恢复。`,
+      message: s.managementMode === "external" ? `删除「${s.name}」的面板档案及其节点和订阅引用？不会触及卖家服务器。` : `服务器「${s.name}」已离线，无法确认节点已停止。\n强制删除会同时移除它的节点、转发、规则和流量记录，且不可恢复。`,
       confirmLabel: "强制删除",
       onConfirm: () => {
         void act(
@@ -1228,11 +1298,19 @@ function App() {
     servers.find((x) => x.id === id)?.name || nodes.find((x) => x.id === id)?.name ||
     subs.find((x) => x.id === id)?.name || customers.find((x) => x.id === id)?.name ||
     (id.length > 12 ? id.slice(0, 8) + "…" : id), [servers, nodes, subs, customers]);
-  const goTo = useCallback((target: Tab) => {
+  const goTo = useCallback((target: Tab, serverId = currentServerId) => {
+    const selected = serverId || (target === "firewall" ? servers[0]?.id || "" : "");
+    setCurrentServerId(selected);
+    if (target === "nodes") {
+      if (selected !== nodeServerFilter) setNodeProtocolFilter("");
+      setNodeServerFilter(selected);
+    }
+    if (target === "firewall") setFirewallServer(selected);
+    if (target === "forwards") setForwardFilters((old) => old.serverId === selected ? old : { query: "", serverId: selected, network: "", source: "", status: "" });
     setTab(target);
     setError("");
     setNotice("");
-  }, []);
+  }, [currentServerId, nodeServerFilter, servers]);
   const pageTitle = useMemo(() =>
     tabs.flatMap((t) => t.children || []).find((child) => child.id === tab)?.label ||
     tabs.find((t) => t.id === tab)?.label, [tab]);
@@ -1242,8 +1320,8 @@ function App() {
   const statCards = useMemo(() => [
     {
       label: "在线服务器",
-      value: `${onlineServers.length} / ${servers.length}`,
-      note: servers.length === onlineServers.length ? "全部在线" : `${servers.length - onlineServers.length} 台离线或未接入`,
+      value: `${onlineServers.length} / ${agentServers.length}`,
+      note: agentServers.length === onlineServers.length ? "全部在线" : `${agentServers.length - onlineServers.length} 台离线或未接入`,
     },
     {
       label: "运行中节点",
@@ -1258,7 +1336,7 @@ function App() {
     { label: "今日流量", value: bytes(summary.today.uplink + summary.today.downlink), note: split(summary.today) },
     { label: "本月流量", value: bytes(summary.month.uplink + summary.month.downlink), note: split(summary.month) },
     { label: "累计流量", value: bytes(totalTraffic), note: "全部节点" },
-  ], [onlineServers, servers, activeNodes, nodes, failedNodes, liveSubs, subs, customers, summary, split, totalTraffic]);
+  ], [onlineServers, agentServers, activeNodes, nodes, failedNodes, liveSubs, subs, customers, summary, split, totalTraffic]);
   // Everything that wants the administrator's attention, worst first.
   const attention: Notice[] = useMemo(() => {
   const list: Notice[] = [];
@@ -1453,13 +1531,13 @@ function App() {
         </header>
         {screenshotMode && <div className="banner warning" role="status">截图脱敏已开启：名称、地址、凭据已隐藏，表单暂时只读。关闭后恢复显示。</div>}
         {error && !modal && (
-          <div className="banner error" role="alert">
+          <div className={`banner error${tab === "firewall" ? " firewallToast" : ""}`} role="alert">
             {error}
             <button onClick={() => setError("")}>×</button>
           </div>
         )}
-        {notice && !modal && (
-          <div className="banner success" role="status">
+        {notice && !modal && (tab !== "firewall" || !error) && (
+          <div className={`banner success${tab === "firewall" ? " firewallToast" : ""}`} role="status">
             {notice}
             <button onClick={() => setNotice("")}>×</button>
           </div>
@@ -1506,7 +1584,7 @@ function App() {
               <section className="panel">
                 <div className="panelHead">
                   <h2>今日节点流量排行</h2>
-                  <button className="textButton" onClick={() => goTo("nodes")}>全部节点 →</button>
+                  <button className="textButton" onClick={() => goTo("nodes", "")}>全部节点 →</button>
                 </div>
                 {topNodes.length ? (
                   <table><tbody>
@@ -1645,7 +1723,7 @@ function App() {
                     <tr key={s.id}>
                       <td>
                         <span className="serverNameLine"><strong title={s.name}>{s.name}</strong>{serverWarnings(s).length > 0 && <HelpTip label={`${s.name} 的 ${serverWarnings(s).length} 项提醒`} text={serverWarnings(s).join("\n")} warning />}</span>
-                        <small>{s.managementMode === "offline" ? "离线管理" : s.os || "待接入"}{s.arch && ` · ${s.arch}`}</small>
+                        <small>{s.managementMode === "external" ? "卖家节点" : s.managementMode === "offline" ? "离线管理" : s.os || "待接入"}{s.arch && ` · ${s.arch}`}</small>
                       </td>
                       <td>
                         <span className="serverCountry">{countryFlag(s.country) && <span className="serverFlag" aria-hidden="true">{countryFlag(s.country)}</span>}{s.country}</span>
@@ -1653,41 +1731,63 @@ function App() {
                       </td>
                       <td className="mono"><span className="serverAddress" title={s.domain || s.ipv4 || s.ipv6}>{s.domain || s.ipv4 || s.ipv6 || "—"}</span>{(s.autoSyncPublicIp || s.internalAddress || s.domain && (s.ipv4 || s.ipv6)) && <HelpTip label={`${s.name} 的地址`} text={[s.domain && `域名：${s.domain}`, s.ipv4 && `IPv4：${s.ipv4}`, s.ipv6 && `IPv6：${s.ipv6}`, s.internalAddress && `内网：${s.internalAddress}`, s.autoSyncPublicIp && "公网 IP 自动同步"].filter(Boolean).join("\n")} />}</td>
                       <td>
-                        <span className="serverAgentLine"><Status value={s.status} /><HelpTip label={`${s.name} 的 Agent 与核心状态`} text={s.managementMode === "offline"
+                        <span className="serverAgentLine"><Status value={s.managementMode !== "offline" && s.managementMode !== "external" && s.status === "online" ? upgradingAgentIDs.has(s.id) ? "upgrading" : updatingAgentIDs.has(s.id) ? "updating" : s.status : s.status} /><HelpTip label={`${s.name} 的管理状态`} text={s.managementMode === "external"
+                          ? "外部节点由卖家运行；面板不安装 Agent、不修改防火墙，也无法确认服务状态或统计其流量。"
+                          : s.managementMode === "offline"
                           ? [s.offlineExportedAt ? `已导出版本 ${s.offlineExportedRevision}` : "尚未导出配置", (!s.offlineExportedAt || s.offlineExportedRevision !== s.revision) && `配置待导出 · 版本 ${s.revision || 1}`, "实时连通性未知"].filter(Boolean).join("\n")
-                          : [`Agent：${s.agentVersion || "未接入"}`, s.agentSelfUpdate && agentReleases[s.arch] ? s.agentBuild === agentReleases[s.arch] ? "Agent 已是当前构建" : "Agent 有可用升级" : !s.agentSelfUpdate && s.agentVersion ? "需先人工升级 Agent 一次" : "", s.agentVersion && (s.releaseKeyPinned ? "升级需发布签名" : "升级未启用签名校验"), `类型：${rolesText(s.roles)}`, `sing-box：${s.coreBuild ? s.coreVersion || "版本待上报" : "未安装"}`, s.coreSelfUpdate && s.coreBuild && coreReleases[s.arch] ? s.coreBuild === coreReleases[s.arch] ? "核心已是当前构建" : "核心有可用升级" : !s.coreSelfUpdate && s.agentVersion ? "升级 Agent 后可一键升级核心" : "", operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status)) && "程序升级进行中，详情见操作记录"].filter(Boolean).join("\n")} /></span>
-                        <small>{s.managementMode === "offline" ? (!s.offlineExportedAt || s.offlineExportedRevision !== s.revision ? "配置待导出" : `已导出 v${s.offlineExportedRevision}`) : `Agent ${s.agentVersion || "未接入"} · 核心 ${s.coreBuild ? s.coreVersion || "待上报" : "未安装"}`}</small>
+                          : [
+                            `Agent：${s.agentVersion || "未接入"}`,
+                            upgradingAgentIDs.has(s.id) ? "Agent 升级中，等待新版上报" :
+                              s.agentSelfUpdate && agentReleases[s.arch] ? s.agentBuild === agentReleases[s.arch] ? "Agent 已是当前构建" : "Agent 有可用升级" :
+                                !s.agentSelfUpdate && s.agentVersion ? "需先人工升级 Agent 一次" : "",
+                            updatingAgentIDs.has(s.id) && "节点配置更新中，等待 Agent 应用",
+                            s.agentVersion && (s.releaseKeyPinned ? "升级需发布签名" : "升级未启用签名校验"),
+                            `类型：${rolesText(s.roles)}`,
+                            `sing-box：${s.coreBuild ? s.coreVersion || "版本待上报" : "未安装"}`,
+                            s.coreSelfUpdate && s.coreBuild && coreReleases[s.arch] ? s.coreBuild === coreReleases[s.arch] ? "核心已是当前构建" : "核心有可用升级" : !s.coreSelfUpdate && s.agentVersion ? "升级 Agent 后可一键升级核心" : "",
+                            operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status)) && "程序升级进行中，详情见操作记录",
+                          ].filter(Boolean).join("\n")} /></span>
+                        <small>{s.managementMode === "external" ? "连接信息由卖家提供" : s.managementMode === "offline" ? (!s.offlineExportedAt || s.offlineExportedRevision !== s.revision ? "配置待导出" : `已导出 v${s.offlineExportedRevision}`) : `Agent ${s.agentVersion || "未接入"} · 核心 ${s.coreBuild ? s.coreVersion || "待上报" : "未安装"}`}</small>
                       </td>
                       <td>
-                        <Status
-                          value={manualFirewall(s) ? "manual" : s.firewallConflict ? "conflict" : s.ufwStatus}
-                        />
+                        <button type="button" className="serverListLink" title={`查看「${s.name}」的防火墙`} aria-label={`查看「${s.name}」的防火墙`} onClick={() => {
+                          goTo("firewall", s.id);
+                        }}>
+                          <Status value={manualFirewall(s) ? "manual" : s.firewallConflict ? "conflict" : s.ufwStatus} />
+                        </button>
                       </td>
                       <td className="serverTraffic" title="↓ 网卡接收，↑ 网卡发送。包含本机所有经过默认网卡的流量。">
-                        {s.managementMode === "offline" ? "—" : <span>↓ {bytes(s.networkRx || 0)} · ↑ {bytes(s.networkTx || 0)}</span>}
+                        {s.managementMode === "offline" || s.managementMode === "external" ? "—" : <span>↓ {bytes(s.networkRx || 0)} · ↑ {bytes(s.networkTx || 0)}</span>}
                       </td>
-                      <td>{nodes.filter((n) => n.serverId === s.id).length}</td>
-                      <td>{forwards.filter((f) => f.serverId === s.id && !f.deleting).length}</td>
+                      <td><button type="button" className="serverListLink" title={`查看「${s.name}」的节点`} aria-label={`查看「${s.name}」的节点`} onClick={() => {
+                        setNodeProtocolFilter("");
+                        goTo("nodes", s.id);
+                      }}>{nodes.filter((n) => n.serverId === s.id).length}</button></td>
+                      <td><button type="button" className="serverListLink" title={`查看「${s.name}」的转发`} aria-label={`查看「${s.name}」的转发`} onClick={() => {
+                        setForwardFilters({ query: "", serverId: s.id, network: "", source: "", status: "" });
+                        goTo("forwards", s.id);
+                      }}>{forwards.filter((f) => f.serverId === s.id && !f.deleting).length}</button></td>
                       <td>
                         <div className="actions">
                           <button onClick={() => openServer(s)}>编辑</button>
                           {s.managementMode === "offline" && <button onClick={() => setOfflineServer(s)}>离线配置</button>}
                           <ActionMenu>
-                          {s.managementMode !== "offline" && <>
+                          {s.managementMode !== "offline" && s.managementMode !== "external" && <>
                           <button
-                            disabled={!s.agentSelfUpdate || !agentReleases[s.arch] || s.agentBuild === agentReleases[s.arch] || operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status))}
-                            title={!s.agentSelfUpdate ? "当前 Agent 不支持自更新；请先手动安装新版一次"
-                              : !agentReleases[s.arch] ? "面板缺少该架构的 Agent 构建文件"
-                              : s.agentBuild === agentReleases[s.arch] ? "已是面板上的最新构建；改了 Agent 代码后需先运行 deploy/build-agent.sh 重新构建，再用 publish.sh --with-agent 发布"
+                            disabled={s.status === "revoked" || !s.agentSelfUpdate || !!agentReleases.releaseVersion && !supportsGitHubUpgrade(s.agentVersion || "") || !agentReleases[s.arch] || s.agentBuild === agentReleases[s.arch] || operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status))}
+                            title={s.status === "revoked" ? "凭据已吊销，请重新接入后升级" : !s.agentSelfUpdate ? "当前 Agent 不支持自更新；请先手动安装新版一次"
+                              : agentReleases.releaseVersion && !supportsGitHubUpgrade(s.agentVersion || "") ? "当前 Agent 不支持 GitHub 直下升级，请先用新版接入命令重装一次"
+                              : !agentReleases[s.arch] ? agentReleases[s.arch + "Error"] || "该架构的 Agent 发布文件不可用"
+                              : s.agentBuild === agentReleases[s.arch] ? "已是当前发布构建"
                               : operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status)) ? "已有升级任务在进行，详情见操作记录"
-                              : "从面板下载并校验新版本，节点服务继续运行"}
+                              : agentReleases.releaseVersion ? "从 GitHub Release 下载并校验新版本，节点服务继续运行" : "下载并校验新版本，节点服务继续运行"}
                             onClick={() => act(() => mutation("/api/servers/" + s.id + "/agent/upgrade", "POST"), "Agent 升级已排队；重启上报新构建后才会显示成功")}
                           >
                             一键升级 Agent
                           </button>
                           <button
-                            disabled={!s.coreSelfUpdate || !coreReleases[s.arch] || s.coreBuild === coreReleases[s.arch] || operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status))}
-                            title={!s.coreSelfUpdate ? "请先将 Agent 升级到支持 sing-box 自更新的版本" : !coreReleases[s.arch] ? "面板缺少该架构的 sing-box 构建文件" : s.coreBuild ? "先验证新核心和现有配置，再重启核心；该服务器的节点连接会短暂中断，失败会恢复旧核心" : "从面板下载并验证 sing-box，然后安装到该服务器"}
+                            disabled={s.status === "revoked" || !s.coreSelfUpdate || !!agentReleases.releaseVersion && !supportsGitHubUpgrade(s.agentVersion || "") || !coreReleases[s.arch] || s.coreBuild === coreReleases[s.arch] || operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status))}
+                            title={s.status === "revoked" ? "凭据已吊销，请重新接入后安装或升级" : !s.coreSelfUpdate ? "请先将 Agent 升级到支持 sing-box 自更新的版本" : agentReleases.releaseVersion && !supportsGitHubUpgrade(s.agentVersion || "") ? "当前 Agent 不支持 GitHub 直下升级，请先用新版接入命令重装一次" : !coreReleases[s.arch] ? coreReleases[s.arch + "Error"] || "该架构的 sing-box 发布文件不可用" : s.coreBuild ? "先验证新核心和现有配置，再重启核心；该服务器的节点连接将短暂中断，失败会恢复旧版本" : "下载并验证 sing-box，然后安装到该服务器"}
                             onClick={() => {
                               const run = () => { void act(() => mutation("/api/servers/" + s.id + "/core/upgrade", "POST"), s.coreBuild ? "sing-box 升级已排队" : "sing-box 安装已排队"); };
                               if (!s.coreBuild) return run();
@@ -1736,7 +1836,7 @@ function App() {
                             onClick={() => {
                               setConfirmation({
                                 title: "吊销 Agent 凭据",
-                                message: `吊销「${s.name}」的 Agent 凭据？该 Agent 将立即无法连接面板，需重新生成接入命令。`,
+                                message: `吊销「${s.name}」的 Agent 凭据？面板会立即拒绝旧凭据；Agent 0.6.21 起会停止请求。已在服务器上运行的节点和转发不会被远程停用，需要停机时请复制卸载命令并在目标服务器执行。重新接入需生成新命令。`,
                                 confirmLabel: "吊销凭据",
                                 onConfirm: () => {
                                   void act(
@@ -1752,6 +1852,15 @@ function App() {
                             }}
                           >
                             吊销 Agent
+                          </button>
+                          <button onClick={() => void copy(`(
+set -eu
+mui_uninstall=$(mktemp)
+trap 'rm -f "$mui_uninstall"' EXIT HUP INT TERM
+curl -fsSL '${window.location.origin}/download/uninstall.sh' -o "$mui_uninstall"
+if [ "$(id -u)" -eq 0 ]; then sh "$mui_uninstall"; else sudo sh "$mui_uninstall"; fi
+)`)} title="复制后在目标服务器运行；停止并删除 MUI Agent、转发和 sing-box 服务，不改动 UFW 规则">
+                            复制卸载命令
                           </button>
                           </>}
                           <button
@@ -1785,7 +1894,7 @@ function App() {
             <div className="filters">
               <select
                 value={nodeServerFilter}
-                onChange={(e) => setNodeServerFilter(e.target.value)}
+                onChange={(e) => { setNodeServerFilter(e.target.value); setNodeProtocolFilter(""); setCurrentServerId(e.target.value); }}
               >
                 <option value="">全部服务器</option>
                 {servers.map((s) => (
@@ -2002,7 +2111,7 @@ function App() {
             <div className="filters">
               <select
                 value={fwServer?.id || ""}
-                onChange={(e) => setFirewallServer(e.target.value)}
+                onChange={(e) => { setFirewallServer(e.target.value); setCurrentServerId(e.target.value); }}
               >
                 {servers.map((s) => (
                   <option key={s.id} value={s.id}>
@@ -2152,7 +2261,7 @@ function App() {
                   <div className="actions">
                     <button
                       disabled={!hostSelected.length || !hostSelected.every(hostRuleConvertible)}
-                      title={hostSelected.every(hostRuleConvertible) ? "按原端口、协议、来源和动作转为自定义规则" : "所选规则中有同时放行 TCP 和 UDP、应用配置或 REJECT/LIMIT 规则，不能直接转换"}
+                      title={hostSelected.every(hostRuleConvertible) ? "按原端口、协议、来源和动作转为自定义规则；TCP + UDP 会拆成两条" : "所选规则中有无端口、应用配置或 REJECT/LIMIT 规则，不能直接转换"}
                       onClick={() => adoptHostRules(fwServer, hostSelected)}
                     >转为面板管理{hostSelected.length ? `（${hostSelected.length}）` : ""}</button>
                     <button className="dangerText" disabled={!hostSelected.length} onClick={() => deleteHostRules(fwServer, hostSelected)}>
@@ -2217,14 +2326,13 @@ function App() {
                               ) : r.tag ? (
                                 <span className="hint">—</span>
                               ) : ssh ? (
-                                <span className="hint" title="可能放行 SSH 端口，为防止失联请登录服务器手动调整">受保护</span>
+                                <span className="actions"><span className="hint">SSH 保护</span><HelpTip label={`规则 ${r.index} 的 SSH 保护`} text="这条规则可能放行 SSH 端口。为防止远程失联，面板禁止修改和删除；请登录服务器用 UFW 手动调整。" /></span>
                               ) : (
                                 <div className="actions">
-                                  <button
-                                    disabled={!editable}
-                                    title={editable ? "改为面板管理的自定义规则，原规则会被删除" : "该规则同时放行 TCP 和 UDP、是应用配置或动作为 REJECT/LIMIT，请删除后在自定义规则中新建"}
+                                  {editable ? <button
+                                    title={r.network ? "改为面板管理的自定义规则，原规则会被删除" : "接管后拆成 TCP 和 UDP 两条面板规则，原规则会被删除"}
                                     onClick={() => editHostRule(fwServer, r)}
-                                  >修改</button>
+                                  >修改</button> : <span className="actions"><span className="hint">需在主机修改</span><HelpTip label={`规则 ${r.index} 不能接管`} text="无端口、应用配置或 REJECT/LIMIT 规则不能转为面板自定义规则；可登录服务器用 UFW 修改。" /></span>}
                                   <button className="dangerText" onClick={() => deleteHostRules(fwServer, [r])}>删除</button>
                                 </div>
                               )}
@@ -2246,7 +2354,11 @@ function App() {
                   <p>最近的防火墙任务；节点变更引起的规则调整见操作记录</p>
                 </div>
               </div>
-              {fwHistory.length ? (
+              {fwHistoryServerId !== fwServer?.id ? (
+                <Empty text="正在读取防火墙变更…" />
+              ) : fwHistoryError ? (
+                <div className="banner error" role="alert">读取变更历史失败：{fwHistoryError}</div>
+              ) : fwHistory.length ? (
                 fwHistory.map((o) => (
                   <div className="listRow" key={o.id}>
                     <div className="grow">
@@ -2313,7 +2425,7 @@ function App() {
               </div>
               <div className="headerActions">
                 <button className="ghost" onClick={() => setAgentDownloads({ arch: "amd64" })}>下载 Agent</button>
-                <button className="primary" onClick={() => openForward()} disabled={!servers.length}>新建转发</button>
+                <button className="primary" onClick={() => openForward()} disabled={!servers.some((s) => s.managementMode !== "external")}>新建转发</button>
               </div>
             </div>
             {servers.some((s) => forwardServerIDs.has(s.id) && s.managementMode !== "offline" && !manualFirewall(s) && s.ufwStatus && s.ufwStatus !== "active") && (
@@ -2324,7 +2436,7 @@ function App() {
             )}
             <div className="filters forwardFilters">
               <input type="search" value={forwardFilters.query} onChange={(e) => setForwardFilters({ ...forwardFilters, query: e.target.value })} placeholder="搜索名称、IP、端口或链路" aria-label="搜索端口转发" />
-              <select aria-label="按服务器筛选转发" value={forwardFilters.serverId} onChange={(e) => setForwardFilters({ ...forwardFilters, serverId: e.target.value })}>
+              <select aria-label="按服务器筛选转发" value={forwardFilters.serverId} onChange={(e) => { setForwardFilters({ ...forwardFilters, serverId: e.target.value }); setCurrentServerId(e.target.value); }}>
                 <option value="">全部服务器</option>
                 {servers.map((s) => <option key={s.id} value={s.id}>{s.name}{s.managementMode === "offline" ? "（离线管理）" : ""}</option>)}
               </select>
@@ -2343,7 +2455,7 @@ function App() {
                 <option value="">全部状态</option>
                 {[...new Set([...forwardStatuses, ...(forwardFilters.status ? [forwardFilters.status] : [])])].map((status) => <option key={status} value={status}>{statusLabels[status]?.[0] || status}</option>)}
               </select>
-              {forwardFiltersActive && <button type="button" className="ghost" onClick={() => setForwardFilters({ query: "", serverId: "", network: "", source: "", status: "" })}>清空筛选</button>}
+              {forwardFiltersActive && <button type="button" className="ghost" onClick={() => { setForwardFilters({ query: "", serverId: "", network: "", source: "", status: "" }); setCurrentServerId(""); }}>清空筛选</button>}
               <span className="hint" role="status">显示 {visibleForwards.length} / {forwards.length} 条</span>
             </div>
             <div className="tableWrap">
@@ -2748,6 +2860,7 @@ function App() {
             <Pager log={auditLog} />
           </section>
         )}
+        {tab === "help" && <HelpPage onCopy={(value) => void copy(value)} />}
         {tab === "settings" && (
           <section className="panel settings">
             <h2>Komari 监控</h2>
@@ -2912,7 +3025,7 @@ function App() {
         )}
       </main>
       {offlineServer && <OfflineManager server={servers.find((s) => s.id === offlineServer.id) || offlineServer} onClose={() => setOfflineServer(null)} onExported={() => refresh()} onCopy={(v) => void copy(v)} onDownloadAgent={() => setAgentDownloads({ arch: offlineServer.arch || "amd64" })} screenshotMode={screenshotMode} redact={redactScreenshot} />}
-      {agentDownloads && <AgentDownloads initialArch={agentDownloads.arch} onClose={() => setAgentDownloads(null)} onCopy={(v) => void copy(v)} screenshotMode={screenshotMode} redact={redactScreenshot} />}
+      {agentDownloads && <AgentDownloads initialArch={agentDownloads.arch} releaseVersion={agentReleases.releaseVersion || ""} releaseBuilds={agentReleases} onClose={() => setAgentDownloads(null)} onCopy={(v) => void copy(v)} screenshotMode={screenshotMode} redact={redactScreenshot} />}
       {installInfo && (
         <div
           className="overlay"
@@ -2971,7 +3084,7 @@ function App() {
               <section className="installStep">
                 <h3>3. 在目标服务器安装</h3>
                 <p className="hint">用上传文件的同一用户执行，自动识别 root / sudo。{localInstallGuide?.signed ? "校验摘要及发布签名后安装服务" : "校验摘要后安装服务（面板未配置发布签名）"}；{installMethod === "standalone" ? "重复安装会重启转发服务，现有连接会中断。修改规则请用 offline apply 命令。" : "修复会重启 Agent，运行中的 sing-box 也可能重启。"}</p>
-                {installMethod !== "standalone" && <p className="hint">接入令牌 10 分钟有效。若已过期，关闭后重新生成命令；同一发布版本的文件无需重复下载。</p>}
+                {installMethod !== "standalone" && <p className="hint">接入令牌 10 分钟有效，且只能使用一次；每次重新打开“首次接入 / 手动修复”都会使旧命令立即失效。若已过期，请关闭后重新生成命令；同一发布版本的文件无需重复下载。</p>}
                 <div className="commandBox">
                   <MaskedValue value={localInstallGuide?.command || ""} pre><button className="primary" type="button" onClick={() => copy(localInstallGuide!.command)}>{installMethod === "standalone" ? "复制离线安装命令" : "复制手工安装命令"}</button></MaskedValue>
                 </div>
@@ -3055,21 +3168,26 @@ function App() {
                       />
                     </Field>
                     <div className="serverFormWide">
-                      <Field label="管理方式" help="在线 Agent 可直接或通过 SOCKS5 连接面板；离线管理通过导出配置在本机应用，仅支持入口、线路、中转。">
+                      <Field label="管理方式" help="在线 Agent 由面板部署；离线管理需在本机应用导出配置；外部节点仅保存卖家提供的连接信息，不安装 Agent 或 sing-box。">
                         <select aria-label="管理方式" value={serverForm.managementMode || "online"} onChange={(e) => {
                           const offline = e.target.value === "offline";
+                          const external = e.target.value === "external";
                           const roles = (serverForm.roles || []).filter((r) => r !== "exit");
                           setServerForm({
                             ...serverForm,
-                            managementMode: offline ? "offline" : "online",
-                            agentProxyNodeId: offline ? "" : serverForm.agentProxyNodeId,
-                            agentProxyInternal: offline ? false : serverForm.agentProxyInternal,
-                            firewallMode: offline ? "manual" : serverForm.firewallMode,
-                            roles: offline ? (roles.length ? roles : ["entry"]) : serverForm.roles,
+                            managementMode: external ? "external" : offline ? "offline" : "online",
+                            agentProxyNodeId: offline || external ? "" : serverForm.agentProxyNodeId,
+                            agentProxyInternal: offline || external ? false : serverForm.agentProxyInternal,
+                            firewallMode: offline || external ? "manual" : "ufw",
+                            roles: external ? ["exit"] : offline ? (roles.length ? roles : ["entry"]) : serverForm.roles?.length ? serverForm.roles : ["exit"],
+                            outboundInterface: external ? "" : serverForm.outboundInterface,
+                            autoSyncPublicIp: external ? false : serverForm.autoSyncPublicIp,
+                            komariToken: external ? "" : serverForm.komariToken,
                           });
                         }}>
-                          <option value="online">在线 Agent（连接面板）</option>
-                          <option value="offline">离线管理（导出配置 / 本地应用）</option>
+                          <option value="online" disabled={!!serverForm.id && serverForm.managementMode === "external"}>在线 Agent（连接面板）</option>
+                          <option value="offline" disabled={!!serverForm.id && serverForm.managementMode === "external"}>离线管理（导出配置 / 本地应用）</option>
+                          <option value="external" disabled={!!serverForm.id && serverForm.managementMode !== "external"}>外部节点（卖家提供，无需安装）</option>
                         </select>
                       </Field>
                       {serverManagementChanged && <p className="banner warning" role="status">保存后旧 Agent 凭据失效，页面会打开迁移指南。需在目标机停用旧服务并重新安装；保留服务器档案、链路和转发，安装期间会中断转发。已有节点须先删除才能改为离线管理。</p>}
@@ -3082,7 +3200,7 @@ function App() {
                             <label className="check" key={role}>
                               <input
                                 type="checkbox"
-                                disabled={serverForm.managementMode === "offline" && role === "exit"}
+                                disabled={serverForm.managementMode === "offline" && role === "exit" || serverForm.managementMode === "external"}
                                 checked={serverForm.roles?.includes(role) || false}
                                 onChange={(e) => setServerForm({
                                   ...serverForm,
@@ -3097,16 +3215,17 @@ function App() {
                       {serverFormCoreMissing && <div className="banner warning serverCoreHint" role="status">
                         <div>
                           <p>可以保存服务器类型。该服务器尚未安装 sing-box，建节点前需先安装。</p>
-                          <button type="button" className="ghost" disabled={!selectedFormServer?.coreSelfUpdate || !coreReleases[selectedFormServer?.arch || ""] || serverFormCoreInstalling}
+                          <button type="button" className="ghost" disabled={!selectedFormServer?.coreSelfUpdate || !!agentReleases.releaseVersion && !supportsGitHubUpgrade(selectedFormServer?.agentVersion || "") || !coreReleases[selectedFormServer?.arch || ""] || serverFormCoreInstalling}
                             onClick={() => act(() => mutation("/api/servers/" + serverForm.id + "/core/upgrade", "POST"), "sing-box 安装已排队，完成后点击刷新安装状态")}>{serverFormCoreInstalling ? "核心安装或升级进行中" : "安装 sing-box"}</button>
                           <button type="button" className="ghost" disabled={refreshing} onClick={() => void refresh(true)}>{refreshing ? "刷新中…" : "刷新安装状态"}</button>
                           {!selectedFormServer?.coreSelfUpdate && <p>请先接入支持核心安装的 Agent。</p>}
-                          {!!selectedFormServer?.coreSelfUpdate && !coreReleases[selectedFormServer?.arch || ""] && <p>面板缺少该架构的 sing-box 发布文件。</p>}
+                          {!!agentReleases.releaseVersion && !!selectedFormServer?.coreSelfUpdate && !supportsGitHubUpgrade(selectedFormServer.agentVersion || "") && <p>先用新版接入命令重装 Agent，才能从 GitHub 安装 sing-box。</p>}
+                          {!!selectedFormServer?.coreSelfUpdate && !coreReleases[selectedFormServer?.arch || ""] && <p>该架构的 sing-box 发布文件不可用。</p>}
                         </div>
                       </div>}
 
                     </div>
-                    <div className="serverFormWide">
+                    {serverForm.managementMode !== "external" && <div className="serverFormWide">
                       <Field label="Agent 连接面板的 SOCKS5 节点" help="代理用于 Agent 接入、心跳、任务与下载，与节点“允许直连”无关。候选节点须已启用、配置已生效，且其服务器已启用 UFW、没有防火墙冲突。面板按所选本机来源 IP 自动放行；经过 NAT 时请填写实际出口 IP。所有在线服务器均可使用代理，需 Agent 0.6.10 或更高版本。">
                         <select aria-label="Agent 连接面板的 SOCKS5 节点" disabled={!serverProxyEnabled} value={serverForm.agentProxyNodeId || ""} onChange={(e) => setServerForm({ ...serverForm, agentProxyNodeId: e.target.value, agentProxyInternal: false })}>
                           <option value="">直接连接面板（不使用代理）</option>
@@ -3129,13 +3248,13 @@ function App() {
                           <option value="internal">本机内网 IP</option>
                         </select>
                       </Field>}
-                    </div>
-                    <div className="serverFormWide">
+                    </div>}
+                    {serverForm.managementMode !== "external" && <div className="serverFormWide">
                       <Field label="Komari Agent token" help="从 Komari 面板取得此服务器的 Agent token。安装后由 MUI 面板自动下发；没有 token 就不会启动 Komari 监控。编辑时留空会保留原 token。">
                         <input type="password" autoComplete="off" placeholder={serverForm.komariTokenSet ? "已配置；留空保持不变" : "选填，留空不启动 Komari"} value={serverForm.komariToken || ""} onChange={(e) => setServerForm({ ...serverForm, komariToken: e.target.value || undefined })} />
                       </Field>
                       <div className="serverFieldHelp">{serverForm.komariTokenSet ? "已配置 token" : "未配置 token"}{serverForm.komariTokenSet && <button type="button" className="ghost" onClick={() => setServerForm({ ...serverForm, komariToken: "", komariTokenSet: false })}>清除 token</button>}</div>
-                    </div>
+                    </div>}
                   </div>
                 </section>
                 <section className="serverFormSection" aria-labelledby="server-network-title">
@@ -3157,13 +3276,13 @@ function App() {
                         }
                       />
                     </Field>
-                    <div className="serverToggleRow serverFormWide">
+                    {serverForm.managementMode !== "external" && <div className="serverToggleRow serverFormWide">
                       <label className="check">
                         <input type="checkbox" checked={!!serverForm.autoSyncPublicIp} onChange={(e) => setServerForm({ ...serverForm, autoSyncPublicIp: e.target.checked })} />
                         自动同步 Agent 检测到的公网 IPv4 / IPv6
                       </label>
                       <HelpTip label="自动同步公网 IP" text="适用于公网地址会变化的服务器。优先使用 Agent 检测到的公网地址；本机 IPv4 在 NAT 后且直接连接面板时，用面板看到的连接来源回填 IPv4。使用 SOCKS5 代理时不会把代理出口当成本机地址。暂时检测不到的地址不会清空。请确认出站地址也能接受客户端或链路入站连接；CGNAT 无法靠回填开放入站端口。" />
-                    </div>
+                    </div>}
                     <Field label="订阅与链路用域名">
                       <input
                         value={serverForm.domain || ""}
@@ -3181,15 +3300,15 @@ function App() {
                         }
                       />
                     </Field>
-                    {serverForm.managementMode !== "offline" && <div className="serverFormWide">
+                    {serverForm.managementMode === "online" && <div className="serverFormWide">
                       <Field label="节点默认出口网卡" help="仅控制这台服务器上 sing-box 节点的出口，节点可单独覆盖。修改后会重新应用配置并重启 sing-box；指定网卡不存在或未启用时，保留原配置并报错。">
                         <input maxLength={15} placeholder="留空使用系统路由，例如 ppp0" value={serverForm.outboundInterface || ""} onChange={(e) => setServerForm({ ...serverForm, outboundInterface: e.target.value })} />
                       </Field>
                       {!!serverForm.outboundInterface?.trim() && !!serverForm.agentVersion && !serverForm.outboundBindingSupport && <p className="serverFieldHelp dangerText">配置可保存；请先升级 Agent 至 0.6.12 后应用出口网卡设置。</p>}
                     </div>}
                     <div className="serverFormWide">
-                      <Field label="防火墙管理" help={manualFirewall(serverForm) ? "节点和转发可正常部署。面板不修改现有防火墙，端口放行及来源限制需自行配置。" : "由面板管理 UFW 规则，部署节点和转发前需初始化 UFW。"}>
-                        <select disabled={serverForm.managementMode === "offline"} value={serverForm.firewallMode || "ufw"} onChange={(e) => setServerForm({ ...serverForm, firewallMode: e.target.value as "ufw" | "manual" })}>
+                      <Field label="防火墙管理" help={serverForm.managementMode === "external" ? "卖家管理这台服务器的防火墙；面板不会修改端口或来源规则。" : manualFirewall(serverForm) ? "节点和转发可正常部署。面板不修改现有防火墙，端口放行及来源限制需自行配置。" : "由面板管理 UFW 规则，部署节点和转发前需初始化 UFW。"}>
+                        <select disabled={serverForm.managementMode !== "online"} value={serverForm.firewallMode || "ufw"} onChange={(e) => setServerForm({ ...serverForm, firewallMode: e.target.value as "ufw" | "manual" })}>
                           <option value="ufw">UFW 托管</option>
                           <option value="manual" disabled={!!serverForm.agentVersion && !serverForm.manualFirewallSupport && !manualFirewall(serverForm)}>手动管理（宿主机 / 安全组 / 其他防火墙）</option>
                         </select>
@@ -3265,12 +3384,14 @@ function App() {
                       onChange={(e) => setNodeForm({
                         ...nodeForm,
                         serverId: e.target.value,
+                        singleUser: servers.find((s) => s.id === e.target.value)?.managementMode === "external",
+                        direct: servers.find((s) => s.id === e.target.value)?.managementMode === "external" ? true : nodeForm.direct,
                         certificateId: nodeForm.protocol === "anytls"
                           ? nodeForm.certificateId || matchingCertificate(nodeForm.tlsName || "")
                           : "",
                       })}
                     >
-                      <option value="">选择中转或落地服务器</option>
+                      <option value="">选择中转、落地或外部节点服务器</option>
                       {servers.filter((s) => canHostNodes(s) || s.id === nodeForm.serverId).map((s) => (
                         <option key={s.id} value={s.id}>
                           {s.name}
@@ -3278,6 +3399,7 @@ function App() {
                       ))}
                     </select>
                   </Field>
+                  {!nodeForm.id && selectedNodeServer && !canHostNodes(selectedNodeServer) && <p className="hint">当前服务器不能创建节点；请选择在线中转、落地或外部节点服务器。</p>}
                   {!nodeForm.id && (
                     <Field label="节点模板">
                       <select
@@ -3330,7 +3452,7 @@ function App() {
                   </Field>
                   <div className="serverToggleRow nodeSingleUserRow">
                     <label className="check">
-                      <input type="checkbox" checked={!!nodeForm.singleUser} onChange={(e) => setNodeForm({ ...nodeForm, singleUser: e.target.checked })} />
+                      <input type="checkbox" checked={externalNode || !!nodeForm.singleUser} disabled={externalNode} onChange={(e) => setNodeForm({ ...nodeForm, singleUser: e.target.checked })} />
                       单用户（订阅共用节点原有凭据）
                     </label>
                     <HelpTip label="单用户" text="订阅和复制链接均使用节点的原有密码。流量只能按节点统计；停用或删除订阅不会使已导入客户端的节点凭据失效，需更换节点密码。" />
@@ -3345,18 +3467,18 @@ function App() {
                         value={nodeForm.port || ""}
                         onChange={(e) => setNodeForm({ ...nodeForm, port: Number(e.target.value) })}
                       />
-                      <button className="iconButton" type="button" title="随机端口（50000–60000）" aria-label="随机端口（50000–60000）" onClick={randomizeNodePort}><Icon name="dice" /></button>
+                      {!externalNode && <button className="iconButton" type="button" title="随机端口（50000–60000）" aria-label="随机端口（50000–60000）" onClick={randomizeNodePort}><Icon name="dice" /></button>}
                     </div>
                   </Field>
-                  <Field label="监听地址">
+                  {!externalNode && <Field label="监听地址">
                     <input
                       value={nodeForm.listen || ""}
                       onChange={(e) =>
                         setNodeForm({ ...nodeForm, listen: e.target.value })
                       }
                     />
-                  </Field>
-                  <Field label="发布地址覆盖">
+                  </Field>}
+                  <Field label={externalNode ? "节点地址覆盖（与服务器地址不同时填写）" : "发布地址覆盖"}>
                     <input
                       value={nodeForm.publishAddress || ""}
                       onChange={(e) =>
@@ -3367,26 +3489,26 @@ function App() {
                       }
                     />
                   </Field>
-                  <Field label="节点出口">
+                  {!externalNode && <Field label="节点出口">
                     <select aria-label="节点出口" value={nodeForm.outboundMode || "inherit"} onChange={(e) => setNodeForm({ ...nodeForm, outboundMode: e.target.value as Node["outboundMode"], outboundInterface: "" })}>
                       <option value="inherit">继承服务器（{servers.find((s) => s.id === nodeForm.serverId)?.outboundInterface || "系统路由"}）</option>
                       <option value="system">使用系统路由</option>
                       <option value="interface">指定出口网卡</option>
                     </select>
                     <small>仅影响此节点的 sing-box 流量及 ShadowTLS 握手，不改变 Agent 或端口转发的出口。</small>
-                  </Field>
-                  {nodeForm.outboundMode === "interface" && <Field label="出口网卡 *">
+                  </Field>}
+                  {!externalNode && nodeForm.outboundMode === "interface" && <Field label="出口网卡 *">
                     <input required maxLength={15} placeholder="例如 ppp0、eth0" value={nodeForm.outboundInterface || ""} onChange={(e) => setNodeForm({ ...nodeForm, outboundInterface: e.target.value })} />
                     <small>须为目标服务器已启用的网卡；不可用时应用失败，不自动改用其他出口。</small>
                   </Field>}
-                  {(nodeForm.outboundMode === "interface" || ((nodeForm.outboundMode || "inherit") === "inherit" && !!servers.find((s) => s.id === nodeForm.serverId)?.outboundInterface)) && !servers.find((s) => s.id === nodeForm.serverId)?.outboundBindingSupport && <p className="hint dangerText">配置可保存；需升级 Agent 至 0.6.12 后应用出口网卡设置。</p>}
+                  {!externalNode && (nodeForm.outboundMode === "interface" || ((nodeForm.outboundMode || "inherit") === "inherit" && !!servers.find((s) => s.id === nodeForm.serverId)?.outboundInterface)) && !servers.find((s) => s.id === nodeForm.serverId)?.outboundBindingSupport && <p className="hint dangerText">配置可保存；需升级 Agent 至 0.6.12 后应用出口网卡设置。</p>}
                   <Field label="访问方式">
                     <label className="check">
                       <input type="checkbox" checked={!!nodeForm.direct} onChange={(e) => setNodeForm({ ...nodeForm, direct: e.target.checked })} />
                       允许直连（可直接加入订阅）
                     </label>
                   </Field>
-                  {nodeForm.direct && <Field label="节点端口 UFW 规则">
+                  {nodeForm.direct && !externalNode && <Field label="节点端口 UFW 规则">
                     <select
                       value={manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) ? "manual" : nodeForm.firewallPolicy || "all"}
                       disabled={manualFirewall(servers.find((s) => s.id === nodeForm.serverId))}
@@ -3441,25 +3563,25 @@ function App() {
                           <option value={6}>v6</option><option value={5}>v5</option>
                         </select>
                         {(nodeForm.snellVersion || 5) === 6 && <small>PSK 需要 12–255 字节；使用默认流量整形，不使用 HTTP 混淆。</small>}
-                        {(nodeForm.snellVersion || 5) === 6 && nodeForm.serverId && !servers.find((s) => s.id === nodeForm.serverId)?.snellV6 && <small className="dangerText">需升级 Agent 至 0.6.11 后应用 v6 配置。</small>}
+                        {(nodeForm.snellVersion || 5) === 6 && nodeForm.serverId && !externalNode && !servers.find((s) => s.id === nodeForm.serverId)?.snellV6 && <small className="dangerText">需升级 Agent 至 0.6.11 后应用 v6 配置。</small>}
                       </Field>
-                      <Field label="Snell 内层端口 *">
+                      {!externalNode && <Field label="Snell 内层端口 *">
                         <input required type="number" min={1} max={65535} value={nodeForm.snellPort || ""} onChange={(e) => setNodeForm({ ...nodeForm, snellPort: Number(e.target.value) })} />
                         <small>固定监听 127.0.0.1，不对公网开放；须与其他监听端口不同。</small>
                         {nodeForm.serverId && !servers.find((s) => s.id === nodeForm.serverId)?.snellFixedPort && <small className="dangerText">配置可保存；需升级 Agent 至 0.6.2 或更高版本后才会应用固定内层端口。</small>}
-                      </Field>
+                      </Field>}
                       {(nodeForm.snellVersion || 5) === 5 && <Field label="混淆模式">
                         <select value={nodeForm.obfs || "none"} onChange={(e) => setNodeForm({ ...nodeForm, obfs: e.target.value })}>
                           <option value="none">无</option>
                           <option value="http">HTTP</option>
                         </select>
                       </Field>}
-                      <Field label="ShadowTLS v3 SNI / 握手域名 *">
-                        <input required placeholder="例如 www.example.com（TLS 站点）" value={nodeForm.shadowTlsHost || ""} onChange={(e) => { clearSelectedTemplate(); setNodeForm({ ...nodeForm, shadowTlsHost: e.target.value }); }} />
+                      <Field label={externalNode ? "ShadowTLS v3 SNI / 握手域名（卖家有提供时填写）" : "ShadowTLS v3 SNI / 握手域名 *"}>
+                        <input required={!externalNode} placeholder="例如 www.example.com（TLS 站点）" value={nodeForm.shadowTlsHost || ""} onChange={(e) => { clearSelectedTemplate(); setNodeForm({ ...nodeForm, shadowTlsHost: e.target.value }); }} />
                       </Field>
-                      <Field label={nodeForm.id ? "ShadowTLS v3 密码（留空不修改）" : selectedTemplate ? "ShadowTLS v3 密码（已填入，可修改）" : "ShadowTLS v3 密码（留空生成）"}>
-                        <SecretField value={nodeForm.shadowTlsPassword || ""} onChange={(v) => setNodeForm({ ...nodeForm, shadowTlsPassword: v })} action={<button className="iconButton" type="button" title="生成 ShadowTLS 密码" aria-label="生成 ShadowTLS 密码" onClick={() => setNodeForm({ ...nodeForm, shadowTlsPassword: generatePassword("snell") })}><Icon name="generate" /></button>} />
-                      </Field>
+                      {(!externalNode || !!nodeForm.shadowTlsHost) && <Field label={externalNode ? nodeForm.id ? "卖家提供的 ShadowTLS 密码（留空不修改）" : "卖家提供的 ShadowTLS 密码 *" : nodeForm.id ? "ShadowTLS v3 密码（留空不修改）" : selectedTemplate ? "ShadowTLS v3 密码（已填入，可修改）" : "ShadowTLS v3 密码（留空生成）"}>
+                        <SecretField value={nodeForm.shadowTlsPassword || ""} onChange={(v) => setNodeForm({ ...nodeForm, shadowTlsPassword: v })} action={externalNode ? undefined : <button className="iconButton" type="button" title="生成 ShadowTLS 密码" aria-label="生成 ShadowTLS 密码" onClick={() => setNodeForm({ ...nodeForm, shadowTlsPassword: generatePassword("snell") })}><Icon name="generate" /></button>} />
+                      </Field>}
                     </>
                   )}
                   {nodeForm.protocol === "anytls" && (
@@ -3477,7 +3599,7 @@ function App() {
                           }
                         />
                       </Field>
-                      <Field label="证书 *">
+                      {!externalNode && <Field label="证书 *">
                         <select
                           required
                           value={nodeForm.certificateId || ""}
@@ -3496,17 +3618,17 @@ function App() {
                               </option>
                             ))}
                         </select>
-                      </Field>
+                      </Field>}
                     </>
                   )}
                   <Field
                     label={
                       nodeForm.id
                         ? "新密码（留空不修改）"
-                        : selectedTemplate ? "密码 / PSK（已填入，可修改）" : "密码 / PSK（留空生成）"
+                        : externalNode ? "卖家提供的密码 / PSK *" : selectedTemplate ? "密码 / PSK（已填入，可修改）" : "密码 / PSK（留空生成）"
                     }
                   >
-                    <SecretField value={nodeForm.password || ""} onChange={(v) => setNodeForm({ ...nodeForm, password: v })} action={<button className="iconButton" type="button" title="生成密码 / PSK" aria-label="生成密码 / PSK" onClick={() => setNodeForm({ ...nodeForm, password: generatePassword(nodeForm.protocol || "ss", nodeForm.method) })}><Icon name="generate" /></button>} />
+                    <SecretField value={nodeForm.password || ""} onChange={(v) => setNodeForm({ ...nodeForm, password: v })} action={externalNode ? undefined : <button className="iconButton" type="button" title="生成密码 / PSK" aria-label="生成密码 / PSK" onClick={() => setNodeForm({ ...nodeForm, password: generatePassword(nodeForm.protocol || "ss", nodeForm.method) })}><Icon name="generate" /></button>} />
                   </Field>
                   {nodeForm.id && (
                     <Field label="状态">
@@ -3526,26 +3648,25 @@ function App() {
                     </Field>
                   )}
                 </div>
-                <p className="hint">
-                  节点连接配置改变时会重启 sing-box；只修改 UFW 放行来源不会重启。
-                </p>
+                <p className="hint">{externalNode ? "外部节点由卖家运行。面板仅保存连接信息用于订阅和链路，不会修改卖家服务器，也无法确认实时连通和流量。请填写卖家提供的原始端口、协议和密码。" : "节点连接配置改变时会重启 sing-box；只修改 UFW 放行来源不会重启。"}</p>
                 {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && nodeForm.firewallPolicy === "restricted" && <p className="hint">Agent 0.6.14 起，节点来源限制优先于主机已有的同端口 UFW 规则；其他来源会被拒绝。</p>}
                 {!manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && nodeForm.firewallPolicy === "manual" && <p className="hint">手动管理模式不会开放节点端口，请先在自定义规则中添加需要的允许来源。</p>}
-                {manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && <p className="hint">该服务器的防火墙由外部管理。允许直连开关仅决定能否加入直连订阅；实际端口放行、来源白名单和仅链路访问限制请自行配置。</p>}
+                {manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) && !externalNode && <p className="hint">该服务器的防火墙由外部管理。允许直连开关仅决定能否加入直连订阅；实际端口放行、来源白名单和仅链路访问限制请自行配置。</p>}
                 {nodeForm.protocol === "socks5" && !!servers.find((s) => s.id === nodeForm.serverId)?.agentVersion && !servers.find((s) => s.id === nodeForm.serverId)?.agentProxySupport && <div className="banner warning" role="status">配置可以保存；请先将服务器 Agent 升级至 0.6.10，之后才会应用 SOCKS5 节点。</div>}
                 {nodeFirewallUnsupported && <div className="banner warning" role="status">可以保存配置，但该服务器的 Agent 尚未上报支持新规则。更新 Agent 前不会应用此配置，现有 UFW 放行规则仍然生效。</div>}
                 {nodeCoreMissing && <div className="banner warning" role="status">
                   <p>该服务器需要先安装 sing-box，安装成功后即可创建节点。</p>
-                  <button type="button" className="ghost" disabled={!selectedNodeServer?.coreSelfUpdate || !coreReleases[selectedNodeServer?.arch || ""] || nodeCoreInstalling}
+                  <button type="button" className="ghost" disabled={!selectedNodeServer?.coreSelfUpdate || !!agentReleases.releaseVersion && !supportsGitHubUpgrade(selectedNodeServer?.agentVersion || "") || !coreReleases[selectedNodeServer?.arch || ""] || nodeCoreInstalling}
                     onClick={() => act(() => mutation("/api/servers/" + nodeForm.serverId + "/core/upgrade", "POST"), "sing-box 安装已排队；点击刷新安装状态，完成后提交节点")}>{nodeCoreInstalling ? "sing-box 安装或升级进行中" : "安装 sing-box"}</button>
                   <button type="button" className="ghost" disabled={refreshing} onClick={() => void refresh(true)}>{refreshing ? "刷新中…" : "刷新安装状态"}</button>
                   {!selectedNodeServer?.coreSelfUpdate && <p>请先接入支持核心安装的 Agent。</p>}
-                  {!!selectedNodeServer?.coreSelfUpdate && !coreReleases[selectedNodeServer?.arch || ""] && <p>面板缺少该架构的 sing-box 发布文件。</p>}
+                  {!!agentReleases.releaseVersion && !!selectedNodeServer?.coreSelfUpdate && !supportsGitHubUpgrade(selectedNodeServer.agentVersion || "") && <p>先用新版接入命令重装 Agent，才能从 GitHub 安装 sing-box。</p>}
+                  {!!selectedNodeServer?.coreSelfUpdate && !coreReleases[selectedNodeServer?.arch || ""] && <p>该架构的 sing-box 发布文件不可用。</p>}
                 </div>}
-                {nodeForm.protocol === "socks5" && <p className="hint">SOCKS5 支持 TCP，强制用户名密码认证，服务器必须启用 UFW。所有在线服务器的 Agent 均可独立使用此节点，无需打开“允许直连”，面板会为它的来源 IP 自动添加放行规则。仅在可信网络中使用，SOCKS5 本身不加密。</p>}
-                {nodeForm.protocol === "socks5" && (manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) || servers.find((s) => s.id === nodeForm.serverId)?.ufwStatus !== "active") && <div className="banner warning" role="status">请先将该服务器设置为 UFW 托管，并在服务器列表安全初始化防火墙，再提交 SOCKS5 节点。</div>}
+                {nodeForm.protocol === "socks5" && !externalNode && <p className="hint">SOCKS5 支持 TCP，强制用户名密码认证，服务器必须启用 UFW。所有在线服务器的 Agent 均可独立使用此节点，无需打开“允许直连”，面板会为它的来源 IP 自动添加放行规则。仅在可信网络中使用，SOCKS5 本身不加密。</p>}
+                {nodeForm.protocol === "socks5" && !externalNode && (manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) || servers.find((s) => s.id === nodeForm.serverId)?.ufwStatus !== "active") && <div className="banner warning" role="status">请先将该服务器设置为 UFW 托管，并在服务器列表安全初始化防火墙，再提交 SOCKS5 节点。</div>}
                 {templateLoading && <p className="hint">正在读取模板密码…</p>}
-                <button className="primary submit" disabled={templateLoading || nodeCoreMissing || (nodeForm.protocol === "socks5" && (manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) || servers.find((s) => s.id === nodeForm.serverId)?.ufwStatus !== "active"))}>提交配置</button>
+                <button className="primary submit" disabled={templateLoading || nodeCoreMissing || !!selectedNodeServer && !canHostNodes(selectedNodeServer) || (!externalNode && nodeForm.protocol === "socks5" && (manualFirewall(servers.find((s) => s.id === nodeForm.serverId)) || servers.find((s) => s.id === nodeForm.serverId)?.ufwStatus !== "active"))}>提交配置</button>
               </form>
             )}
             {modal === "template" && (
@@ -3690,7 +3811,9 @@ function App() {
               ]);
               const connectionSettings = (
                 senderIds: string[], receiverIds: string[], internal: boolean, sourceMode: RouteSourceMode | undefined,
+                sourceFamily: RouteSourceFamily | undefined,
                 setInternal: (value: boolean) => void, setSource: (value: RouteSourceMode) => void,
+                setFamily: (value: RouteSourceFamily | undefined) => void,
               ) => {
                 const senders = servers.filter((s) => senderIds.includes(s.id));
                 const receivers = servers.filter((s) => receiverIds.includes(s.id));
@@ -3699,8 +3822,11 @@ function App() {
                 const targets = receivers.map(targetAddress);
                 const useV4 = targets.some((v) => !v || !v.includes(":"));
                 const useV6 = targets.some((v) => !v || v.includes(":") || !/^\d+\.\d+\.\d+\.\d+$/.test(v));
-                const sourceAddresses = (s: Server) => sourceInternal ? s.internalAddress || "未填写内网 IP" :
-                  [...new Set([...(useV4 ? [s.ipv4, s.detectedIpv4] : []), ...(useV6 ? [s.ipv6, s.detectedIpv6] : [])].filter(Boolean))].join("、") || "未填写可用的公网 IP";
+                const allowV4 = useV4 && sourceFamily !== "ipv6";
+                const allowV6 = useV6 && sourceFamily !== "ipv4";
+                const sourceAddresses = (s: Server) => sourceInternal
+                  ? (s.internalAddress && (s.internalAddress.includes(":") ? allowV6 : allowV4) ? s.internalAddress : "未填写匹配地址族的内网 IP")
+                  : [...new Set([...(allowV4 ? [s.ipv4, s.detectedIpv4] : []), ...(allowV6 ? [s.ipv6, s.detectedIpv6] : [])].filter(Boolean))].join("、") || "未填写匹配地址族的公网 IP";
                 const managed = !receivers.length || receivers.some((s) => !manualFirewall(s));
                 return (
                   <fieldset className="routeConnection">
@@ -3714,11 +3840,19 @@ function App() {
                         {receivers.map((s) => <small className="connectionAddress" key={s.id}>{s.name}：{targetAddress(s) || "未填写该地址"}</small>)}
                       </Field>
                       <Field label="防火墙来源：放行发送方的哪个 IP？">
-                        <select disabled={!managed} value={sourceMode || "auto"} onChange={(e) => setSource(e.target.value as RouteSourceMode)}>
-                          <option value="auto">自动（{internal ? "发送方内网 IP" : "发送方公网 IP"}）</option>
-                          <option value="public">发送方公网 IP</option>
-                          <option value="internal">发送方内网 IP</option>
-                        </select>
+                        <div className="routeSourceSelectors">
+                          <select disabled={!managed} value={sourceMode || "auto"} onChange={(e) => setSource(e.target.value as RouteSourceMode)}>
+                            <option value="auto">自动（{internal ? "发送方内网 IP" : "发送方公网 IP"}）</option>
+                            <option value="public">发送方公网 IP</option>
+                            <option value="internal">发送方内网 IP</option>
+                          </select>
+                          <select aria-label="防火墙来源地址族" disabled={!managed} value={sourceFamily || ""} onChange={(e) => setFamily(e.target.value ? e.target.value as RouteSourceFamily : undefined)}>
+                            {routeForm.id && <option value="">原设置（按连接地址）</option>}
+                            <option value="ipv4">IPv4（默认）</option>
+                            <option value="ipv6">IPv6</option>
+                            <option value="both">IPv4 + IPv6</option>
+                          </select>
+                        </div>
                         {managed ? senders.map((s) => <small className="connectionAddress" key={s.id}>{s.name}：{sourceAddresses(s)}</small>) : <small className="connectionAddress">接收方防火墙为手动管理，请自行放行。</small>}
                       </Field>
                     </div>
@@ -3772,18 +3906,20 @@ function App() {
                             ))}
                           </div>
                           {connectionSettings(i === 0 ? [routeForm.entryServerId || ""] : hops[i - 1].serverIds, hop.serverIds,
-                            !!hop.internal, hop.sourceMode, (internal) => setHop(i, { internal }), (sourceMode) => setHop(i, { sourceMode }))}
+                            !!hop.internal, hop.sourceMode, hop.sourceFamily,
+                            (internal) => setHop(i, { internal }), (sourceMode) => setHop(i, { sourceMode }), (sourceFamily) => setHop(i, { sourceFamily }))}
                         </div>
                       ))}
-                      <button type="button" onClick={() => setRouteForm({ ...routeForm, hops: [...hops, { serverIds: [], balance: "failover", internal: false }] })}>添加一跳</button>
+                      <button type="button" onClick={() => setRouteForm({ ...routeForm, hops: [...hops, { serverIds: [], balance: "failover", internal: false, sourceFamily: "ipv4" }] })}>添加一跳</button>
                     </div>
                   </div>
                   <h3 className="routeExitTitle">连接落地</h3>
                   {connectionSettings(hops.length ? hops[hops.length - 1].serverIds : [routeForm.entryServerId || ""], node ? [node.serverId] : [],
-                    !!routeForm.nodeInternal, routeForm.nodeSourceMode,
-                    (nodeInternal) => setRouteForm({ ...routeForm, nodeInternal }), (nodeSourceMode) => setRouteForm({ ...routeForm, nodeSourceMode }))}
+                    !!routeForm.nodeInternal, routeForm.nodeSourceMode, routeForm.nodeSourceFamily,
+                    (nodeInternal) => setRouteForm({ ...routeForm, nodeInternal }), (nodeSourceMode) => setRouteForm({ ...routeForm, nodeSourceMode }),
+                    (nodeSourceFamily) => setRouteForm({ ...routeForm, nodeSourceFamily }))}
                   <p className="hint">一跳选多台服务器即为负载均衡组：主备优先用第一台可用的，轮询把新连接轮流分配；故障服务器自动停用，恢复后自动启用。</p>
-                  <p className="hint">例如入口通过专线访问中转的公网地址：连接地址选“接收方公网地址”，防火墙来源选“发送方内网 IP”。普通公网互连保留“接收方公网地址 + 自动”即可。</p>
+                  <p className="hint">例如入口通过专线访问中转的公网地址：连接地址选“接收方公网地址”，防火墙来源选“发送方内网 IP”。新建链路默认只放行 IPv4；需要 IPv6 时单独选择，地址族不会改变发送方的出口或 DNS 解析。</p>
                   <button className="primary submit">保存链路</button>
                 </form>
               );
@@ -3791,7 +3927,7 @@ function App() {
             {modal === "forward" && (
               <form onSubmit={submitForward}>
                 <div className="formGrid">
-                  <Field label="服务器 *"><select required value={forwardForm.serverId || ""} disabled={!!forwardForm.id} onChange={(e) => setForwardForm({ ...forwardForm, serverId: e.target.value })}><option value="">选择服务器</option>{servers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
+                  <Field label="服务器 *"><select required value={forwardForm.serverId || ""} disabled={!!forwardForm.id} onChange={(e) => setForwardForm({ ...forwardForm, serverId: e.target.value })}><option value="">选择服务器</option>{servers.filter((s) => s.managementMode !== "external" || s.id === forwardForm.serverId).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></Field>
                   <Field label="名称 *"><input required maxLength={100} value={forwardForm.name || ""} onChange={(e) => setForwardForm({ ...forwardForm, name: e.target.value })} /></Field>
                   <Field label="协议"><select value={forwardForm.network || "tcp"} onChange={(e) => setForwardForm({ ...forwardForm, network: e.target.value as ForwardRule["network"], healthCheck: "" })}><option value="tcp">TCP</option><option value="udp">UDP</option><option value="tcp+udp">TCP + UDP</option></select></Field>
                   <Field label="监听 IP"><input required value={forwardForm.listen || ""} onChange={(e) => setForwardForm({ ...forwardForm, listen: e.target.value })} placeholder="0.0.0.0" /></Field>
@@ -3850,6 +3986,7 @@ function App() {
                     >
                       <option value="tcp">TCP</option>
                       <option value="udp">UDP</option>
+                      {ruleForm.replaceHostRule && <option value="tcp+udp">TCP + UDP（保存为两条规则）</option>}
                     </select>
                   </Field>
                   <Field label="地址族">
@@ -3921,7 +4058,7 @@ function App() {
                   </Field>
                 </div>
                 <p className="hint">填写来源 IP / CIDR 时，规则只作用于该来源所属的地址族，所选地址族须与来源一致。</p>
-                {ruleForm.replaceHostRule && <p className="hint">保存后先删除主机上的这一条原规则（同端口的另一地址族规则不受影响）：<span className="mono">{ruleForm.replaceHostRule}</span>，再由面板创建上面的规则并在以后管理它。</p>}
+                {ruleForm.replaceHostRule && <p className="hint">保存后先删除主机上的这一条原规则（同端口的另一地址族规则不受影响）：<span className="mono">{ruleForm.replaceHostRule}</span>，再由面板创建上面的规则并在以后管理它。TCP + UDP 会创建两条可分别编辑的规则。</p>}
                 <button className="primary submit">{ruleForm.id ? "保存修改" : "提交规则"}</button>
               </form>
             )}
@@ -4270,6 +4407,7 @@ const statusLabels: Record<string, [string, "good" | "bad" | "warn" | "idle"]> =
     success: ["成功", "good"],
     offline: ["离线", "bad"],
     "offline-managed": ["离线管理", "idle"],
+    external: ["外部节点", "idle"],
     "offline-export-pending": ["配置待导出", "warn"],
     "offline-disable-export-pending": ["停用待导出", "warn"],
     "offline-delete-pending": ["删除待导出", "warn"],
@@ -4284,6 +4422,9 @@ const statusLabels: Record<string, [string, "good" | "bad" | "warn" | "idle"]> =
     queued: ["排队中", "warn"],
     running: ["执行中", "warn"],
     activating: ["等待新版上线", "warn"],
+    upgrading: ["升级中", "warn"],
+    updating: ["更新中", "warn"],
+    revoked: ["已吊销", "bad"],
     deleting: ["删除中", "warn"],
     inactive: ["未启用", "warn"],
     manual: ["手动管理", "idle"],

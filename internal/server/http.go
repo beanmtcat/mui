@@ -33,6 +33,7 @@ import (
 	"mui/internal/shared"
 
 	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/sync/singleflight"
 )
 
 type rateBucket struct {
@@ -40,10 +41,17 @@ type rateBucket struct {
 	Reset time.Time
 }
 type App struct {
-	Store       *Store
-	PublicURL   string
-	publicURLs  []*url.URL
-	agentBinDir string
+	Store             *Store
+	PublicURL         string
+	publicURLs        []*url.URL
+	agentBinDir       string
+	releaseVersion    string
+	releaseMu         sync.Mutex
+	releaseCache      map[string]githubReleaseCacheEntry
+	releaseFlights    singleflight.Group
+	releaseClient     *http.Client
+	releaseTimeout    time.Duration
+	releaseFailureTTL time.Duration
 	// mu serialises mutating admin requests. Agent traffic uses per-server
 	// locks instead (see lockServer), so one slow agent report no longer
 	// blocks every admin write and every other agent.
@@ -71,6 +79,9 @@ type App struct {
 
 //go:embed install-agent.sh
 var installAgentScript []byte
+
+//go:embed uninstall-agent.sh
+var uninstallAgentScript []byte
 
 func NewApp(s *Store, publicURL string) (*App, error) {
 	publicURLs, err := parsePublicURLs(publicURL)
@@ -109,6 +120,15 @@ func NewApp(s *Store, publicURL string) (*App, error) {
 		binDir = "bin"
 	}
 	app := &App{Store: s, PublicURL: publicURLs[0].String(), publicURLs: publicURLs, agentBinDir: binDir, rates: map[string]rateBucket{}, downloads: make(chan struct{}, 4), serverLocks: map[string]*sync.Mutex{}, nonces: map[string]time.Time{}, downloadsByIP: map[string]int{}}
+	if version := strings.TrimSpace(os.Getenv("MUI_AGENT_RELEASE_VERSION")); version != "" {
+		if _, err := shared.GitHubReleaseArchive(version, "amd64"); err != nil {
+			return nil, fmt.Errorf("MUI_AGENT_RELEASE_VERSION: %w", err)
+		}
+		if !supportsGitHubRelease(version) {
+			return nil, errors.New("MUI_AGENT_RELEASE_VERSION requires Agent 0.6.19 or newer")
+		}
+		app.releaseVersion = version
+	}
 	if _, err := s.EnsurePanelSigningKey(); err != nil {
 		return nil, fmt.Errorf("panel signing key: %w", err)
 	}
@@ -118,6 +138,9 @@ func NewApp(s *Store, publicURL string) (*App, error) {
 			return nil, fmt.Errorf("MUI_RELEASE_PUBLIC_KEY: %w", err)
 		}
 		app.releaseKey, app.releaseKeyB64 = key, encoded
+	}
+	if app.releaseVersion != "" && app.releaseKey == nil {
+		return nil, errors.New("MUI_AGENT_RELEASE_VERSION requires MUI_RELEASE_PUBLIC_KEY so GitHub downloads are verified")
 	}
 	for _, item := range strings.Split(os.Getenv("MUI_TRUSTED_PROXIES"), ",") {
 		item = strings.TrimSpace(item)
@@ -143,6 +166,9 @@ func NewApp(s *Store, publicURL string) (*App, error) {
 	// agent report retries the sync.
 	if err := app.syncRoutes(); err != nil {
 		log.Printf("reconcile routes: %v", err)
+	}
+	if app.releaseVersion != "" {
+		app.prefetchGitHubReleases()
 	}
 	return app, nil
 }
@@ -315,6 +341,7 @@ func (a *App) rateCount(r *http.Request, scope string, add int) int {
 func (a *App) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /download/install.sh", a.downloadInstallScript)
+	mux.HandleFunc("GET /download/uninstall.sh", a.downloadUninstallScript)
 	mux.HandleFunc("GET /download/{arch}/{file}", a.downloadAgentFile)
 	mux.HandleFunc("POST /api/login", a.login)
 	mux.HandleFunc("POST /api/logout", a.require(a.logout))
@@ -325,6 +352,10 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/password", a.require(a.changePassword))
 	mux.HandleFunc("GET /api/settings/komari", a.require(a.komariSetting))
 	mux.HandleFunc("PUT /api/settings/komari", a.require(a.komariSetting))
+	mux.HandleFunc("GET /api/help", a.require(a.helpArticles))
+	mux.HandleFunc("POST /api/help", a.require(a.helpArticles))
+	mux.HandleFunc("PATCH /api/help/{id}", a.require(a.helpArticleByID))
+	mux.HandleFunc("DELETE /api/help/{id}", a.require(a.helpArticleByID))
 	mux.HandleFunc("GET /api/servers", a.require(a.servers))
 	mux.HandleFunc("POST /api/servers", a.require(a.servers))
 	mux.HandleFunc("PATCH /api/servers/{id}", a.require(a.serverByID))
@@ -403,10 +434,20 @@ func (a *App) downloadInstallScript(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(installAgentScript)
 }
 
+func (a *App) downloadUninstallScript(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(uninstallAgentScript)
+}
+
 // timeoutWriter aborts a download whose total time exceeds the deadline.
 // ServeContent stops on the first write error, so a stalled transfer cannot
 // hold a download slot forever.
 func (a *App) downloadAgentFile(w http.ResponseWriter, r *http.Request) {
+	if a.releaseVersion != "" {
+		http.NotFound(w, r)
+		return
+	}
 	arch, name := r.PathValue("arch"), r.PathValue("file")
 	if arch != "amd64" && arch != "arm64" || name != "mui-agent" && name != "sing-box" && name != "SHA256SUMS" && name != "SHA256SUMS.sig" {
 		http.NotFound(w, r)
@@ -505,15 +546,26 @@ func (a *App) installCommandAt(publicURL, serverID, token string, server shared.
 	if proxyPrelude != "" {
 		curlProxy = " --config \"$mui_proxy_dir/curl.conf\""
 	}
+	installerURL := publicURL + "/download/install.sh"
 	command := "(\nset -eu\numask 077\n" +
 		"if [ \"$(id -u)\" -eq 0 ]; then\n  set -- sh\n" +
 		"elif command -v sudo >/dev/null 2>&1; then\n  set -- sudo sh\n" +
 		"else\n  printf '%s\\n' '当前用户不是 root，且未安装 sudo；请切换到 root 后重新执行接入命令。' >&2\n  exit 1\nfi\n" +
 		"mui_installer=$(mktemp)\n" +
 		"trap 'rm -f \"$mui_installer\"' EXIT HUP INT TERM\n" + proxyPrelude +
-		"curl -fsSL" + curlProxy + " " + shellQuote(publicURL+"/download/install.sh") + " -o \"$mui_installer\"\n" +
+		"curl -fsSL" + curlProxy + " " + shellQuote(installerURL) + " -o \"$mui_installer\"\n" +
 		"\"$@\" \"$mui_installer\" " + shellQuote(publicURL) +
 		" " + shellQuote(serverID) + " - " + shellQuote(purpose)
+	if a.releaseVersion != "" {
+		command += " " + shellQuote(a.releaseKeyB64)
+		if proxyPrelude != "" {
+			command += " \"$mui_proxy_dir\""
+		} else {
+			command += " ''"
+		}
+		command += " " + shellQuote(a.releaseVersion)
+		return command + " <<'MUI_ENROLLMENT_TOKEN'\n" + token + "\nMUI_ENROLLMENT_TOKEN\n)"
+	}
 	if a.releaseKeyB64 != "" || proxyPrelude != "" {
 		command += " " + shellQuote(a.releaseKeyB64)
 	}
@@ -711,16 +763,24 @@ func (a *App) agentAuth(next http.HandlerFunc) http.HandlerFunc {
 		token := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		var hash string
 		var signs int64
-		if id == "" || token == "" || a.Store.DB.QueryRow(`SELECT agent_hash,agent_signs FROM mui_servers WHERE id=$1`, id).Scan(&hash, &signs) != nil || hash == "" {
+		if id == "" || token == "" || a.Store.DB.QueryRow(`SELECT agent_hash,agent_signs FROM mui_servers WHERE id=$1`, id).Scan(&hash, &signs) != nil {
 			errorJSON(w, 401, "agent authentication failed")
+			return
+		}
+		if hash == "" {
+			if srv, err := a.Store.Server(id); err == nil && srv.Status == "revoked" {
+				errorJSON(w, http.StatusGone, "agent credential revoked; stop contacting this panel")
+			} else {
+				errorJSON(w, 401, "agent authentication failed")
+			}
 			return
 		}
 		if !hmac.Equal([]byte(hash), []byte(Hash(token))) {
 			errorJSON(w, 401, "agent authentication failed")
 			return
 		}
-		if srv, err := a.Store.Server(id); err != nil || shared.OfflineManaged(srv) {
-			errorJSON(w, 403, "离线管理服务器不接收在线 Agent 请求")
+		if srv, err := a.Store.Server(id); err != nil || shared.NoAgentManaged(srv) {
+			errorJSON(w, 403, "该服务器不接收在线 Agent 请求")
 			return
 		}
 		// A signed request is always verified. An unsigned one is accepted
@@ -1068,13 +1128,17 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, err.Error())
 		return
 	}
+	if shared.ExternalManaged(srv) && komariToken != "" {
+		errorJSON(w, 400, "外部节点服务器不运行 Komari Agent")
+		return
+	}
 	if err := a.validateAgentProxySelection(srv); err != nil {
 		errorJSON(w, 409, err.Error())
 		return
 	}
 	token := Token()
 	enrollHash, enrollExpires := Hash(token), time.Now().Add(10*time.Minute).Unix()
-	if shared.OfflineManaged(srv) {
+	if shared.NoAgentManaged(srv) {
 		token, enrollHash, enrollExpires = "", "", 0
 	}
 	_, err = a.Store.DB.Exec(`INSERT INTO mui_servers(id,data,enroll_hash,enroll_expires) VALUES($1,$2,$3,$4)`, srv.ID, Marshal(srv), enrollHash, enrollExpires)
@@ -1098,7 +1162,7 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	publicURL := a.publicURLForRequest(r)
-	if shared.OfflineManaged(srv) {
+	if shared.NoAgentManaged(srv) {
 		writeJSON(w, 201, map[string]any{"server": srv})
 		return
 	}
@@ -1108,8 +1172,14 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 // serverStatus derives what the stored status cannot express: a server that
 // stopped reporting is offline, whatever its last report said.
 func serverStatus(s shared.Server) string {
+	if shared.ExternalManaged(s) {
+		return "external"
+	}
 	if shared.OfflineManaged(s) {
 		return "offline-managed"
+	}
+	if s.Status == "revoked" {
+		return "revoked"
 	}
 	if s.LastSeen == nil {
 		return "pending"
@@ -1255,13 +1325,70 @@ func (a *App) dropFromSubscriptions(nodeIDs []string) error {
 
 func (a *App) revokeAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	result, err := a.Store.DB.Exec(`UPDATE mui_servers SET agent_hash='',enroll_hash='',enroll_expires=0 WHERE id=$1`, id)
+	unlock := a.lockServer(id)
+	defer unlock()
+	server, err := a.Store.Server(id)
+	if err != nil {
+		errorJSON(w, 404, "服务器不存在")
+		return
+	}
+	server.Status = "revoked"
+	server.LastSeen = nil
+	tx, err := a.Store.DB.Begin()
+	if err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE mui_servers SET data=$1,agent_hash='',agent_signs=0,enroll_hash='',enroll_expires=0 WHERE id=$2`, Marshal(server), id)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
 	}
 	if n, _ := result.RowsAffected(); n == 0 {
 		errorJSON(w, 404, "服务器不存在")
+		return
+	}
+	rows, err := tx.Query(`SELECT id,data FROM mui_operations WHERE server_id=$1 AND (claimed_at>=0 OR state<>'')`, id)
+	if err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
+	type unfinished struct {
+		id string
+		op shared.Operation
+	}
+	var pending []unfinished
+	for rows.Next() {
+		var item unfinished
+		var raw string
+		if err = rows.Scan(&item.id, &raw); err == nil {
+			err = json.Unmarshal([]byte(raw), &item.op)
+		}
+		if err != nil {
+			break
+		}
+		if item.op.Status == "queued" || item.op.Status == "running" || item.op.Status == "activating" {
+			pending = append(pending, item)
+		}
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
+	for _, item := range pending {
+		item.op.Status, item.op.Error, item.op.UpdatedAt = "superseded", "Agent 凭据已吊销", time.Now()
+		if _, err = tx.Exec(`UPDATE mui_operations SET data=$1,state='',claimed_at=-1 WHERE id=$2`, Marshal(item.op), item.id); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		errorJSON(w, 500, err.Error())
 		return
 	}
 	a.auditRequest(r, "agent.revoke", id, "")
@@ -1340,6 +1467,10 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if in.ManagementMode == "" {
 		in.ManagementMode = old.ManagementMode
+	}
+	if old.ManagementMode != in.ManagementMode && (shared.ExternalManaged(old) || shared.ExternalManaged(in)) {
+		errorJSON(w, 409, "外部节点服务器不能切换管理方式；请新建服务器档案并重新录入节点")
+		return
 	}
 	managementChanged := shared.OfflineManaged(old) != shared.OfflineManaged(in)
 	if in.FirewallMode == "" {
@@ -1421,6 +1552,10 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, err.Error())
 		return
 	}
+	if shared.ExternalManaged(old) && komariToken != nil && *komariToken != "" {
+		errorJSON(w, 400, "外部节点服务器不运行 Komari Agent")
+		return
+	}
 	old.InternalAddress = in.InternalAddress
 	old.Country = strings.ToUpper(in.Country)
 	old.Region = in.Region
@@ -1432,6 +1567,10 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 	old.IPv6 = in.IPv6
 	old.Domain = in.Domain
 	old.AutoSyncPublicIP = in.AutoSyncPublicIP
+	if err := validateManagement(old); err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
 	if old.Name == "" || len(old.Country) != 2 || (old.IPv4 == "" && old.IPv6 == "" && old.Domain == "") {
 		errorJSON(w, 400, "名称、国家代码及地址必填")
 		return
@@ -1464,6 +1603,8 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if managementChanged {
 		err = a.saveManagementChange(old)
+	} else if shared.InstallsCore(before) != shared.InstallsCore(old) {
+		err = a.Store.PutServerAndInvalidateEnrollment(old)
 	} else {
 		err = a.Store.PutServer(old)
 	}
@@ -1518,8 +1659,8 @@ func (a *App) enrollment(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "服务器不存在")
 		return
 	}
-	if shared.OfflineManaged(server) {
-		errorJSON(w, 409, "离线服务器请导出配置，不使用接入令牌")
+	if shared.NoAgentManaged(server) {
+		errorJSON(w, 409, "该服务器不安装在线 Agent，不使用接入令牌")
 		return
 	}
 	token := Token()
@@ -1774,10 +1915,6 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 		if n.SnellPort == 0 {
 			n.SnellPort = shared.SnellListenPort(n)
 		}
-		if n.ShadowTLSHost == "" {
-			errorJSON(w, 400, "Snell 节点需要 ShadowTLS SNI / 握手域名")
-			return
-		}
 	}
 	server, err := a.Store.Server(n.ServerID)
 	if err != nil {
@@ -1785,10 +1922,16 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !shared.CanHostNodes(server) {
-		errorJSON(w, 409, "只有在线管理的中转或落地服务器可以建节点；离线服务器仅支持转发")
+		errorJSON(w, 409, "只有在线管理的中转、落地或外部节点服务器可以建节点")
 		return
 	}
-	if server.CoreBuild == "" && (server.AgentVersion != "" || !shared.HasRole(server, shared.RoleExit)) {
+	if n.Protocol == "snell" && n.ShadowTLSHost == "" && !shared.ExternalManaged(server) {
+		errorJSON(w, 400, "Snell 节点需要 ShadowTLS SNI / 握手域名")
+		return
+	}
+	if shared.ExternalManaged(server) {
+		prepareExternalNode(&n)
+	} else if server.CoreBuild == "" && (server.AgentVersion != "" || !shared.HasRole(server, shared.RoleExit)) {
 		errorJSON(w, 409, "该服务器未安装 sing-box；请先在服务器列表安装 sing-box，安装成功后即可建节点")
 		return
 	}
@@ -1799,9 +1942,13 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 			cert = &v
 		}
 	}
-	if err := checkSOCKSFirewall(server, n); err != nil {
-		errorJSON(w, 409, err.Error())
-		return
+	if shared.ExternalManaged(server) {
+		cert = externalNodeCertificate(n)
+	} else {
+		if err := checkSOCKSFirewall(server, n); err != nil {
+			errorJSON(w, 409, err.Error())
+			return
+		}
 	}
 	if err := shared.ValidateNode(n, cert, false); err != nil {
 		errorJSON(w, 400, err.Error())
@@ -1855,6 +2002,10 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if password == "" && shared.ExternalManaged(server) {
+		errorJSON(w, 400, "外部节点必须填写卖家提供的密码 / PSK")
+		return
+	}
 	if password == "" {
 		password = Token()
 		if n.Protocol == "ss" && strings.HasPrefix(n.Method, "2022-") {
@@ -1865,7 +2016,11 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, err.Error())
 		return
 	}
-	if n.Protocol == "snell" && shadowPassword == "" {
+	if n.Protocol == "snell" && n.ShadowTLSHost != "" && shadowPassword == "" && shared.ExternalManaged(server) {
+		errorJSON(w, 400, "外部 ShadowTLS 节点必须填写卖家提供的 ShadowTLS 密码")
+		return
+	}
+	if n.Protocol == "snell" && shadowPassword == "" && !shared.ExternalManaged(server) {
 		shadowPassword = Token()
 	}
 	if err := validateShadowTLSPassword(n.Protocol, shadowPassword); err != nil {
@@ -1876,9 +2031,11 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	if err := a.queueApply(n.ServerID, "nodes.apply"); err != nil {
-		errorJSON(w, 500, err.Error())
-		return
+	if !shared.ExternalManaged(server) {
+		if err := a.queueApply(n.ServerID, "nodes.apply"); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
 	}
 	a.auditRequest(r, "node.create", n.ID, n.Name)
 	writeJSON(w, 201, n)
@@ -1980,6 +2137,15 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 409, "节点被链路 "+strings.Join(names, "、")+" 使用，请先修改或删除这些链路")
 			return
 		}
+		if server, err := a.Store.Server(old.ServerID); err == nil && shared.ExternalManaged(server) {
+			if err := a.deleteExternalNode(id); err != nil {
+				errorJSON(w, 500, err.Error())
+				return
+			}
+			a.auditRequest(r, "node.delete", id, old.Name)
+			writeJSON(w, 200, map[string]bool{"ok": true})
+			return
+		}
 		old.Deleting = true
 		old.Error = ""
 		password, _ := a.Store.NodeSecret(id)
@@ -2012,6 +2178,11 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 	n.ShadowTLSHost = strings.TrimSpace(n.ShadowTLSHost)
 	n.ID = old.ID
 	n.ServerID = old.ServerID
+	server, err := a.Store.Server(n.ServerID)
+	if err != nil {
+		errorJSON(w, 404, "服务器不存在")
+		return
+	}
 	n.RouteSources = old.RouteSources
 	n.AgentProxySources = old.AgentProxySources
 	n.CreatedAt = old.CreatedAt
@@ -2035,6 +2206,9 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n.FirewallPolicy, n.FirewallSources = policy, sources
+	if shared.ExternalManaged(server) {
+		prepareExternalNode(&n)
+	}
 	if err := a.protectProxyNode(old, n, in.Password, false); err != nil {
 		errorJSON(w, 409, err.Error())
 		return
@@ -2042,7 +2216,7 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 	if n.Protocol == "snell" && n.SnellPort == 0 {
 		n.SnellPort = shared.SnellListenPort(n)
 	}
-	if n.Protocol == "snell" && n.ShadowTLSHost == "" {
+	if n.Protocol == "snell" && n.ShadowTLSHost == "" && !shared.ExternalManaged(server) {
 		errorJSON(w, 400, "Snell 节点需要 ShadowTLS SNI / 握手域名")
 		return
 	}
@@ -2052,6 +2226,9 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		if e == nil {
 			cert = &v
 		}
+	}
+	if shared.ExternalManaged(server) {
+		cert = externalNodeCertificate(n)
 	}
 	// A node may be switched off with an expired certificate, not kept running with one.
 	if err = shared.ValidateNode(n, cert, !n.Enabled); err != nil {
@@ -2081,14 +2258,11 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	server, err := a.Store.Server(n.ServerID)
-	if err != nil {
-		errorJSON(w, 404, "服务器不存在")
-		return
-	}
-	if err := checkSOCKSFirewall(server, n); err != nil {
-		errorJSON(w, 409, err.Error())
-		return
+	if !shared.ExternalManaged(server) {
+		if err := checkSOCKSFirewall(server, n); err != nil {
+			errorJSON(w, 409, err.Error())
+			return
+		}
 	}
 	if n.Protocol == "snell" {
 		if err := sshPortError(server, n.SnellPort, n.SnellPort); err != nil {
@@ -2120,7 +2294,7 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 	password := in.Password
 	if password == "" {
 		password, _ = a.Store.NodeSecret(id)
-		if n.Protocol == "ss" && strings.HasPrefix(n.Method, "2022-") && (old.Protocol != "ss" || old.Method != n.Method) {
+		if !shared.ExternalManaged(server) && n.Protocol == "ss" && strings.HasPrefix(n.Method, "2022-") && (old.Protocol != "ss" || old.Method != n.Method) {
 			password = base64Key(n.Method)
 		}
 	}
@@ -2137,12 +2311,21 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if shadowPassword == "" {
+		if shadowPassword == "" && !shared.ExternalManaged(server) {
 			shadowPassword = Token()
 		}
 	}
 	if n.Protocol != "snell" {
 		shadowPassword = ""
+	}
+	if shared.ExternalManaged(server) && n.ShadowTLSHost == "" {
+		shadowPassword = ""
+	}
+	if shared.ExternalManaged(server) {
+		if err := validateExternalNodeCredentials(n, password, shadowPassword); err != nil {
+			errorJSON(w, 400, err.Error())
+			return
+		}
 	}
 	if err := validateShadowTLSPassword(n.Protocol, shadowPassword); err != nil {
 		errorJSON(w, 400, err.Error())
@@ -2152,9 +2335,11 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	if err = a.queueApply(n.ServerID, "nodes.apply"); err != nil {
-		errorJSON(w, 500, err.Error())
-		return
+	if !shared.ExternalManaged(server) {
+		if err = a.queueApply(n.ServerID, "nodes.apply"); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
 	}
 	// A new port or protocol changes the last hop of the routes ending here.
 	if err = a.syncRoutes(); err != nil {
@@ -2329,9 +2514,24 @@ func (a *App) firewall(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "服务器不存在")
 		return
 	}
-	if err := normalizeCustomRule(server, &in); err != nil {
-		errorJSON(w, 400, err.Error())
-		return
+	networks := []string{in.Network}
+	if in.Network == "tcp+udp" {
+		if body.ReplaceHostRule == "" {
+			errorJSON(w, 400, "TCP + UDP 仅用于接管主机现有规则")
+			return
+		}
+		networks = []string{"tcp", "udp"}
+	}
+	created := make([]shared.FirewallRule, 0, len(networks))
+	for _, network := range networks {
+		rule := in
+		rule.Network = network
+		if err := normalizeCustomRule(server, &rule); err != nil {
+			errorJSON(w, 400, err.Error())
+			return
+		}
+		rule.ID, rule.Owner, rule.Status, rule.Deleting = ID(), "custom", "pending", false
+		created = append(created, rule)
 	}
 	if body.ReplaceHostRule != "" {
 		lines, err := hostRules(server, []string{body.ReplaceHostRule})
@@ -2345,12 +2545,19 @@ func (a *App) firewall(w http.ResponseWriter, r *http.Request) {
 		}
 		a.auditRequest(r, "firewall.host_delete", server.ID, body.ReplaceHostRule)
 	}
-	in.ID = ID()
-	in.Owner = "custom"
-	in.Status = "pending"
-	in.Deleting = false
-	_, err = a.Store.DB.Exec(`INSERT INTO mui_firewall_rules(id,server_id,data) VALUES($1,$2,$3)`, in.ID, in.ServerID, Marshal(in))
+	tx, err := a.Store.DB.Begin()
 	if err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
+	defer tx.Rollback()
+	for _, rule := range created {
+		if _, err := tx.Exec(`INSERT INTO mui_firewall_rules(id,server_id,data) VALUES($1,$2,$3)`, rule.ID, rule.ServerID, Marshal(rule)); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+	}
+	if err := tx.Commit(); err != nil {
 		errorJSON(w, 500, err.Error())
 		return
 	}
@@ -2358,8 +2565,14 @@ func (a *App) firewall(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	a.auditRequest(r, "firewall.create", in.ID, in.Comment)
-	writeJSON(w, 201, in)
+	for _, rule := range created {
+		a.auditRequest(r, "firewall.create", rule.ID, rule.Comment)
+	}
+	if len(created) == 1 {
+		writeJSON(w, 201, created[0])
+	} else {
+		writeJSON(w, 201, map[string]any{"rules": created})
+	}
 }
 func validateRule(r shared.FirewallRule) error {
 	if r.PortFrom < 1 || r.PortFrom > 65535 || r.PortTo < r.PortFrom || r.PortTo > 65535 {
@@ -2731,8 +2944,8 @@ func validateSubscriptionNode(format string, n shared.Node) error {
 		switch {
 		case n.Protocol == "ss" && n.Method == "2022-blake3-chacha20-poly1305":
 			return errors.New("Surge 订阅不支持 2022-blake3-chacha20-poly1305")
-		case n.Protocol == "snell" && n.ShadowTLSHost == "":
-			return errors.New("Surge 订阅中的 Snell 节点需启用 ShadowTLS")
+		case n.Protocol == "snell" && n.ShadowTLSHost == "" && !n.SingleUser:
+			return errors.New("Surge 订阅中的托管 Snell 节点需启用 ShadowTLS")
 		}
 	}
 	return nil
@@ -3382,6 +3595,9 @@ func (a *App) queueApplyLocked(serverID, kind string) error {
 	if err != nil {
 		return err
 	}
+	if shared.ExternalManaged(server) {
+		return errors.New("外部节点服务器不执行配置任务")
+	}
 	if shared.ManualFirewall(server.FirewallMode) && strings.HasPrefix(kind, "ufw.") {
 		return errors.New("手动管理模式不允许通过面板操作 UFW")
 	}
@@ -3469,6 +3685,11 @@ func (a *App) deployment(server shared.Server, state shared.DesiredState) map[st
 func (a *App) nodeLive(n shared.Node, server shared.Server, subscriptionID string) (bool, error) {
 	if !n.Enabled || n.Deleting {
 		return false, nil
+	}
+	if shared.ExternalManaged(server) {
+		// Seller-provided endpoints have no Agent acknowledgement. Enabled
+		// means the administrator wants to publish the supplied credentials.
+		return true, nil
 	}
 	sharedPassword := shared.SharedSubscriptionPassword(n)
 	if sharedPassword {
@@ -3617,8 +3838,9 @@ func (a *App) agentEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 	unlock := a.lockServer(in.ServerID)
 	defer unlock()
-	if srv, err := a.Store.Server(in.ServerID); err == nil && shared.OfflineManaged(srv) {
-		errorJSON(w, 403, "离线管理服务器不支持在线接入")
+	server, serverErr := a.Store.Server(in.ServerID)
+	if serverErr == nil && shared.NoAgentManaged(server) {
+		errorJSON(w, 403, "该服务器不支持在线接入")
 		return
 	}
 	var expected string
@@ -3640,7 +3862,8 @@ func (a *App) agentEnroll(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	token := Token()
-	result, err := a.Store.DB.Exec(`UPDATE mui_servers SET agent_hash=$1,agent_signs=0,enroll_hash='',enroll_expires=0 WHERE id=$2 AND enroll_hash=$3 AND enroll_expires>=$4`, Hash(token), in.ServerID, expected, time.Now().Unix())
+	server.Status, server.LastSeen = "pending", nil
+	result, err := a.Store.DB.Exec(`UPDATE mui_servers SET data=$1,agent_hash=$2,agent_signs=0,enroll_hash='',enroll_expires=0 WHERE id=$3 AND enroll_hash=$4 AND enroll_expires>=$5`, Marshal(server), Hash(token), in.ServerID, expected, time.Now().Unix())
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
@@ -3792,8 +4015,20 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "服务器不存在")
 		return
 	}
-	if shared.OfflineManaged(server) {
-		errorJSON(w, 403, "离线管理服务器不接收在线上报")
+	// Authentication happens before this handler takes the per-server lock.
+	// A report already in flight when credentials are revoked must not restore
+	// the server to "online" after the revocation write.
+	if server.Status == "revoked" {
+		errorJSON(w, http.StatusGone, "agent credential revoked; stop contacting this panel")
+		return
+	}
+	if shared.NoAgentManaged(server) {
+		errorJSON(w, 403, "该服务器不接收在线上报")
+		return
+	}
+	var currentHash string
+	if err := a.Store.DB.QueryRow(`SELECT agent_hash FROM mui_servers WHERE id=$1`, id).Scan(&currentHash); err != nil || !hmac.Equal([]byte(currentHash), []byte(Hash(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")))) {
+		errorJSON(w, 401, "agent authentication failed")
 		return
 	}
 	// Validate the job report before any write takes effect: an invalid

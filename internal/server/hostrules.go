@@ -127,21 +127,23 @@ func (a *App) hostRuleAdopt(w http.ResponseWriter, r *http.Request) {
 	var rules []shared.FirewallRule
 	seen := map[shared.FirewallRule]bool{}
 	for _, line := range lines {
-		rule, ok := line.CustomRule()
+		converted, ok := line.CustomRules()
 		if !ok {
-			errorJSON(w, 409, line.Rule+"：同时放行 TCP 和 UDP、是应用配置或动作为 REJECT/LIMIT，不能直接转为面板规则，请删除后新建")
+			errorJSON(w, 409, line.Rule+"：无端口、应用配置或 REJECT/LIMIT 规则不能转为面板规则，请在主机调整")
 			return
 		}
-		rule.ServerID, rule.Comment = server.ID, "接管自主机规则"
-		if err := normalizeCustomRule(server, &rule); err != nil {
-			errorJSON(w, 409, line.Rule+"："+err.Error())
-			return
-		}
-		// Each line keeps its own family, so converting the IPv6 line of a
-		// rule leaves its IPv4 line alone.
-		if !seen[rule] {
-			seen[rule] = true
-			rules = append(rules, rule)
+		for _, rule := range converted {
+			rule.ServerID, rule.Comment = server.ID, "接管自主机规则"
+			if err := normalizeCustomRule(server, &rule); err != nil {
+				errorJSON(w, 409, line.Rule+"："+err.Error())
+				return
+			}
+			// Each line keeps its own family, so converting the IPv6 line of a
+			// rule leaves its IPv4 line alone.
+			if !seen[rule] {
+				seen[rule] = true
+				rules = append(rules, rule)
+			}
 		}
 	}
 	if err := a.queueHostRuleDelete(server.ID, lines); err != nil {

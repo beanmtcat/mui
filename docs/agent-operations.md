@@ -27,6 +27,20 @@ tail -n 80 /var/log/mui-agent-helper.log
 
 Ubuntu / Debian 继续使用 systemd，管理命令仍为 `systemctl`，日志仍为 `journalctl`。
 
+## GitHub Release 分发
+
+启用 `MUI_AGENT_RELEASE_VERSION` 时，面板提供 `/download/install.sh` 和 `/download/uninstall.sh`，但不提供 Agent、sing-box 或清单文件。在线安装脚本和 Agent 升级会让**目标服务器直接访问 GitHub Release** 下载与该版本号相同的归档，并验证发布签名及文件哈希。目标服务器访问不了 GitHub 时，给 Agent 配置 SOCKS5 代理，或使用面板“手工安装”下载并上传同一版本文件。
+
+先在含有对应代码的干净提交上构建和签名 amd64、arm64，再用 `deploy/release-agent.sh <版本号>` 创建相同版本的标签和 GitHub Release。确认归档可下载后，才把生产 `.env` 的 `MUI_AGENT_RELEASE_VERSION` 改成同一版本号并发布面板。面板访问 GitHub 失败时会显示暂时不可用；安装脚本始终来自面板，避免与面板代码版本不一致。
+
+## 吊销与卸载
+
+面板“吊销 Agent”立即作废接入凭据，并把服务器标为“已吊销”。Agent 0.6.21 起收到面板的吊销响应后停止轮询面板和 Komari；旧版 Agent 可能继续发起被拒绝的请求，需在目标服务器执行卸载命令。吊销不会远程停止服务器上的服务或节点。
+
+在服务器列表的操作菜单点击“复制卸载命令”，然后在**目标服务器**执行。命令从当前面板下载卸载脚本，并以 root 运行；适用于 systemd 和 OpenRC。它会停止并移除 MUI Agent、转发、sing-box 服务，删除 MUI 安装的二进制、配置和本地流量缓存。UFW 规则与系统账户保留，请按该服务器的实际用途检查。卸载会中断这台服务器的节点和转发。
+
+命令不依赖目标服务器已有 Agent 的版本，因此旧版 Agent 吊销后也能使用。准备重新接入时，在面板重新生成一次性接入命令并运行。
+
 ## 512 MiB 主机
 
 三个 `mui-agent` 进程各有用途：非特权 worker 连接面板，root helper 只执行受限管理操作，非特权 forward 处理转发连接。sing-box 是另一个独立进程。程序会自动使用主机内存与 cgroup 限额中较小的值，给各角色设置 Go 运行时内存回收目标，无需手动设置环境变量。

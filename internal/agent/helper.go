@@ -187,9 +187,9 @@ func handleHelper(conn net.Conn) {
 	case "nodes.apply", "firewall.apply", "forwards.apply", "subscriptions.apply":
 		err = ApplyDesired(req.State, req.StateRaw)
 	case "agent.upgrade":
-		err = runUpgradeOnce("agent.upgrade", req.State.UpgradeSHA256, func() error { return upgradeAgent(req.State.UpgradeSHA256) })
+		err = runUpgradeOnce("agent.upgrade", req.State.UpgradeSHA256, func() error { return upgradeAgent(req.State.UpgradeSHA256, req.State.UpgradeRelease) })
 	case "core.upgrade":
-		err = runUpgradeOnce("core.upgrade", req.State.CoreUpgradeSHA256, func() error { return upgradeCore(req.State.CoreUpgradeSHA256) })
+		err = runUpgradeOnce("core.upgrade", req.State.CoreUpgradeSHA256, func() error { return upgradeCore(req.State.CoreUpgradeSHA256, req.State.UpgradeRelease) })
 	case "upgrade.confirm":
 		err = writeUpgradeConfirmation(UpgradeConfirmedPath, req.State.UpgradeSHA256)
 	default:

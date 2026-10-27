@@ -284,6 +284,15 @@ td > button.dangerText {
   background: none;
   color: var(--muted);
 }
+.firewallToast {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 9;
+  width: min(420px, calc(100vw - 32px));
+  margin: 0;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, .18);
+}
 .error {
   color: var(--bad);
 }
@@ -356,6 +365,115 @@ td > button.dangerText {
 }
 .serverListTable td {
   line-height: 1.5;
+}
+.serverListTable .serverListLink {
+  display: block;
+  width: 100%;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.helpSearch,
+.helpEditor {
+  padding: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.helpSearch input {
+  max-width: 480px;
+}
+.helpEditor {
+  display: grid;
+  gap: 14px;
+}
+.helpEditor label {
+  display: grid;
+  gap: 6px;
+}
+.helpEditor textarea {
+  min-height: 180px;
+}
+.helpEditorTools {
+  display: flex;
+  align-items: end;
+  gap: 16px;
+}
+.helpEditorTools label {
+  width: 100px;
+}
+.helpList {
+  padding: 0 16px 16px;
+}
+.helpItem {
+  border-bottom: 1px solid var(--line);
+}
+.helpItem summary {
+  padding: 15px 0;
+  font-weight: 600;
+  cursor: pointer;
+}
+.helpAnswer {
+  display: grid;
+  gap: 12px;
+  padding: 0 0 16px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.helpAnswer p {
+  margin: 0;
+}
+.helpAnswer p code {
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: var(--code-bg);
+}
+.helpCode {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--code-bg);
+}
+.helpCodeHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 5px 10px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
+}
+.helpCodeHead button,
+.helpItemActions button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+}
+.helpCode pre {
+  margin: 0;
+  padding: 12px;
+  overflow-x: auto;
+  white-space: pre;
+}
+.helpItemActions {
+  display: flex;
+  gap: 16px;
+  padding: 0 0 16px;
+}
+.helpItemActions button.dangerText {
+  color: var(--bad);
+}
+.helpPreview {
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 12px;
+}
+.helpPreview > strong {
+  display: block;
+  margin-bottom: 12px;
+}
+.helpEmpty {
+  padding: 16px;
+  color: var(--muted);
 }
 .serverCountry {
   display: inline-flex;
@@ -1394,6 +1512,14 @@ th.num {
 }
 .routeConnection .field {
   align-content: start;
+}
+.routeSourceSelectors {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(145px, .7fr);
+  gap: 8px;
+}
+@media (max-width: 740px) {
+  .routeSourceSelectors { grid-template-columns: 1fr; }
 }
 .routeConnection .hint {
   margin-bottom: 0;

@@ -13,8 +13,13 @@ import (
 )
 
 func validateManagement(server shared.Server) error {
-	if server.ManagementMode != "" && server.ManagementMode != "online" && server.ManagementMode != "offline" {
+	if server.ManagementMode != "" && server.ManagementMode != "online" && server.ManagementMode != "offline" && server.ManagementMode != "external" {
 		return errors.New("管理方式无效")
+	}
+	if shared.ExternalManaged(server) {
+		if len(server.Roles) != 1 || !shared.HasRole(server, shared.RoleExit) || !shared.ManualFirewall(server.FirewallMode) || server.AgentProxyNodeID != "" || server.OutboundInterface != "" || server.AutoSyncPublicIP {
+			return errors.New("外部节点服务器仅支持落地类型、手动防火墙，不使用 Agent 代理、出口网卡或公网 IP 自动同步")
+		}
 	}
 	if shared.OfflineManaged(server) && (!shared.ManualFirewall(server.FirewallMode) || shared.HasRole(server, shared.RoleExit)) {
 		return errors.New("离线管理仅支持入口、线路、中转，且必须手动管理防火墙；落地节点仍需在线 Agent")
