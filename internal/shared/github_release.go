@@ -3,6 +3,7 @@ package shared
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 var githubReleaseVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+\.[0-9]+$`)
@@ -18,4 +19,19 @@ func GitHubReleaseArchive(version, arch string) (string, error) {
 		return "", fmt.Errorf("unsupported Agent release architecture %q", arch)
 	}
 	return fmt.Sprintf("https://github.com/beanmtcat/mui/releases/download/v%s/mui-agent-%s-linux-%s.tar.gz", version, version, arch), nil
+}
+
+// GitHubReleaseManifest returns the small, per-architecture signed manifest
+// uploaded alongside the archive. The archive retains identical copies for
+// Agent installs and upgrades.
+func GitHubReleaseManifest(version, arch string, signature bool) (string, error) {
+	archive, err := GitHubReleaseArchive(version, arch)
+	if err != nil {
+		return "", err
+	}
+	suffix := ".SHA256SUMS"
+	if signature {
+		suffix += ".sig"
+	}
+	return strings.TrimSuffix(archive, ".tar.gz") + suffix, nil
 }

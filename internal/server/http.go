@@ -41,17 +41,18 @@ type rateBucket struct {
 	Reset time.Time
 }
 type App struct {
-	Store             *Store
-	PublicURL         string
-	publicURLs        []*url.URL
-	agentBinDir       string
-	releaseVersion    string
-	releaseMu         sync.Mutex
-	releaseCache      map[string]githubReleaseCacheEntry
-	releaseFlights    singleflight.Group
-	releaseClient     *http.Client
-	releaseTimeout    time.Duration
-	releaseFailureTTL time.Duration
+	Store               *Store
+	PublicURL           string
+	publicURLs          []*url.URL
+	agentBinDir         string
+	releaseVersion      string
+	releaseMu           sync.Mutex
+	releaseCache        map[string]githubReleaseCacheEntry
+	releaseFlights      singleflight.Group
+	releaseClient       *http.Client
+	releaseTimeout      time.Duration
+	releaseFetchTimeout time.Duration
+	releaseFailureTTL   time.Duration
 	// mu serialises mutating admin requests. Agent traffic uses per-server
 	// locks instead (see lockServer), so one slow agent report no longer
 	// blocks every admin write and every other agent.

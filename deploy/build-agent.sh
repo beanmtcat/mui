@@ -59,11 +59,19 @@ else
 fi
 mkdir -p dist/release
 archive="dist/release/mui-agent-$agent_version-linux-$arch.tar.gz"
+manifest_asset="dist/release/mui-agent-$agent_version-linux-$arch.SHA256SUMS"
+signature_asset="$manifest_asset.sig"
 # macOS bsdtar otherwise adds LIBARCHIVE.xattr.com.apple.provenance headers
 # that GNU tar on Linux warns about during manual extraction.
 tar_flags=()
 if tar --version 2>/dev/null | grep -q bsdtar; then tar_flags=(--no-xattrs --no-acls --no-mac-metadata); fi
 COPYFILE_DISABLE=1 tar ${tar_flags[@]+"${tar_flags[@]}"} -czf "$archive" -C bin "$arch"
+cp "bin/$arch/SHA256SUMS" "$manifest_asset"
+if [[ -s "bin/$arch/SHA256SUMS.sig" ]]; then
+  cp "bin/$arch/SHA256SUMS.sig" "$signature_asset"
+else
+  rm -f "$signature_asset"
+fi
 printf '%s\n' "$source_commit" > "$archive.commit"
 printf 'Built Agent %s: bin/%s/mui-agent; sing-box %s: bin/%s/sing-box\n' "$agent_version" "$arch" "$core_version" "$arch"
 printf 'GitHub Release archive: %s\n' "$archive"

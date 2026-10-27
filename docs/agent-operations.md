@@ -31,7 +31,7 @@ Ubuntu / Debian 继续使用 systemd，管理命令仍为 `systemctl`，日志�
 
 启用 `MUI_AGENT_RELEASE_VERSION` 时，面板提供 `/download/install.sh` 和 `/download/uninstall.sh`，但不提供 Agent、sing-box 或清单文件。在线安装脚本和 Agent 升级会让**目标服务器直接访问 GitHub Release** 下载与该版本号相同的归档，并验证发布签名及文件哈希。目标服务器访问不了 GitHub 时，给 Agent 配置 SOCKS5 代理，或使用面板“手工安装”下载并上传同一版本文件。
 
-先在含有对应代码的干净提交上构建和签名 amd64、arm64，再用 `deploy/release-agent.sh <版本号>` 创建相同版本的标签和 GitHub Release。确认归档可下载后，才把生产 `.env` 的 `MUI_AGENT_RELEASE_VERSION` 改成同一版本号并发布面板。面板访问 GitHub 失败时会显示暂时不可用；安装脚本始终来自面板，避免与面板代码版本不一致。
+先在含有对应代码的干净提交上构建和签名 amd64、arm64，再用 `deploy/release-agent.sh <版本号>` 创建相同版本的标签和 GitHub Release。每个架构除归档外还会上传独立的 `.SHA256SUMS` 与 `.SHA256SUMS.sig`；它们必须与归档内的文件逐字节一致。面板只下载这两个小文件，使用发布公钥验签后读取哈希；页面最多等 20 秒，后台最多下载 5 分钟并缓存结果。确认归档与清单可下载后，才把生产 `.env` 的 `MUI_AGENT_RELEASE_VERSION` 改成同一版本号并发布面板。安装脚本始终来自面板，避免与面板代码版本不一致。
 
 ## 吊销与卸载
 

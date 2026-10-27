@@ -47,6 +47,13 @@ for arch in amd64 arm64; do
       exit 1
     }
   done
+  for name in SHA256SUMS SHA256SUMS.sig; do
+    sidecar="dist/release/mui-agent-$version-linux-$arch.$name"
+    [[ -s "$sidecar" ]] && cmp -s "$sidecar" "$temp/$arch/$name" || {
+      echo "$sidecar does not match the signed archive" >&2
+      exit 1
+    }
+  done
   [[ "$(find "$temp/$arch" -type f | wc -l | tr -d ' ')" == 4 ]] || {
     echo "$archive contains unexpected files" >&2
     exit 1
@@ -79,6 +86,10 @@ git push origin "refs/tags/$tag"
 gh release create "$tag" \
   "dist/release/mui-agent-$version-linux-amd64.tar.gz" \
   "dist/release/mui-agent-$version-linux-arm64.tar.gz" \
+  "dist/release/mui-agent-$version-linux-amd64.SHA256SUMS" \
+  "dist/release/mui-agent-$version-linux-amd64.SHA256SUMS.sig" \
+  "dist/release/mui-agent-$version-linux-arm64.SHA256SUMS" \
+  "dist/release/mui-agent-$version-linux-arm64.SHA256SUMS.sig" \
   --title "MUI Agent $tag" --notes-file "$notes" --verify-tag
 for old in v0.6.18 v0.6.19 v0.6.20; do
   previous=$(mktemp)

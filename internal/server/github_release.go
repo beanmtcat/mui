@@ -1,10 +1,7 @@
 package server
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -28,17 +25,21 @@ type githubReleaseCacheEntry struct {
 }
 
 const githubReleaseRequestTimeout = 20 * time.Second
+const githubReleaseFetchTimeout = 5 * time.Minute
 const githubReleaseErrorTTL = 5 * time.Minute
 
-func (a *App) githubReleaseLimits() (time.Duration, time.Duration) {
-	timeout, ttl := a.releaseTimeout, a.releaseFailureTTL
-	if timeout <= 0 {
-		timeout = githubReleaseRequestTimeout
+func (a *App) githubReleaseLimits() (time.Duration, time.Duration, time.Duration) {
+	requestTimeout, fetchTimeout, ttl := a.releaseTimeout, a.releaseFetchTimeout, a.releaseFailureTTL
+	if requestTimeout <= 0 {
+		requestTimeout = githubReleaseRequestTimeout
+	}
+	if fetchTimeout <= 0 {
+		fetchTimeout = githubReleaseFetchTimeout
 	}
 	if ttl <= 0 {
 		ttl = githubReleaseErrorTTL
 	}
-	return timeout, ttl
+	return requestTimeout, fetchTimeout, ttl
 }
 
 func (a *App) cachedGitHubRelease(key string) (githubReleaseInfo, error, bool) {
@@ -63,10 +64,14 @@ func (a *App) prefetchGitHubReleases() {
 	}
 }
 
-// The panel reads a GitHub archive to learn the hashes used for upgrade
-// decisions. It never serves the archive or extracted binaries to Agents.
+// The panel reads only a signed manifest to learn the hashes used for upgrade
+// decisions. The archive is downloaded by Agents, not by the panel.
 func (a *App) githubRelease(ctx context.Context, arch string) (githubReleaseInfo, error) {
-	url, err := shared.GitHubReleaseArchive(a.releaseVersion, arch)
+	url, err := shared.GitHubReleaseManifest(a.releaseVersion, arch, false)
+	if err != nil {
+		return githubReleaseInfo{}, err
+	}
+	signatureURL, err := shared.GitHubReleaseManifest(a.releaseVersion, arch, true)
 	if err != nil {
 		return githubReleaseInfo{}, err
 	}
@@ -74,18 +79,19 @@ func (a *App) githubRelease(ctx context.Context, arch string) (githubReleaseInfo
 	if info, err, ok := a.cachedGitHubRelease(key); ok {
 		return info, err
 	}
-	timeout, failureTTL := a.githubReleaseLimits()
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	requestTimeout, fetchTimeout, failureTTL := a.githubReleaseLimits()
+	ctx, cancel := context.WithTimeout(ctx, requestTimeout)
 	defer cancel()
 	result := a.releaseFlights.DoChan(key, func() (any, error) {
 		// A caller may have filled the cache between the first check and joining
-		// this flight. Network work and archive verification never hold releaseMu.
+		// this flight. Network work and signature verification never hold releaseMu.
 		if info, err, ok := a.cachedGitHubRelease(key); ok {
 			return info, err
 		}
-		fetchCtx, stop := context.WithTimeout(context.Background(), timeout)
+		// The shared fetch outlives a page request but has its own firm limit.
+		fetchCtx, stop := context.WithTimeout(context.Background(), fetchTimeout)
 		defer stop()
-		info, err := a.fetchGitHubRelease(fetchCtx, url, arch)
+		info, err := a.fetchGitHubRelease(fetchCtx, url, signatureURL)
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 			err = errors.New("暂时无法读取 GitHub Release")
 		}
@@ -112,39 +118,62 @@ func (a *App) githubRelease(ctx context.Context, arch string) (githubReleaseInfo
 	}
 }
 
-func (a *App) fetchGitHubRelease(ctx context.Context, url, arch string) (githubReleaseInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+func (a *App) fetchGitHubRelease(ctx context.Context, manifestURL, signatureURL string) (githubReleaseInfo, error) {
+	if a.releaseKey == nil {
+		return githubReleaseInfo{}, errors.New("GitHub Release requires a release public key")
+	}
+	manifest, err := a.getGitHubReleaseFile(ctx, manifestURL, 8192)
 	if err != nil {
 		return githubReleaseInfo{}, err
+	}
+	signature, err := a.getGitHubReleaseFile(ctx, signatureURL, 8192)
+	if err != nil {
+		return githubReleaseInfo{}, err
+	}
+	if err := shared.VerifyManifest(a.releaseKey, manifest, signature); err != nil {
+		return githubReleaseInfo{}, fmt.Errorf("GitHub Agent release signature: %w", err)
+	}
+	agentHash, agentOK := shared.ManifestHash(manifest, "mui-agent")
+	coreHash, coreOK := shared.ManifestHash(manifest, "sing-box")
+	if !agentOK || !coreOK || !validReleaseHash(agentHash) || !validReleaseHash(coreHash) {
+		return githubReleaseInfo{}, errors.New("GitHub Agent release manifest is incomplete")
+	}
+	return githubReleaseInfo{AgentHash: agentHash, CoreHash: coreHash}, nil
+}
+
+func validReleaseHash(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func (a *App) getGitHubReleaseFile(ctx context.Context, url string, maxSize int64) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return nil, err
 	}
 	client := a.releaseClient
 	if client == nil {
-		client = &http.Client{Timeout: githubReleaseRequestTimeout, CheckRedirect: githubReleaseRedirect}
+		client = &http.Client{CheckRedirect: githubReleaseRedirect}
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return githubReleaseInfo{}, err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return githubReleaseInfo{}, fmt.Errorf("GitHub Agent release %s: HTTP %d", arch, resp.StatusCode)
+		return nil, fmt.Errorf("GitHub Agent release %s: HTTP %d", url, resp.StatusCode)
 	}
-	info, manifest, signature, err := readGitHubReleaseArchive(io.LimitReader(resp.Body, 512<<20), arch)
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxSize+1))
 	if err != nil {
-		return githubReleaseInfo{}, err
+		return nil, err
 	}
-	if a.releaseKey != nil {
-		if err := shared.VerifyManifest(a.releaseKey, manifest, signature); err != nil {
-			return githubReleaseInfo{}, fmt.Errorf("GitHub Agent release signature: %w", err)
-		}
+	if len(data) == 0 || int64(len(data)) > maxSize {
+		return nil, errors.New("GitHub Agent release manifest or signature has invalid size")
 	}
-	if want, ok := shared.ManifestHash(manifest, "mui-agent"); !ok || want != info.AgentHash {
-		return githubReleaseInfo{}, errors.New("GitHub Agent release binary does not match SHA256SUMS")
-	}
-	if want, ok := shared.ManifestHash(manifest, "sing-box"); !ok || want != info.CoreHash {
-		return githubReleaseInfo{}, errors.New("GitHub sing-box release binary does not match SHA256SUMS")
-	}
-	return info, nil
+	return data, nil
 }
 
 func githubReleaseRedirect(req *http.Request, via []*http.Request) error {
@@ -156,74 +185,4 @@ func githubReleaseRedirect(req *http.Request, via []*http.Request) error {
 		return errors.New("unexpected GitHub release redirect host")
 	}
 	return nil
-}
-
-func readGitHubReleaseArchive(source io.Reader, arch string) (githubReleaseInfo, []byte, []byte, error) {
-	zr, err := gzip.NewReader(source)
-	if err != nil {
-		return githubReleaseInfo{}, nil, nil, err
-	}
-	defer zr.Close()
-	tr := tar.NewReader(zr)
-	var info githubReleaseInfo
-	var manifest, signature []byte
-	seen := map[string]bool{}
-	for {
-		hdr, err := tr.Next()
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return info, nil, nil, err
-		}
-		if hdr.Name == arch || hdr.Name == arch+"/" {
-			if hdr.Typeflag != tar.TypeDir {
-				return info, nil, nil, errors.New("invalid GitHub release directory")
-			}
-			continue
-		}
-		name := strings.TrimPrefix(hdr.Name, arch+"/")
-		if !strings.HasPrefix(hdr.Name, arch+"/") || seen[name] || hdr.Typeflag != tar.TypeReg {
-			return info, nil, nil, errors.New("unexpected GitHub release archive member")
-		}
-		seen[name] = true
-		switch name {
-		case "mui-agent", "sing-box":
-			max := int64(128 << 20)
-			if name == "sing-box" {
-				max = 256 << 20
-			}
-			if hdr.Size <= 0 || hdr.Size > max {
-				return info, nil, nil, errors.New("GitHub release binary size is invalid")
-			}
-			h := sha256.New()
-			if _, err = io.Copy(h, tr); err != nil {
-				return info, nil, nil, err
-			}
-			if name == "mui-agent" {
-				info.AgentHash = hex.EncodeToString(h.Sum(nil))
-			} else {
-				info.CoreHash = hex.EncodeToString(h.Sum(nil))
-			}
-		case "SHA256SUMS", "SHA256SUMS.sig":
-			if hdr.Size <= 0 || hdr.Size > 8192 {
-				return info, nil, nil, errors.New("GitHub release manifest size is invalid")
-			}
-			value, err := io.ReadAll(tr)
-			if err != nil {
-				return info, nil, nil, err
-			}
-			if name == "SHA256SUMS" {
-				manifest = value
-			} else {
-				signature = value
-			}
-		default:
-			return info, nil, nil, fmt.Errorf("unexpected GitHub release file %q", name)
-		}
-	}
-	if info.AgentHash == "" || info.CoreHash == "" || len(manifest) == 0 {
-		return info, nil, nil, errors.New("GitHub release archive is incomplete")
-	}
-	return info, manifest, signature, nil
 }

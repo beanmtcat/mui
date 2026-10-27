@@ -87,13 +87,13 @@ CREATE DATABASE mui WITH OWNER mui ENCODING 'UTF8';
 
 ### 从 GitHub Release 直接下载 Agent
 
-设置 `MUI_AGENT_RELEASE_VERSION=0.6.21` 后，在线接入命令仍从**当前面板**获取 `/download/install.sh`，脚本按第七个参数指定的版本让**目标服务器直接**从 GitHub Release 下载对应架构的压缩包并验证签名、哈希。Agent 0.6.19 起的一键升级也从 GitHub 下载。面板只读取归档以校验和显示可用构建，不向目标服务器提供二进制；`/download/<架构>/...` 在此模式下返回 404。接入和任务通信仍走面板。
+设置 `MUI_AGENT_RELEASE_VERSION=0.6.21` 后，在线接入命令仍从**当前面板**获取 `/download/install.sh`，脚本按第七个参数指定的版本让**目标服务器直接**从 GitHub Release 下载对应架构的压缩包并验证签名、哈希。Agent 0.6.19 起的一键升级也从 GitHub 下载。面板只读取 Release 中独立的 `SHA256SUMS` 和 `SHA256SUMS.sig`，先验签再显示可用构建，不再下载整份归档，也不向目标服务器提供二进制；`/download/<架构>/...` 在此模式下返回 404。接入和任务通信仍走面板。
 
-目标服务器必须能访问 GitHub Release；访问不了时，为该服务器配置 Agent SOCKS5 代理，或使用“手工安装”把同一 Release 的归档上传到服务器。面板访问 GitHub 失败时，页面会快速显示错误，并在五分钟内复用该失败结果。旧的 `v0.6.18`、`v0.6.19`、`v0.6.20` 标签指向未包含 GitHub 分发代码的提交，不应再用于在线接入。
+目标服务器必须能访问 GitHub Release；访问不了时，为该服务器配置 Agent SOCKS5 代理，或使用“手工安装”把同一 Release 的归档上传到服务器。面板请求最多等待 20 秒，后台读取最多运行 5 分钟；成功后缓存哈希，失败后五分钟内复用错误。旧的 `v0.6.18`、`v0.6.19`、`v0.6.20` 标签指向未包含 GitHub 分发代码的提交，不应再用于在线接入。
 
 发布顺序：
 
-1. 在包含安装脚本和 Agent 0.6.21 代码的**干净提交**上构建并签名 amd64、arm64：`./deploy/build-agent.sh amd64 v1.14.2 0.6.21` 和 `./deploy/build-agent.sh arm64 v1.14.2 0.6.21`。已固定发布公钥的 Agent 必须继续使用同一私钥。
+1. 在包含安装脚本和 Agent 0.6.21 代码的**干净提交**上构建并签名 amd64、arm64：`./deploy/build-agent.sh amd64 v1.14.2 0.6.21` 和 `./deploy/build-agent.sh arm64 v1.14.2 0.6.21`。脚本同时导出每个架构的签名清单供面板查询；归档内也保留同一份清单。已固定发布公钥的 Agent 必须继续使用同一私钥。
 2. 运行 `./deploy/release-agent.sh 0.6.21`；脚本检查工作区干净、提交内的 Agent 版本号和标签相同，再创建标签与 GitHub Release。确认两个归档均可下载，且标签指向构建所用的提交。
 3. 然后把面板服务器 `deploy/.env` 中的 `MUI_AGENT_RELEASE_VERSION` 改为 `0.6.21`，确认 `MUI_RELEASE_PUBLIC_KEY` 与签名私钥匹配，再发布面板。版本号必须与 Release 标签一致；无需 `--with-agent`。未升级到支持 GitHub 下载的旧 Agent 需用新接入命令重装一次。
 

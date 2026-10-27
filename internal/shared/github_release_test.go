@@ -15,4 +15,16 @@ func TestGitHubReleaseArchive(t *testing.T) {
 	if _, err := GitHubReleaseArchive("0.6.19", "other"); err == nil {
 		t.Fatal("accepted unsupported architecture")
 	}
+	for _, item := range []struct {
+		signature bool
+		want      string
+	}{
+		{false, "https://github.com/beanmtcat/mui/releases/download/v0.6.21/mui-agent-0.6.21-linux-arm64.SHA256SUMS"},
+		{true, "https://github.com/beanmtcat/mui/releases/download/v0.6.21/mui-agent-0.6.21-linux-arm64.SHA256SUMS.sig"},
+	} {
+		got, err := GitHubReleaseManifest("0.6.21", "arm64", item.signature)
+		if err != nil || got != item.want {
+			t.Fatalf("manifest URL: %q %v", got, err)
+		}
+	}
 }
