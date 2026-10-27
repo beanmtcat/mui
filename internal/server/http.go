@@ -1524,6 +1524,7 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, err.Error())
 		return
 	}
+	rolesChanged := !slices.Equal(before.Roles, roles)
 	in.InternalAddress = strings.TrimSpace(in.InternalAddress)
 	if err = validInternalAddress(in.InternalAddress); err != nil {
 		errorJSON(w, 400, err.Error())
@@ -1636,7 +1637,7 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if modeChanged || managementChanged || proxyChanged || outboundChanged {
+	if modeChanged || managementChanged || proxyChanged || outboundChanged || rolesChanged {
 		if err = a.queueApplyLocked(id, "nodes.apply"); err != nil {
 			errorJSON(w, 500, err.Error())
 			return
@@ -4079,6 +4080,7 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 	becameClientIPs := in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.13") && !shared.VersionAtLeast(server.AgentVersion, "0.6.13")
 	becameRouteUFW := !shared.ManualFirewall(server.FirewallMode) && in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.15") && !shared.VersionAtLeast(server.AgentVersion, "0.6.15")
 	becameShadowTLSDial := in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.16") && !shared.VersionAtLeast(server.AgentVersion, "0.6.16")
+	becameIdleCoreStop := in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.22") && !shared.VersionAtLeast(server.AgentVersion, "0.6.22") && server.CoreBuild != ""
 	server.Status = "online"
 	becameMultiUser := !server.MultiUserStats && in.MultiUserStats
 	becameOutboundBinding := in.AgentVersion != "" && !server.OutboundBindingSupport && in.OutboundBindingSupport && shared.VersionAtLeast(in.AgentVersion, "0.6.12")
@@ -4434,6 +4436,22 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 					errorJSON(w, 500, err.Error())
 					return
 				}
+			}
+		}
+	}
+	if becameIdleCoreStop {
+		// Older Agents kept sing-box running with an empty configuration. A
+		// server already changed to entry-only may have no pending apply job,
+		// so queue one when the fixed Agent first reports its new version.
+		nodes, e := a.Store.Nodes(id)
+		if e != nil {
+			errorJSON(w, 500, e.Error())
+			return
+		}
+		if !slices.ContainsFunc(nodes, func(n shared.Node) bool { return n.Enabled && !n.Deleting }) {
+			if err = a.queueApplyLocked(id, "nodes.apply"); err != nil {
+				errorJSON(w, 500, err.Error())
+				return
 			}
 		}
 	}

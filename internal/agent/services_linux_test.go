@@ -205,6 +205,26 @@ func TestOpenRCInstallForwardReloadAndJobs(t *testing.T) {
 	if raw, err := cmd.Output(); err != nil || !strings.Contains(string(raw), "GOMEMLIMIT=") {
 		t.Fatalf("core memory budget missing: %v", err)
 	}
+	// A server changed from exit to entry may keep forwarding but must not
+	// keep an otherwise unused sing-box process alive. Re-adding a node starts
+	// the installed core again without touching the forwarder.
+	previousNodes := state.Nodes
+	state.Nodes = nil
+	state.Revision++
+	if err := applyDesiredInternal(state, nil); err != nil {
+		t.Fatal(err)
+	}
+	if coreActive() || coreEnabled() || fileExists(CoreConfig) || !forwardActive() {
+		t.Fatal("empty node configuration did not stop sing-box and retain forwards")
+	}
+	state.Nodes = previousNodes
+	state.Revision++
+	if err := applyDesiredInternal(state, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !coreActive() || !coreEnabled() || !forwardActive() {
+		t.Fatal("restoring a node did not restart sing-box and retain forwards")
+	}
 	encoded, _ := json.Marshal(state)
 	t.Logf("applied %d bytes using real OpenRC in a %d MiB container", len(encoded), availableMemory()/mebibyte)
 	// A signed self-update must leave the worker/helper/forwarder running and

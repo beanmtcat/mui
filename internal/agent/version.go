@@ -9,7 +9,7 @@ import (
 
 // Version is the Agent source version. Release builds set the same value via
 // go build -ldflags "-X mui/internal/agent.Version=<version>".
-var Version = "0.6.21"
+var Version = "0.6.22"
 
 // CoreBinaryPath is the managed sing-box binary whose hash CoreBuild reports.
 const CoreBinaryPath = "/usr/local/bin/sing-box"

@@ -477,6 +477,11 @@ func coreActive() bool {
 	return err == nil
 }
 
+func coreEnabled() bool {
+	_, err := serviceCommand("is-enabled", "--quiet", "mui-sing-box.service")
+	return err == nil
+}
+
 func coreInstalled() bool {
 	info, err := os.Stat(CoreBinaryPath)
 	return err == nil && info.Mode().IsRegular()
@@ -529,10 +534,11 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) 
 	if err := prepareAgentProxy(state, raw); err != nil {
 		return err
 	}
-	hasCore := coreInstalled()
-	if needsCore(state) && !hasCore {
+	hasCore, wantCore := coreInstalled(), needsCore(state)
+	if wantCore && !hasCore {
 		return errors.New("该服务器未安装 sing-box；请先在服务器列表点击安装 sing-box")
 	}
+	wasCoreActive, wasCoreEnabled := coreActive(), coreEnabled()
 	forwardConfig := runtimeForwards(state)
 	needsForward := len(forwardConfig) > 0
 	wasForwardActive := forwardActive()
@@ -545,7 +551,8 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) 
 	}
 	if current.Revision == state.Revision && state.Revision > 0 {
 		forwardReady := (needsForward && wasForwardActive && wasForwardEnabled) || (!needsForward && !wasForwardActive && !wasForwardEnabled && forwardConfigEmpty)
-		if (shared.ManualFirewall(state.FirewallMode) || UFWStatus() == "active") && (!hasCore || coreActive()) && forwardReady && !driftDetected(state, hasCore) && proxyMatches(state.AgentProxy) {
+		coreReady := (!wantCore && !wasCoreActive && !wasCoreEnabled) || (wantCore && wasCoreActive && wasCoreEnabled)
+		if (shared.ManualFirewall(state.FirewallMode) || UFWStatus() == "active") && coreReady && forwardReady && !driftDetected(state, hasCore) && proxyMatches(state.AgentProxy) {
 			return nil
 		}
 	}
@@ -574,7 +581,7 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) 
 	}
 	coreUnitChanged := false
 	restoreCoreUnit := func() {}
-	if hasCore {
+	if hasCore && wantCore {
 		path, unit, mode := serviceFile("mui-sing-box.service", coreUnitForState(state))
 		previousUnit, readErr := os.ReadFile(path)
 		if readErr != nil && !os.IsNotExist(readErr) {
@@ -658,7 +665,7 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) 
 		}
 	}
 	var config []byte
-	if hasCore {
+	if hasCore && wantCore {
 		config, err = shared.SingBoxConfig(state.Nodes, CertDir, state.OutboundInterface)
 		if err != nil {
 			restoreCerts()
@@ -674,7 +681,8 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) 
 	oldState := readCurrentRaw()
 	// Restarting the core drops every connection on the host, so only do it when
 	// what the core reads has actually changed. Firewall-only jobs skip it.
-	coreChanged := hasCore && (coreUnitChanged || len(certBackup) > 0 || !bytes.Equal(previous, config) || !coreActive())
+	coreChanged := hasCore && wantCore && (coreUnitChanged || len(certBackup) > 0 || !bytes.Equal(previous, config) || !wasCoreActive || !wasCoreEnabled)
+	stopCore := hasCore && !wantCore && (wasCoreActive || wasCoreEnabled || len(previous) > 0)
 	tmp := CoreConfig + ".next"
 	if coreChanged {
 		if err := writeOwned(tmp, config, 0640, coreUser); err != nil {
@@ -736,6 +744,7 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) 
 		}
 		return waitForwardReady(rollbackRaw)
 	}
+	coreTouched := false
 	fail := func(err error) error {
 		restoreCerts()
 		if forwardTouched {
@@ -743,9 +752,9 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) 
 				err = fmt.Errorf("%w; restore previous forward configuration: %v", err, rollbackErr)
 			}
 		}
-		if coreChanged {
+		if coreTouched {
 			restoreCoreUnit()
-			rollbackCore(previous)
+			rollbackCore(previous, wasCoreActive, wasCoreEnabled)
 		}
 		if !shared.ManualFirewall(state.FirewallMode) {
 			if rollbackErr := restoreUFW(oldState); rollbackErr != nil {
@@ -755,6 +764,7 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) 
 		return err
 	}
 	if coreChanged {
+		coreTouched = true
 		if err = os.Rename(tmp, CoreConfig); err != nil {
 			return fail(err)
 		}
@@ -768,6 +778,17 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) 
 			return fail(err)
 		}
 		if _, err = serviceCommand("enable", "mui-sing-box.service"); err != nil {
+			return fail(err)
+		}
+	} else if stopCore {
+		coreTouched = true
+		if _, err = serviceCommand("disable", "--now", "mui-sing-box.service"); err != nil {
+			return fail(err)
+		}
+		if coreActive() || coreEnabled() {
+			return fail(errors.New("sing-box 未能停用"))
+		}
+		if err = os.Remove(CoreConfig); err != nil && !os.IsNotExist(err) {
 			return fail(err)
 		}
 	}
@@ -908,7 +929,10 @@ func sanitizeStateForStorage(state shared.DesiredState) shared.DesiredState {
 // core config, a replaced certificate, or a missing UFW rule all keep the
 // revision, so the early return must check the artifacts themselves.
 func driftDetected(state shared.DesiredState, hasCore bool) bool {
-	if hasCore {
+	if hasCore && !needsCore(state) && fileExists(CoreConfig) {
+		return true
+	}
+	if hasCore && needsCore(state) {
 		path, unit, _ := serviceFile("mui-sing-box.service", coreUnitForState(state))
 		if current, err := os.ReadFile(path); err != nil || !bytes.Equal(current, []byte(unit)) {
 			return true
@@ -1349,14 +1373,21 @@ func mustJSON(v any) (string, error) {
 	b, err := json.Marshal(v)
 	return string(b), err
 }
-func rollbackCore(previous []byte) {
+func rollbackCore(previous []byte, wasActive, wasEnabled bool) {
 	if len(previous) > 0 {
 		_ = writeOwned(CoreConfig, previous, 0640, coreUser)
+	} else {
+		_ = os.Remove(CoreConfig)
+	}
+	if wasEnabled {
+		_, _ = serviceCommand("enable", "mui-sing-box.service")
+	} else {
+		_, _ = serviceCommand("disable", "mui-sing-box.service")
+	}
+	if wasActive {
 		_, _ = serviceCommand("restart", "mui-sing-box.service")
 	} else {
 		_, _ = serviceCommand("stop", "mui-sing-box.service")
-		_, _ = serviceCommand("disable", "mui-sing-box.service")
-		_ = os.Remove(CoreConfig)
 	}
 }
 func restoreUFW(oldState []byte) error {

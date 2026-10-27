@@ -40,6 +40,49 @@ func TestRoleChangeInvalidatesInstallerCoreSelection(t *testing.T) {
 	}
 }
 
+func TestRoleChangeQueuesApplyToStopUnusedCore(t *testing.T) {
+	p := newTestMui(t)
+	id, agent := p.enroll("role-core-stop")
+	server, err := p.store.Server(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Roles = []string{shared.RoleEntry}
+	if code, out, _ := p.do("PATCH", "/api/servers/"+id, server, nil); code != 200 {
+		t.Fatalf("change role: %d %v", code, out)
+	}
+	code, job, _ := p.do("GET", "/agent/job", nil, agent)
+	if code != 200 || job["kind"] != "nodes.apply" {
+		t.Fatalf("role change did not queue an Agent apply: %d %v", code, job)
+	}
+	state := job["state"].(map[string]any)
+	if nodes := state["nodes"].([]any); len(nodes) != 0 {
+		t.Fatalf("entry-only server still has node configuration: %v", nodes)
+	}
+}
+
+func TestAgentUpgradeQueuesIdleCoreCleanupForOldRoleChange(t *testing.T) {
+	p := newTestMui(t)
+	id, agent := p.enroll("legacy-idle-core")
+	server, err := p.store.Server(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a role edit saved by the older panel, which did not queue an
+	// apply. The core binary is still installed and its service may be live.
+	server.Roles = []string{shared.RoleEntry}
+	server.AgentVersion = "0.6.21"
+	if err := p.store.PutServer(server); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := p.do("POST", "/agent/report", map[string]any{"agentVersion": "0.6.22", "coreBuild": server.CoreBuild}, agent); code != 200 {
+		t.Fatalf("new Agent report: %d %v", code, out)
+	}
+	if code, job, _ := p.do("GET", "/agent/job", nil, agent); code != 200 || job["kind"] != "nodes.apply" {
+		t.Fatalf("upgrade did not queue idle core cleanup: %d %v", code, job)
+	}
+}
+
 func TestRevokedAgentStopsAuthenticatingAndCanReenroll(t *testing.T) {
 	p := newTestMui(t)
 	id, auth := p.enroll("revoke")
