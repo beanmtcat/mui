@@ -1743,11 +1743,12 @@ function App() {
                             updatingAgentIDs.has(s.id) && "节点配置更新中，等待 Agent 应用",
                             s.agentVersion && (s.releaseKeyPinned ? "升级需发布签名" : "升级未启用签名校验"),
                             `类型：${rolesText(s.roles)}`,
-                            `sing-box：${s.coreBuild ? s.coreVersion || "版本待上报" : "未安装"}`,
+                            `sing-box 安装：${s.coreBuild ? s.coreVersion || "版本待上报" : "未安装"}`,
+                            s.coreBuild && "这里显示已安装的二进制版本，不代表 sing-box 服务正在运行；无启用节点时 Agent 0.6.22 会停用服务。",
                             s.coreSelfUpdate && s.coreBuild && coreReleases[s.arch] ? s.coreBuild === coreReleases[s.arch] ? "核心已是当前构建" : "核心有可用升级" : !s.coreSelfUpdate && s.agentVersion ? "升级 Agent 后可一键升级核心" : "",
                             operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status)) && "程序升级进行中，详情见操作记录",
                           ].filter(Boolean).join("\n")} /></span>
-                        <small>{s.managementMode === "external" ? "连接信息由卖家提供" : s.managementMode === "offline" ? (!s.offlineExportedAt || s.offlineExportedRevision !== s.revision ? "配置待导出" : `已导出 v${s.offlineExportedRevision}`) : `Agent ${s.agentVersion || "未接入"} · 核心 ${s.coreBuild ? s.coreVersion || "待上报" : "未安装"}`}</small>
+                        <small>{s.managementMode === "external" ? "连接信息由卖家提供" : s.managementMode === "offline" ? (!s.offlineExportedAt || s.offlineExportedRevision !== s.revision ? "配置待导出" : `已导出 v${s.offlineExportedRevision}`) : `Agent ${s.agentVersion || "未接入"} · sing-box ${s.coreBuild ? `已安装 ${s.coreVersion || "版本待上报"}` : "未安装"}`}</small>
                       </td>
                       <td>
                         <button type="button" className="serverListLink" title={`查看「${s.name}」的防火墙`} aria-label={`查看「${s.name}」的防火墙`} onClick={() => {
