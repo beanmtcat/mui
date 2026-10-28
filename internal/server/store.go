@@ -849,6 +849,36 @@ func (s *Store) PutCertificate(v shared.Certificate) error {
 	_, err = s.DB.Exec(`INSERT INTO mui_certificates(id,data,secret) VALUES($1,$2,$3)`, v.ID, Marshal(v), secret)
 	return err
 }
+
+// UpdateCertificate stores the certificate and any node status changes in one
+// transaction. Node secrets stay in their existing encrypted columns.
+func (s *Store) UpdateCertificate(v shared.Certificate, pendingNodes []shared.Node) error {
+	secret, err := s.Encrypt(v.Key)
+	if err != nil {
+		return err
+	}
+	v.Key = ""
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.Exec(`UPDATE mui_certificates SET data=$1,secret=$2 WHERE id=$3`, Marshal(v), secret, v.ID)
+	if err != nil {
+		return err
+	}
+	if rows, err := result.RowsAffected(); err != nil {
+		return err
+	} else if rows == 0 {
+		return sql.ErrNoRows
+	}
+	for _, n := range pendingNodes {
+		if _, err := tx.Exec(`UPDATE mui_nodes SET data=$1 WHERE id=$2`, Marshal(n), n.ID); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
 func (s *Store) Rules(serverID string) ([]shared.FirewallRule, error) {
 	if serverID == "" {
 		return queryJSON[shared.FirewallRule](s.DB, `SELECT data FROM mui_firewall_rules ORDER BY id`)

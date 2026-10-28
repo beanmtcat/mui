@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { MemoSecretTextarea } from "./secrets";
 
-export default function CertificateFileField({ kind, value, onChange, onBusy }: {
-  kind: "certificate" | "key"; value: string; onChange: (value: string) => void; onBusy: (busy: boolean) => void;
+export default function CertificateFileField({ kind, value, onChange, onBusy, required = true }: {
+  kind: "certificate" | "key"; value: string; onChange: (value: string) => void; onBusy: (busy: boolean) => void; required?: boolean;
 }) {
   const key = kind === "key";
   const [error, setError] = useState("");
@@ -32,7 +32,7 @@ export default function CertificateFileField({ kind, value, onChange, onBusy }: 
   const paste = (text: string) => { request.current++; setBusy(false); onBusy(false); setError(""); onChange(text); };
   return <div className="certificateFileField">
     <label>
-      <span>{key ? "私钥文件（.key）*" : "证书文件（.pem / .crt）*"}</span>
+      <span>{key ? "私钥文件（.key）" : "证书文件（.pem / .crt）"}{required && " *"}</span>
       <input type="file" aria-label={key ? "私钥文件" : "证书文件"} accept={key ? ".key,.pem,text/plain,application/x-pem-file" : ".pem,.crt,.cer,text/plain,application/x-pem-file"} onChange={(e) => void choose(e.target.files?.[0])} />
     </label>
     <p className="hint">{key ? <>对应 Nginx 的 <code>ssl_certificate_key</code>。支持 RSA PKCS#1、PKCS#8 和 EC 私钥。</> : <>对应 Nginx 的 <code>ssl_certificate</code>。一个 PEM 可包含证书和中间证书链，保持服务器证书在最前。</>}</p>

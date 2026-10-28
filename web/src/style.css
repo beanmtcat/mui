@@ -240,6 +240,19 @@ td > button:hover {
   flex-wrap: wrap;
   gap: 4px 14px;
 }
+.certificateActions {
+  gap: 8px 24px;
+}
+.certificateActions button {
+  padding: 4px 0;
+}
+.certificatePending {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  margin-top: 4px;
+}
 .dangerText,
 .actions button.dangerText,
 td > button.dangerText {

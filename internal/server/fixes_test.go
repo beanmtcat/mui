@@ -515,8 +515,11 @@ func TestUnsignedAgentRequests(t *testing.T) {
 }
 
 // makeTestCertificate generates a self-signed certificate for cert tests.
-func makeTestCertificate(t *testing.T, isCA bool, eku []x509.ExtKeyUsage, days int) (string, string) {
+func makeTestCertificate(t *testing.T, isCA bool, eku []x509.ExtKeyUsage, days int, dnsNames ...string) (string, string) {
 	t.Helper()
+	if len(dnsNames) == 0 {
+		dnsNames = []string{"example.com"}
+	}
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -524,12 +527,12 @@ func makeTestCertificate(t *testing.T, isCA bool, eku []x509.ExtKeyUsage, days i
 	now := time.Now()
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(now.UnixNano()),
-		Subject:               pkix.Name{CommonName: "example.com"},
+		Subject:               pkix.Name{CommonName: dnsNames[0]},
 		NotBefore:             now.Add(-time.Hour),
 		NotAfter:              now.Add(time.Duration(days) * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage:           eku,
-		DNSNames:              []string{"example.com"},
+		DNSNames:              dnsNames,
 		IsCA:                  isCA,
 		BasicConstraintsValid: true,
 	}

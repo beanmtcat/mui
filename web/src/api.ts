@@ -130,6 +130,7 @@ export type Certificate = {
   id: string;
   name: string;
   domain: string;
+  pendingServers?: string[];
   dnsNames?: string[];
   pem: string;
   key?: string;

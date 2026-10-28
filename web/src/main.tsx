@@ -1121,14 +1121,17 @@ function App() {
   };
   const submitCert = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!certForm.pem?.trim() || !certForm.key?.trim()) {
-      setError("请选择证书 .pem 和私钥 .key 文件，或粘贴对应的 PEM 内容。");
+    const hasPem = !!certForm.pem?.trim();
+    const hasKey = !!certForm.key?.trim();
+    if ((!certForm.id && (!hasPem || !hasKey)) || hasPem !== hasKey) {
+      setError(certForm.id ? "更换证书时，请同时选择证书和私钥文件。" : "请选择证书 .pem 和私钥 .key 文件，或粘贴对应的 PEM 内容。");
       return;
     }
+    const payload = { name: certForm.name || "", domain: certForm.domain || "", pem: certForm.pem || "", key: certForm.key || "" };
     if (
       await act(
-        () => mutation("/api/certificates", "POST", certForm),
-        "证书已添加",
+        () => mutation("/api/certificates" + (certForm.id ? "/" + certForm.id : ""), certForm.id ? "PATCH" : "POST", payload),
+        certForm.id ? hasPem ? "证书已更新，相关在线服务器已排队应用" : "证书信息已更新" : "证书已添加",
       )
     )
       close();
@@ -2086,18 +2089,39 @@ if [ "$(id -u)" -eq 0 ]; then sh "$mui_uninstall"; else sudo sh "$mui_uninstall"
                       <td>
                         <strong>{c.name || c.domain}</strong>
                       </td>
-                      <td>{nodes.filter((n) => n.certificateId === c.id).length} 个节点</td>
+                      <td>
+                        {nodes.filter((n) => n.certificateId === c.id).length} 个节点
+                        {!!c.pendingServers?.length && <div className="certificatePending">
+                          <span className="status warn" title={c.pendingServers.join("、")}>{c.pendingServers.length} 台服务器待应用</span>
+                          <button type="button" className="textButton" onClick={() => void act(
+                            () => mutation("/api/certificates/" + c.id, "PATCH", { name: c.name, domain: c.domain }),
+                            "已重新排队下发证书",
+                          )}>重新下发</button>
+                        </div>}
+                      </td>
                       <td className="mono">{c.domain}</td>
                       <td>{new Date(c.expiresAt).toLocaleDateString()}{c.expiringSoon && <span className="status bad">{c.daysUntilExpiry !== undefined && c.daysUntilExpiry < 0 ? "已过期" : c.daysUntilExpiry !== undefined ? `${c.daysUntilExpiry} 天后到期` : "即将到期"}</span>}</td>
                       <td>
-                        <button
-                          className="dangerText"
-                          onClick={() =>
-                            deleteItem("/api/certificates/" + c.id, "证书")
-                          }
-                        >
-                          删除
-                        </button>
+                        <div className="actions certificateActions">
+                          <button
+                            onClick={() => {
+                              setCertForm({ id: c.id, name: c.name, domain: c.domain, pem: "", key: "" });
+                              setCertFilesBusy({ pem: false, key: false });
+                              setModal("certificate");
+                              setError(""); setNotice("");
+                            }}
+                          >
+                            编辑
+                          </button>
+                          <button
+                            className="dangerText"
+                            onClick={() =>
+                              deleteItem("/api/certificates/" + c.id, "证书")
+                            }
+                          >
+                            删除
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -3119,7 +3143,7 @@ if [ "$(id -u)" -eq 0 ]; then sh "$mui_uninstall"; else sudo sh "$mui_uninstall"
                           ? "编辑节点模板"
                           : "新建节点模板"
                       : modal === "certificate"
-                        ? "上传证书"
+                        ? certForm.id ? "编辑证书" : "上传证书"
                         : modal === "customer"
                           ? customerForm.id ? "编辑客户" : "新建客户"
                         : modal === "rule"
@@ -3774,9 +3798,9 @@ if [ "$(id -u)" -eq 0 ]; then sh "$mui_uninstall"; else sudo sh "$mui_uninstall"
             )}
             {modal === "certificate" && (
               <form className="certificateForm" onSubmit={submitCert}>
-                <p className="hint">和 Nginx 一样，选择证书文件和对应私钥文件即可，无需转换格式或选择服务器。</p>
-                <CertificateFileField kind="certificate" value={certForm.pem || ""} onChange={(pem) => setCertForm((f) => ({ ...f, pem }))} onBusy={(busy) => setCertFilesBusy((s) => ({ ...s, pem: busy }))} />
-                <CertificateFileField kind="key" value={certForm.key || ""} onChange={(key) => setCertForm((f) => ({ ...f, key }))} onBusy={(busy) => setCertFilesBusy((s) => ({ ...s, key: busy }))} />
+                <p className="hint">{certForm.id ? "更换证书时请同时选择新的证书和私钥；只修改名称或域名时，文件留空即可保留原证书。保存后，使用该证书的在线服务器会自动应用新证书，期间节点显示为待应用。" : "和 Nginx 一样，选择证书文件和对应私钥文件即可，无需转换格式或选择服务器。"}</p>
+                <CertificateFileField key={certForm.id ? certForm.id + "-pem" : "new-pem"} kind="certificate" required={!certForm.id} value={certForm.pem || ""} onChange={(pem) => setCertForm((f) => ({ ...f, pem }))} onBusy={(busy) => setCertFilesBusy((s) => ({ ...s, pem: busy }))} />
+                <CertificateFileField key={certForm.id ? certForm.id + "-key" : "new-key"} kind="key" required={!certForm.id} value={certForm.key || ""} onChange={(key) => setCertForm((f) => ({ ...f, key }))} onBusy={(busy) => setCertFilesBusy((s) => ({ ...s, key: busy }))} />
                 <div className="formGrid">
                   <Field label="名称">
                     <input
@@ -3795,8 +3819,8 @@ if [ "$(id -u)" -eq 0 ]; then sh "$mui_uninstall"; else sudo sh "$mui_uninstall"
                     />
                   </Field>
                 </div>
-                <p className="hint">证书可供多台服务器复用。创建 AnyTLS 节点时选择证书，面板会将证书和私钥下发到该节点所在服务器；TLS 域名须被证书覆盖。</p>
-                <button className="primary submit" disabled={certFilesBusy.pem || certFilesBusy.key || !certForm.pem?.trim() || !certForm.key?.trim()}>{certFilesBusy.pem || certFilesBusy.key ? "正在读取文件…" : "保存证书"}</button>
+                <p className="hint">证书可供多台服务器复用。更新证书会重新应用相关服务器配置，连接可能短暂中断；新证书须覆盖所有引用节点的 TLS 域名。</p>
+                <button className="primary submit" disabled={certFilesBusy.pem || certFilesBusy.key || (!certForm.id && (!certForm.pem?.trim() || !certForm.key?.trim())) || (!!certForm.pem?.trim() !== !!certForm.key?.trim())}>{certFilesBusy.pem || certFilesBusy.key ? "正在读取文件…" : "保存证书"}</button>
               </form>
             )}
             {modal === "route" && (() => {
