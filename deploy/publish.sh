@@ -145,6 +145,10 @@ docker info >/dev/null
 docker compose version >/dev/null
 help=$(docker compose up --help)
 [[ "$help" == *--wait-timeout* ]] || { echo '请更新 Docker Compose，需支持 up --wait-timeout' >&2; exit 1; }
+help=$(docker compose build --help)
+[[ "$help" == *--print* ]] || { echo '请更新 Docker Compose，需支持 build --print' >&2; exit 1; }
+help=$(docker buildx bake --help)
+[[ "$help" == *--allow* ]] || { echo '请更新 Docker Buildx，需支持 bake --allow' >&2; exit 1; }
 if [[ -n "$2" && -e "$root/deploy/.env" ]]; then printf '远程 %s/deploy/.env 已存在，拒绝覆盖；更新时去掉 --init-env\n' "$root" >&2; exit 1; fi
 if [[ -z "$2" && ! -s "$root/deploy/.env" ]]; then printf '远程缺少 %s/deploy/.env；首次发布请使用 --init-env 指定生产配置\n' "$root" >&2; exit 1; fi
 mkdir -p -- "$root"
@@ -202,7 +206,11 @@ compose=(docker compose --project-name "$project" --env-file "$root/deploy/.env"
 for file in "$@"; do compose+=(-f "$release/deploy/$file"); done
 case "$service" in all) services=(mui-service mui-web);; backend) services=(mui-service);; frontend) services=(mui-web);; esac
 "${compose[@]}" config --quiet
-"${compose[@]}" build "${services[@]}"
+# The target host resolves package registries through its host network. Newer
+# Compose invokes Bake, which requires network.host to be granted explicitly.
+# Keep Compose as the source of build contexts, tags and selected services.
+"${compose[@]}" build --print "${services[@]}" |
+  docker buildx bake --file - --allow=network.host --load
 if [[ "$with_agent" == 1 ]]; then
   for arch in amd64 arm64; do
     [[ -d "$release/bin/$arch" ]] || continue

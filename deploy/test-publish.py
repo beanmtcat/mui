@@ -43,15 +43,24 @@ raise SystemExit(subprocess.call(['bash','-c',args[0]]))
         self.command("docker", r'''
 import json, os, sys
 args = sys.argv[1:]
+# Capability probes are not build steps.
+if args == ['compose','build','--help']: print('--print'); raise SystemExit(0)
+if args == ['buildx','bake','--help']: print('--allow'); raise SystemExit(0)
 with open(os.environ['PUBLISH_MOCK_LOG'],'a') as stream: stream.write(json.dumps(args)+'\n')
 if args == ['compose','up','--help']: print('--wait-timeout'); raise SystemExit(0)
 failure = os.environ.get('PUBLISH_MOCK_FAIL')
+if args[:2] == ['buildx','bake']:
+    # Compose's build definition arrives on stdin.
+    if sys.stdin.read() != '{"target": {}}\n': raise SystemExit(26)
+    if failure == 'bake': raise SystemExit(28)
+    raise SystemExit(0)
 if args and args[0] == 'compose':
     # Compose exec forwards stdin even with -T. Simulate that behavior so
     # the health check cannot swallow the rest of the remote Bash program.
     if 'exec' in args: sys.stdin.read()
     for step in ('build','up','exec'):
         if step in args and failure == step: raise SystemExit(27)
+    if '--print' in args: print('{"target": {}}')
     if 'ps' in args: print('mui-service healthy; mui-web healthy')
 ''')
         # Linux deployment utilities are mocked only for their platform details.
@@ -165,6 +174,16 @@ else: raise SystemExit(subprocess.call(['/bin/mv',*args]))
         self.assertFalse(any("build" in call for call in self.calls()))
         self.assertFalse((self.remote / "current").exists())
 
+    def test_build_is_bake_with_host_network_and_failure_stops_publish(self):
+        previous = self.initialize()
+        bakes = [call for call in self.calls() if call[:2] == ["buildx", "bake"]]
+        self.assertIn("--allow=network.host", bakes[-1])
+        self.env["PUBLISH_MOCK_FAIL"] = "bake"
+        self.log.write_text("")
+        self.run_publish(ok=False)
+        self.assertFalse(any("up" in call and "--help" not in call for call in self.calls()))
+        self.assertEqual((self.remote / "current").resolve(), previous)
+
     def test_failed_build_does_not_start_containers_or_switch_current(self):
         previous = self.initialize()
         self.log.unlink()
@@ -183,7 +202,7 @@ else: raise SystemExit(subprocess.call(['/bin/mv',*args]))
 
     def agent_fixture(self, corrupt=False):
         source = self.base / "source"
-        files = ("go.mod", "go.sum", ".dockerignore", "web/package.json", "web/package-lock.json",
+        files = ("go.mod", "go.sum", "THIRD_PARTY_NOTICES.md", ".dockerignore", "web/package.json", "web/package-lock.json",
                  "web/tsconfig.json", "web/vite.config.ts", "web/index.html", "deploy/Mui.Dockerfile",
                  "deploy/Web.Dockerfile", "deploy/Agent.Dockerfile", "deploy/build-agent.sh",
                  "deploy/compose.yaml", "deploy/compose.web.yaml", "deploy/compose.backend.yaml",
