@@ -237,8 +237,12 @@ td > button:hover {
 }
 .actions {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px 14px;
+  white-space: nowrap;
+}
+.actions button {
+  white-space: nowrap;
 }
 .certificateActions {
   gap: 8px 24px;
@@ -296,15 +300,6 @@ td > button.dangerText {
   border: 0;
   background: none;
   color: var(--muted);
-}
-.firewallToast {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 9;
-  width: min(420px, calc(100vw - 32px));
-  margin: 0;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, .18);
 }
 .error {
   color: var(--bad);
@@ -373,7 +368,7 @@ td > button.dangerText {
 }
 .serverListTable th,
 .serverListTable td {
-  padding: 10px 12px;
+  padding: 10px 8px;
   vertical-align: middle;
 }
 .serverListTable td {
@@ -501,7 +496,7 @@ td > button.dangerText {
 }
 .serverListTable td small {
   overflow: hidden;
-  max-width: 190px;
+  max-width: 170px;
   white-space: nowrap;
   text-overflow: ellipsis;
 }
@@ -835,23 +830,6 @@ input[type="checkbox"] {
   overflow: auto;
   border: 1px solid var(--line);
   border-radius: 4px;
-}
-.subscriptionRouteChoice {
-  align-items: flex-start;
-  padding: 4px 0;
-}
-.subscriptionRouteChoice input {
-  flex-shrink: 0;
-  margin-top: 3px;
-}
-.subscriptionRouteDetails {
-  display: grid;
-  gap: 3px;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.subscriptionRouteChoice .routeChoiceIssue {
-  color: var(--warn);
 }
 .hint {
   margin-top: 12px;
@@ -1528,7 +1506,7 @@ th.num {
 }
 .routeSourceSelectors {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(145px, .7fr);
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
   gap: 8px;
 }
 @media (max-width: 740px) {
@@ -1586,3 +1564,372 @@ th.num {
 }
 .serverCoreHint p { margin: 0 0 8px; }
 .serverCoreHint button + button { margin-left: 8px; }
+
+/* Floating messages: they never push the page down. */
+.toasts {
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 30;
+  display: grid;
+  gap: 8px;
+  width: min(420px, calc(100vw - 32px));
+  pointer-events: none;
+}
+.toasts .banner {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+  pointer-events: auto;
+}
+
+/* Sidebar groups */
+.sidebar {
+  overflow-y: auto;
+}
+.sidebar nav {
+  gap: 10px;
+}
+.navGroup {
+  display: grid;
+  gap: 1px;
+}
+.navGroup > div {
+  display: grid;
+  gap: 1px;
+}
+.navTitle {
+  padding: 2px 10px;
+  font-size: 12px;
+  color: var(--idle);
+}
+.navBadge {
+  min-width: 18px;
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: 9px;
+  background: var(--bad);
+  color: var(--surface);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+.menuButton {
+  display: none;
+}
+
+/* Sortable headings and row links */
+.sortButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+}
+.sortButton:hover {
+  color: var(--text);
+}
+.rowLink {
+  padding: 0;
+  text-align: left;
+  white-space: normal;
+}
+.selectCell {
+  width: 32px;
+}
+.selectCell input {
+  width: auto;
+  margin: 0;
+}
+
+/* Batch actions */
+.batchBar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-block: 1px solid var(--line);
+  background: var(--surface);
+}
+.batchBar strong {
+  margin-right: 8px;
+}
+.batchResult {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+}
+.batchResult p {
+  margin: 0;
+}
+.batchResult progress {
+  width: 100%;
+}
+.batchResult > button {
+  justify-self: end;
+}
+.batchFailures {
+  max-height: 240px;
+  margin: 0;
+  padding-left: 18px;
+  overflow: auto;
+  color: var(--bad);
+}
+
+/* Folded form sections */
+.advanced {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.advanced > summary {
+  padding: 12px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.advancedBody {
+  padding-top: 12px;
+}
+
+/* First steps */
+.onboardingSteps {
+  display: grid;
+  gap: 0;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+}
+.onboardingSteps li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+  counter-increment: step;
+}
+.onboardingSteps li > div {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+}
+.onboardingSteps li > div::before {
+  content: counter(step);
+  grid-row: span 2;
+  color: var(--muted);
+}
+.onboardingSteps li.done > div::before {
+  content: "✓";
+  color: var(--good);
+}
+.onboardingSteps li.done strong {
+  font-weight: 400;
+  color: var(--muted);
+}
+.onboardingSteps small {
+  color: var(--muted);
+}
+
+/* The actions stay reachable while a wide table scrolls sideways. */
+@media (min-width: 761px) {
+  .cardTable th:last-child,
+  .cardTable td:last-child {
+    position: sticky;
+    right: 0;
+    background: var(--surface);
+    box-shadow: -1px 0 0 var(--line);
+  }
+}
+
+/* Narrow screens: a drawer menu, and rows as labelled cards */
+@media (max-width: 760px) {
+  .sidebar {
+    flex-wrap: wrap;
+    overflow: visible;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    background: var(--bg);
+  }
+  .brand {
+    display: block;
+    padding: 0;
+  }
+  .menuButton {
+    display: inline-flex;
+    margin-left: auto;
+  }
+  .sidebar nav,
+  .sideBottom {
+    display: none;
+  }
+  .sidebar.menuOpen nav {
+    display: grid;
+    flex-basis: 100%;
+    max-height: calc(100vh - 110px);
+    overflow-y: auto;
+  }
+  .sidebar.menuOpen .sideBottom {
+    display: block;
+    flex-basis: 100%;
+    margin: 0;
+  }
+  .sidebar nav button,
+  .sideBottom button {
+    width: 100%;
+  }
+  .cardTable table,
+  .cardTable tbody,
+  .cardTable tr {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .cardTable thead tr {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 12px;
+    padding: 8px 16px;
+  }
+  .cardTable thead th {
+    padding: 0;
+    border: 0;
+    white-space: nowrap;
+  }
+  /* Only what acts on the whole table survives from the header. */
+  .cardTable thead th:not(:has(button, input)) {
+    display: none;
+  }
+  .cardTable tbody tr {
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .cardTable tbody td {
+    display: grid;
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 8px;
+    padding: 4px 0;
+    border: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .cardTable tbody td > * {
+    grid-column: 2;
+  }
+  .cardTable tbody td::before {
+    content: attr(data-label);
+    grid-row: 1 / span 4;
+    grid-column: 1;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .cardTable tbody td:empty {
+    display: none;
+  }
+  .cardTable td.selectCell {
+    display: block;
+  }
+  .cardTable td.selectCell::before {
+    content: none;
+  }
+  .batchBar {
+    top: 58px;
+  }
+}
+
+.attentionTools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.attentionRead {
+  color: var(--muted);
+}
+
+/* Route hops: the chosen servers, with the full list on demand. */
+.itemPicker {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.itemPickerRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.chipIssue {
+  border-color: var(--warn);
+}
+.pickerText {
+  display: grid;
+  min-width: 0;
+}
+.pickerText small {
+  color: var(--muted);
+}
+.itemPicker .routeChoiceIssue {
+  display: block;
+  font-size: 12px;
+  color: var(--warn);
+}
+.serverChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--code-bg);
+}
+.serverChip button {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  line-height: 1;
+}
+.pickerPanel {
+  position: fixed;
+  z-index: 15;
+  display: grid;
+  gap: 2px;
+  align-content: start;
+  padding: 8px 10px;
+  overflow-y: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+}
+.pickerPanel .check {
+  padding: 3px 0;
+}
+.pickerPanel .check {
+  align-items: flex-start;
+}
+.pickerCompact .check {
+  align-items: center;
+}
+.pickerCompact .pickerText {
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+/* The sender's column holds two selects, the receiver's one. */
+@media (min-width: 761px) {
+  .routeConnection .formGrid {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
+}

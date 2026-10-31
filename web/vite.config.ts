@@ -20,10 +20,8 @@ export default defineConfig({
     },
   },
   build: {
-    // Split the first-load bundle: framework and the QR library load as
-    // separate chunks instead of one 300KB blob. Page code stays in main.tsx
-    // for now (it shares ~40 pieces of state); per-tab lazy routes are the
-    // follow-up once the tab components are extracted.
+    // Split the first-load bundle: the framework and the QR library load as
+    // separate chunks, and each page and the dialogs load on first use.
     rollupOptions: {
       output: {
         // Vite 8 (Rolldown) only accepts the function form of manualChunks.
