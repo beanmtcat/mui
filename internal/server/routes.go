@@ -249,6 +249,11 @@ func (w routeWorld) checkRouteShape(rt shared.Route) error {
 		if hop.Balance != "failover" && hop.Balance != "round-robin" {
 			return fmt.Errorf("第 %d 跳的负载均衡模式无效", i+1)
 		}
+		for id, mode := range hop.AddressModes {
+			if !slices.Contains(hop.ServerIDs, id) || mode != "public" && mode != "internal" {
+				return fmt.Errorf("第 %d 跳的服务器连接地址设置无效", i+1)
+			}
+		}
 		for _, id := range hop.ServerIDs {
 			s, ok := w.servers[id]
 			if !ok {
@@ -261,13 +266,14 @@ func (w routeWorld) checkRouteShape(rt shared.Route) error {
 				return fmt.Errorf("服务器 %s 在链路中出现了多次", s.Name)
 			}
 			seen[id] = true
-			if hopAddress(s, hop.Internal) == "" {
-				if hop.Internal {
+			internal := hop.UsesInternal(id)
+			if hopAddress(s, internal) == "" {
+				if internal {
 					return fmt.Errorf("服务器 %s 没有填写内网地址", s.Name)
 				}
 				return fmt.Errorf("服务器 %s 没有地址", s.Name)
 			}
-			if err := reachableAddress(hopAddress(s, hop.Internal)); err != nil {
+			if err := reachableAddress(hopAddress(s, internal)); err != nil {
 				return fmt.Errorf("服务器 %s：%w", s.Name, err)
 			}
 		}
@@ -301,7 +307,8 @@ func (w routeWorld) checkRouteShape(rt shared.Route) error {
 	for _, hop := range rt.Hops {
 		for _, id := range hop.ServerIDs {
 			if !shared.ManualFirewall(w.servers[id].FirewallMode) {
-				if err := w.checkSources(previous, routeSourceInternal(hop.Internal, hop.SourceMode), hop.SourceFamily, hopAddress(w.servers[id], hop.Internal)); err != nil {
+				internal := hop.UsesInternal(id)
+				if err := w.checkSources(previous, routeSourceInternal(internal, hop.SourceMode), hop.SourceFamily, hopAddress(w.servers[id], internal)); err != nil {
 					return err
 				}
 			}
@@ -357,8 +364,13 @@ func (w routeWorld) sameSharedHop(a, b shared.Route, serverID string) bool {
 	}
 	for offset := range len(a.Hops) - ai {
 		left, right := a.Hops[ai+offset], b.Hops[bi+offset]
-		if !slices.Equal(left.ServerIDs, right.ServerIDs) || left.Balance != right.Balance || left.Internal != right.Internal {
+		if !slices.Equal(left.ServerIDs, right.ServerIDs) || left.Balance != right.Balance {
 			return false
+		}
+		for _, id := range left.ServerIDs {
+			if left.UsesInternal(id) != right.UsesInternal(id) {
+				return false
+			}
 		}
 	}
 	// Compare the actual listeners as well as the route shape. This catches
@@ -396,7 +408,7 @@ func (w routeWorld) manualForwardListenCompatible(rt shared.Route, manual shared
 	if hopIndex < 0 {
 		return false // An entry always needs its own listener.
 	}
-	address := hopAddress(w.servers[manual.ServerID], rt.Hops[hopIndex].Internal)
+	address := hopAddress(w.servers[manual.ServerID], rt.Hops[hopIndex].UsesInternal(manual.ServerID))
 	addressIP := net.ParseIP(address)
 	return manual.Listen == "::" || manual.Listen == address || manual.Listen == "0.0.0.0" && addressIP != nil && addressIP.To4() != nil
 }
@@ -537,7 +549,7 @@ func (w routeWorld) routeForwards(rt shared.Route) []shared.ForwardRule {
 			next := rt.Hops[k]
 			balance = next.Balance
 			for _, id := range next.ServerIDs {
-				targets = append(targets, shared.ForwardTarget{Host: hopAddress(w.servers[id], next.Internal), Port: rt.Port})
+				targets = append(targets, shared.ForwardTarget{Host: hopAddress(w.servers[id], next.UsesInternal(id)), Port: rt.Port})
 			}
 		} else {
 			targets = []shared.ForwardTarget{{Host: hopAddress(exit, rt.NodeInternal), Port: node.Port}}
@@ -546,10 +558,11 @@ func (w routeWorld) routeForwards(rt shared.Route) []shared.ForwardRule {
 			policy, sources := "all", ""
 			if k > 0 {
 				incoming := rt.Hops[k-1]
-				internal := routeSourceInternal(incoming.Internal, incoming.SourceMode)
+				selectedInternal := incoming.UsesInternal(id)
+				internal := routeSourceInternal(selectedInternal, incoming.SourceMode)
 				// This rule admits traffic into this hop. The address of its
 				// outbound target may use a different family.
-				destination := hopAddress(w.servers[id], incoming.Internal)
+				destination := hopAddress(w.servers[id], selectedInternal)
 				policy = "closed"
 				if list := w.groupSources(groups[k-1], internal, incoming.SourceFamily, destination); len(list) > 0 && w.checkSources(groups[k-1], internal, incoming.SourceFamily, destination) == nil {
 					policy, sources = "restricted", strings.Join(list, ",")

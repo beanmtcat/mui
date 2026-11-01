@@ -29,24 +29,27 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
               ]);
               const connectionSettings = (
                 senderIds: string[], receiverIds: string[], internal: boolean, sourceMode: RouteSourceMode | undefined,
-                sourceFamily: RouteSourceFamily | undefined,
+                sourceFamily: RouteSourceFamily | undefined, addressModes: RouteHop["addressModes"] | undefined,
                 setInternal: (value: boolean) => void, setSource: (value: RouteSourceMode) => void,
                 setFamily: (value: RouteSourceFamily | undefined) => void,
+                setReceiverAddress?: (serverId: string, mode: "public" | "internal") => void,
               ) => {
-                const senders = servers.filter((s) => senderIds.includes(s.id));
-                const receivers = servers.filter((s) => receiverIds.includes(s.id));
-                const sourceInternal = sourceMode === "internal" || (!sourceMode || sourceMode === "auto") && internal;
-                const targetAddress = (s: Server) => internal ? s.internalAddress : s.domain || s.ipv4 || s.ipv6;
-                const targets = receivers.map(targetAddress);
-                const useV4 = targets.some((v) => !v || !v.includes(":"));
-                const useV6 = targets.some((v) => !v || v.includes(":") || !/^\d+\.\d+\.\d+\.\d+$/.test(v));
+                const findServers = (ids: string[]) => ids.map((id) => servers.find((s) => s.id === id)).filter((s): s is Server => !!s);
+                const senders = findServers(senderIds);
+                const receivers = findServers(receiverIds);
+                const targetInternal = (s: Server) => addressModes?.[s.id] ? addressModes[s.id] === "internal" : internal;
+                const targetAddress = (s: Server) => targetInternal(s) ? s.internalAddress : (s.autoSyncPublicIp && s.domain) || s.ipv4 || s.ipv6 || s.domain;
+                const mixed = receivers.some((s) => targetInternal(s) !== internal);
                 const managed = !receivers.length || receivers.some((s) => !manualFirewall(s));
-                // Without UFW rules the saved family has no effect, so only the destination decides.
-                const allowV4 = useV4 && (!managed || sourceFamily !== "ipv6");
-                const allowV6 = useV6 && (!managed || sourceFamily !== "ipv4");
-                const sourceAddresses = (s: Server) => sourceInternal
-                  ? (s.internalAddress && (s.internalAddress.includes(":") ? allowV6 : allowV4) ? s.internalAddress : "未填写匹配地址族的内网 IP")
-                  : [...new Set([...(allowV4 ? [s.ipv4, s.detectedIpv4] : []), ...(allowV6 ? [s.ipv6, s.detectedIpv6] : [])].filter(Boolean))].join("、") || "未填写匹配地址族的公网 IP";
+                const sourceAddresses = (sender: Server, receiver: Server) => {
+                  const target = targetAddress(receiver);
+                  const allowV4 = (!target || !target.includes(":")) && (!managed || sourceFamily !== "ipv6");
+                  const allowV6 = (!target || target.includes(":") || !/^\d+\.\d+\.\d+\.\d+$/.test(target)) && (!managed || sourceFamily !== "ipv4");
+                  const sourceInternal = sourceMode === "internal" || (!sourceMode || sourceMode === "auto") && targetInternal(receiver);
+                  return sourceInternal
+                    ? (sender.internalAddress && (sender.internalAddress.includes(":") ? allowV6 : allowV4) ? sender.internalAddress : "未填写匹配地址族的内网 IP")
+                    : [...new Set([...(allowV4 ? [sender.ipv4, sender.detectedIpv4] : []), ...(allowV6 ? [sender.ipv6, sender.detectedIpv6] : [])].filter(Boolean))].join("、") || "未填写匹配地址族的公网 IP";
+                };
                 return (
                   <fieldset className="routeConnection">
                     <legend>{senders.map((s) => s.name).join(" / ") || "请选择发送方"} → {receivers.map((s) => s.name).join(" / ") || "请选择接收方"}</legend>
@@ -54,7 +57,7 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                       <Field label="防火墙来源：放行发送方的哪个 IP？">
                         {managed && <div className="routeSourceSelectors">
                           <select value={sourceMode || "auto"} onChange={(e) => setSource(e.target.value as RouteSourceMode)}>
-                            <option value="auto">自动（{internal ? "内网 IP" : "公网 IP"}）</option>
+                            <option value="auto">自动（{mixed ? "跟随各台连接地址" : internal ? "内网 IP" : "公网 IP"}）</option>
                             <option value="public">公网 IP</option>
                             <option value="internal">内网 IP</option>
                           </select>
@@ -66,14 +69,19 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                           </select>
                         </div>}
                         {!managed && <small className="connectionAddress">接收方防火墙为手动管理，面板不生成规则，请自行放行：</small>}
-                        {senders.map((s) => <small className="connectionAddress" key={s.id}>{s.name}：{sourceAddresses(s)}</small>)}
+                        {receivers.flatMap((receiver) => senders.map((sender) => <small className="connectionAddress" key={`${receiver.id}-${sender.id}`}>{receivers.length > 1 && `${receiver.name} ← `}{sender.name}：{sourceAddresses(sender, receiver)}</small>))}
                       </Field>
                       <Field label="连接地址：接收方的哪个地址？">
                         <select value={internal ? "internal" : "public"} onChange={(e) => setInternal(e.target.value === "internal")}>
-                          <option value="public">公网地址</option>
-                          <option value="internal">内网地址</option>
+                          <option value="public">{setReceiverAddress ? "全部走公网" : "公网地址"}</option>
+                          <option value="internal">{setReceiverAddress ? "全部走内网" : "内网地址"}</option>
                         </select>
-                        {receivers.map((s) => <small className="connectionAddress" key={s.id}>{s.name}：{targetAddress(s) || "未填写该地址"}</small>)}
+                        {receivers.map((s) => <div className={setReceiverAddress && receivers.length > 1 ? "routeReceiverChoice" : ""} key={s.id}>
+                          <small className="connectionAddress">{s.name}：{targetAddress(s) || "未填写该地址"}</small>
+                          {setReceiverAddress && receivers.length > 1 && <select aria-label={`${s.name} 的连接地址`} value={targetInternal(s) ? "internal" : "public"} onChange={(e) => setReceiverAddress(s.id, e.target.value as "public" | "internal")}>
+                            <option value="public">公网</option><option value="internal">内网</option>
+                          </select>}
+                        </div>)}
                       </Field>
                     </div>
                     {managed && <p className="hint">按接收方实际看到的来源 IP 选择；此设置只生成放行规则，不改变发送方的出口或路由。</p>}
@@ -123,11 +131,20 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                               id: s.id, name: s.name, details: [rolesText(s.roles) + (s.internalAddress ? ` · 内网 ${s.internalAddress}` : "")],
                             }))}
                             selected={hop.serverIds}
-                            onChange={(serverIds) => setHop(i, { serverIds })}
+                            onChange={(serverIds) => {
+                              const addressModes = Object.fromEntries(Object.entries(hop.addressModes || {}).filter(([id]) => serverIds.includes(id)));
+                              setHop(i, { serverIds, addressModes: Object.keys(addressModes).length ? addressModes : undefined });
+                            }}
                           />
                           {connectionSettings(i === 0 ? [routeForm.entryServerId || ""] : hops[i - 1].serverIds, hop.serverIds,
-                            !!hop.internal, hop.sourceMode, hop.sourceFamily,
-                            (internal) => setHop(i, { internal }), (sourceMode) => setHop(i, { sourceMode }), (sourceFamily) => setHop(i, { sourceFamily }))}
+                            !!hop.internal, hop.sourceMode, hop.sourceFamily, hop.addressModes,
+                            (internal) => setHop(i, { internal, addressModes: undefined }), (sourceMode) => setHop(i, { sourceMode }), (sourceFamily) => setHop(i, { sourceFamily }),
+                            (serverId, mode) => {
+                              const addressModes = { ...hop.addressModes };
+                              if ((mode === "internal") === !!hop.internal) delete addressModes[serverId];
+                              else addressModes[serverId] = mode;
+                              setHop(i, { addressModes: Object.keys(addressModes).length ? addressModes : undefined });
+                            })}
                         </div>
                       ))}
                       <button type="button" onClick={() => setRouteForm({ ...routeForm, hops: [...hops, { serverIds: [], balance: "failover", internal: false, sourceFamily: "ipv4" }] })}>添加一跳</button>
@@ -135,10 +152,10 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                   </div>
                   <h3 className="routeExitTitle">连接落地</h3>
                   {connectionSettings(hops.length ? hops[hops.length - 1].serverIds : [routeForm.entryServerId || ""], node ? [node.serverId] : [],
-                    !!routeForm.nodeInternal, routeForm.nodeSourceMode, routeForm.nodeSourceFamily,
+                    !!routeForm.nodeInternal, routeForm.nodeSourceMode, routeForm.nodeSourceFamily, undefined,
                     (nodeInternal) => setRouteForm({ ...routeForm, nodeInternal }), (nodeSourceMode) => setRouteForm({ ...routeForm, nodeSourceMode }),
                     (nodeSourceFamily) => setRouteForm({ ...routeForm, nodeSourceFamily }))}
-                  <p className="hint">一跳选多台服务器即为负载均衡组：主备优先用第一台可用的，轮询把新连接轮流分配；故障服务器自动停用，恢复后自动启用。</p>
+                  <p className="hint">一跳选多台服务器即为负载均衡组：主备优先用第一台可用的，轮询把新连接轮流分配；每台可单独选择公网或内网连接地址。</p>
                   <p className="hint">例如入口通过专线访问中转的公网地址：连接地址选“公网地址”，防火墙来源选“内网 IP”。新建链路默认只放行 IPv4；需要 IPv6 时单独选择，地址族不会改变发送方的出口或 DNS 解析。</p>
                   <SubmitButton busy={busy} label="保存链路" />
                 </form>

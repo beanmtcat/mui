@@ -382,7 +382,12 @@ export function useAppState() {
     const node = nodes.find((n) => n.id === r.nodeId);
     return [
       serverName(r.entryServerId),
-      ...r.hops.map((h) => h.serverIds.map(serverName).join(h.balance === "round-robin" ? " + " : " / ") + (h.internal ? "（内网）" : "")),
+      ...r.hops.map((h) => {
+        const internal = h.serverIds.map((id) => h.addressModes?.[id] === "internal" || (h.addressModes?.[id] !== "public" && h.internal));
+        const allInternal = internal.length > 0 && internal.every(Boolean);
+        return h.serverIds.map((id, i) => serverName(id) + (!allInternal && internal[i] ? "（内网）" : ""))
+          .join(h.balance === "round-robin" ? " + " : " / ") + (allInternal ? "（内网）" : "");
+      }),
       (node ? `${node.name}@${serverName(node.serverId)}` : "已删除节点") + (r.nodeInternal ? "（内网）" : ""),
     ].join(" → ");
   };

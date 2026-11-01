@@ -320,14 +320,28 @@ type RouteHop struct {
 	ServerIDs []string `json:"serverIds"`
 	Balance   string   `json:"balance"`
 	// Internal makes the previous hop reach these servers by their internal
-	// addresses.
+	// addresses by default. AddressModes overrides individual group members.
 	Internal bool `json:"internal"`
+	// A mixed group may reach some members by public address and others by
+	// internal address. Omitted members keep the group default above.
+	AddressModes map[string]string `json:"addressModes,omitempty"`
 	// SourceMode selects the previous hop's UFW source: auto, public or
 	// internal. It does not bind the outgoing connection to an interface.
 	SourceMode string `json:"sourceMode,omitempty"`
 	// SourceFamily limits the UFW allowlist to IPv4, IPv6 or both. Empty
 	// preserves the pre-existing destination-family behavior.
 	SourceFamily string `json:"sourceFamily,omitempty"`
+}
+
+func (h RouteHop) UsesInternal(serverID string) bool {
+	switch h.AddressModes[serverID] {
+	case "public":
+		return false
+	case "internal":
+		return true
+	default:
+		return h.Internal
+	}
 }
 
 type Customer struct {

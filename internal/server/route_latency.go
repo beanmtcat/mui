@@ -53,10 +53,10 @@ func routeEdgeLatencies(rt shared.Route, world routeWorld, now time.Time) []shar
 	var edges []shared.RouteEdgeLatency
 	for k, group := range groups {
 		toIDs := []string{node.ServerID}
-		port, internal := node.Port, rt.NodeInternal
+		port := node.Port
 		if k < len(rt.Hops) {
 			toIDs = rt.Hops[k].ServerIDs
-			port, internal = rt.Port, rt.Hops[k].Internal
+			port = rt.Port
 		}
 		for _, fromID := range group {
 			from := world.servers[fromID]
@@ -82,6 +82,10 @@ func routeEdgeLatencies(rt shared.Route, world routeWorld, now time.Time) []shar
 				to, ok := world.servers[toID]
 				if !ok {
 					continue
+				}
+				internal := rt.NodeInternal
+				if k < len(rt.Hops) {
+					internal = rt.Hops[k].UsesInternal(toID)
 				}
 				host := hopAddress(to, internal)
 				for _, point := range from.RouteLatencies {

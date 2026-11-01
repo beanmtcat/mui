@@ -195,7 +195,7 @@ export type Subscription = {
 };
 export type RouteSourceMode = "auto" | "public" | "internal";
 export type RouteSourceFamily = "ipv4" | "ipv6" | "both";
-export type RouteHop = { serverIds: string[]; balance: "failover" | "round-robin"; internal: boolean; sourceMode?: RouteSourceMode; sourceFamily?: RouteSourceFamily };
+export type RouteHop = { serverIds: string[]; balance: "failover" | "round-robin"; internal: boolean; addressModes?: Record<string, "public" | "internal">; sourceMode?: RouteSourceMode; sourceFamily?: RouteSourceFamily };
 export type Route = {
   id: string;
   name: string;
