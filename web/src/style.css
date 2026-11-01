@@ -1750,6 +1750,10 @@ th.num {
     background: var(--surface);
     box-shadow: -1px 0 0 var(--line);
   }
+  /* Sticky cells stack by row, so an open menu must lift its own cell. */
+  .cardTable td:last-child:has(.menuList) {
+    z-index: 6;
+  }
 }
 
 /* Narrow screens: a drawer menu, and rows as labelled cards */

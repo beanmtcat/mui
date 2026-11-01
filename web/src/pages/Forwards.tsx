@@ -25,7 +25,7 @@ export default function Forwards() {
       (!forwardFilters.source || (forwardFilters.source === "route" ? !!f.routeId : !f.routeId)) &&
       (!forwardFilters.status || (forwardDisplayStatus(f, server) || "unknown") === forwardFilters.status) &&
       matches(forwardFilters.query, f.name, server?.name, server?.ipv4, server?.ipv6,
-        f.listen, String(f.port), forwardRoutes.get(f.routeId || "")?.name,
+        f.listen, String(f.port), ...(f.routeIds?.length ? f.routeIds : [f.routeId || ""]).map((id) => forwardRoutes.get(id)?.name),
         ...f.targets.map((t) => `${t.host}:${t.port}`));
   }), sort, {
     name: (f) => f.name, server: (f) => serverName(f.serverId), port: (f) => f.port, traffic: (f) => (f.uplink || 0) + (f.downlink || 0),
@@ -85,7 +85,7 @@ export default function Forwards() {
                     const offline = server?.managementMode === "offline";
                     return (
                       <tr key={f.id}>
-                        <td><strong>{f.name}</strong>{f.routeId && <small>链路自动生成</small>}</td>
+                        <td><strong>{f.name}</strong>{f.routeId && <small>{f.routeIds && f.routeIds.length > 1 ? `${f.routeIds.length} 条链路共用` : "链路自动生成"}</small>}</td>
                         <td><button type="button" className="textButton rowLink" onClick={() => goTo("servers", "", { q: serverName(f.serverId) })}>{serverName(f.serverId)}</button>{offline && <small>离线管理</small>}</td>
                         <td className="mono">{f.network.toUpperCase().replace("+", " + ")} {f.listen || "0.0.0.0"}:{f.port}</td>
                         <td className="mono">{f.targets.map((t) => `${t.host}:${t.port}`).join("、")}{f.targets.length > 1 && <small>{f.balance === "round-robin" ? "轮询" : "主备"}</small>}</td>

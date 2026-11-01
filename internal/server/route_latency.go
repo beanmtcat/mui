@@ -1,6 +1,7 @@
 package server
 
 import (
+	"slices"
 	"time"
 
 	"mui/internal/shared"
@@ -48,6 +49,7 @@ func routeEdgeLatencies(rt shared.Route, world routeWorld, now time.Time) []shar
 	for _, hop := range rt.Hops {
 		groups = append(groups, hop.ServerIDs)
 	}
+	expected := world.routeForwards(rt)
 	var edges []shared.RouteEdgeLatency
 	for k, group := range groups {
 		toIDs := []string{node.ServerID}
@@ -59,6 +61,21 @@ func routeEdgeLatencies(rt shared.Route, world routeWorld, now time.Time) []shar
 		for _, fromID := range group {
 			from := world.servers[fromID]
 			forwardID := routeForwardID(rt.ID, fromID, "tcp")
+			var wanted shared.ForwardRule
+			for _, rule := range expected {
+				if rule.ServerID == fromID && rule.Network == "tcp" {
+					wanted = rule
+					break
+				}
+			}
+			for _, rule := range world.forwards {
+				if rule.ServerID == fromID && rule.Network == "tcp" && rule.Enabled && !rule.Deleting && forwardBelongsToRoute(rule, rt.ID) &&
+					rule.Port == wanted.Port && rule.Balance == wanted.Balance && rule.HealthCheck == wanted.HealthCheck &&
+					len(wanted.Targets) > 0 && slices.Equal(rule.Targets, wanted.Targets) {
+					forwardID = rule.ID
+					break
+				}
+			}
 			for _, toID := range toIDs {
 				to, ok := world.servers[toID]
 				if !ok {

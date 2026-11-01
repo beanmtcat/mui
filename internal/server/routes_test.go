@@ -3,8 +3,10 @@ package server
 import (
 	"encoding/json"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"mui/internal/shared"
 )
@@ -172,6 +174,522 @@ func TestRoutePortAvoidsConflictsOnAnyHop(t *testing.T) {
 	// An explicit port in use is refused.
 	if code, out := l.route(map[string]any{"name": "r2", "entryServerId": l.entry, "nodeId": l.nodeID, "enabled": true, "port": port}); code != 409 {
 		t.Fatalf("taken port: %d %v", code, out)
+	}
+}
+
+func TestRoutesShareFinalTransitListener(t *testing.T) {
+	l := newRouteLab(t)
+	entry2, agent2 := l.p.enrollAs("entry2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.5"})
+	l.agents = append(l.agents, agent2)
+	create := func(name, entry string) string {
+		t.Helper()
+		code, route := l.route(map[string]any{"name": name, "entryServerId": entry, "nodeId": l.nodeID, "enabled": true,
+			"port": 50000, "hops": []map[string]any{{"serverIds": []string{l.t1}}}})
+		if code != 201 {
+			t.Fatalf("create %s: %d %v", name, code, route)
+		}
+		return route["id"].(string)
+	}
+	first, second := create("Shanghai 1", l.entry), create("Shanghai 2", entry2)
+	checkShared := func(sources string) {
+		t.Helper()
+		forwards := slices.DeleteFunc(l.forwards(l.t1), func(f shared.ForwardRule) bool { return !f.Enabled })
+		if len(forwards) != 2 {
+			t.Fatalf("final transit needs one TCP and one UDP listener: %+v", forwards)
+		}
+		for _, f := range forwards {
+			if f.Port != 50000 || f.FirewallPolicy != "restricted" || f.FirewallSources != sources ||
+				!slices.Equal(f.Targets, []shared.ForwardTarget{{Host: "198.51.100.4", Port: 50010}}) {
+				t.Fatalf("shared transit forward: %+v", f)
+			}
+		}
+		state, err := l.p.app.desired(l.t1)
+		active := slices.DeleteFunc(state.Forwards, func(f shared.ForwardRule) bool { return !f.Enabled })
+		if err != nil || len(active) != 2 {
+			t.Fatalf("Agent received duplicate listeners: %+v %v", state.Forwards, err)
+		}
+		for _, f := range active {
+			if len(f.RouteIDs) != 0 {
+				t.Fatalf("panel-only route membership leaked to Agent: %+v", f)
+			}
+		}
+	}
+	checkShared("198.51.100.1,198.51.100.5")
+	for _, id := range []string{l.entry, entry2} {
+		if forwards := l.forwards(id); len(forwards) != 2 || forwards[0].ServerID != id {
+			t.Fatalf("entry %s lost its own listener: %+v", id, forwards)
+		}
+	}
+	for _, f := range l.forwards(l.t1) {
+		if !slices.Equal(f.RouteIDs, []string{first, second}) {
+			t.Fatalf("shared listener lost route membership: %+v", f)
+		}
+	}
+	l.applyAll()
+	checkLive := func(routeID string) {
+		t.Helper()
+		world, err := l.p.app.loadRouteWorld()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, route := range world.routes {
+			if route.ID != routeID {
+				continue
+			}
+			live, err := l.p.app.routeLive(route, world, "")
+			if err != nil || !live {
+				t.Fatalf("route %s is not usable: live=%v err=%v", route.Name, live, err)
+			}
+			return
+		}
+		t.Fatalf("route %s disappeared", routeID)
+	}
+	for _, route := range l.p.list("/api/routes") {
+		if route["status"] != "active" {
+			t.Fatalf("shared route is not active: %+v", route)
+		}
+	}
+	checkLive(first)
+	checkLive(second)
+	forward := l.forwards(l.t1)[0]
+	if forward.Network != "tcp" {
+		forward = l.forwards(l.t1)[1]
+	}
+	point := shared.RouteLatency{ForwardID: forward.ID, Host: forward.Targets[0].Host, Port: forward.Targets[0].Port, TCPMs: 42, OK: true, At: time.Now()}
+	if code, out, _ := l.p.do("POST", "/agent/report", map[string]any{"hostReported": true, "agentVersion": "0.6.23", "forwardTcpUdp": true,
+		"manualFirewallSupport": true, "multiUserStats": true, "nodeFirewallPolicies": true, "forwardSupport": true,
+		"shadowTlsAuth": true, "snellFixedPort": true, "snellV6": true, "ufwStatus": "active",
+		"routeLatencies": []shared.RouteLatency{point}}, l.agents[1]); code != 200 {
+		t.Fatalf("shared transit latency report: %d %v", code, out)
+	}
+	for _, route := range l.p.list("/api/routes") {
+		edges, _ := route["edgeLatencies"].([]any)
+		if !slices.ContainsFunc(edges, func(edge any) bool {
+			item := edge.(map[string]any)
+			return item["fromServerId"] == l.t1 && item["toServerId"] == l.exit && item["tcpMs"] == float64(42)
+		}) {
+			t.Fatalf("shared transit latency is missing from a route: %+v", route)
+		}
+	}
+	update := func(enabled bool) {
+		t.Helper()
+		if code, out, _ := l.p.do("PATCH", "/api/routes/"+first, map[string]any{"name": "Shanghai 1", "entryServerId": l.entry, "nodeId": l.nodeID,
+			"enabled": enabled, "port": 50000, "hops": []map[string]any{{"serverIds": []string{l.t1}}}}, nil); code != 200 {
+			t.Fatalf("change first route enabled=%v: %d %v", enabled, code, out)
+		}
+	}
+	update(false)
+	checkShared("198.51.100.5")
+	l.applyAll()
+	for _, route := range l.p.list("/api/routes") {
+		if route["id"] == second && route["status"] != "active" {
+			t.Fatalf("second route failed after the first was disabled: %+v", route)
+		}
+	}
+	checkLive(second)
+	update(true)
+	checkShared("198.51.100.1,198.51.100.5")
+	if code, out, _ := l.p.do("DELETE", "/api/routes/"+first, nil, nil); code != 200 {
+		t.Fatalf("delete first route: %d %v", code, out)
+	}
+	checkShared("198.51.100.5")
+	l.applyAll()
+	routes := l.p.list("/api/routes")
+	if len(routes) != 1 || routes[0]["id"] != second || routes[0]["status"] != "active" {
+		t.Fatalf("second route failed after deleting the first: %+v", routes)
+	}
+	checkLive(second)
+}
+
+func TestRouteSharedPortRequiresSameExitNode(t *testing.T) {
+	l := newRouteLab(t)
+	entry2, _ := l.p.enrollAs("entry2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.5"})
+	if code, route := l.route(map[string]any{"name": "first", "entryServerId": l.entry, "nodeId": l.nodeID, "enabled": true,
+		"port": 50000, "hops": []map[string]any{{"serverIds": []string{l.t1}}}}); code != 201 {
+		t.Fatalf("first route: %d %v", code, route)
+	}
+	transit, _ := l.p.store.Server(l.t1)
+	transit.InternalAddress = "10.0.0.2"
+	if err := l.p.store.PutServer(transit); err != nil {
+		t.Fatal(err)
+	}
+	if code, out, _ := l.p.do("POST", "/api/routes", map[string]any{"name": "different address mode", "entryServerId": entry2, "nodeId": l.nodeID,
+		"enabled": true, "port": 50000, "nodeInternal": true, "hops": []map[string]any{{"serverIds": []string{l.t1}}}}, nil); code != 409 {
+		t.Fatalf("different final-hop address mode shared the port: %d %v", code, out)
+	}
+	code, node, _ := l.p.do("POST", "/api/nodes", map[string]any{"serverId": l.exit, "name": "other", "protocol": "ss", "port": 50011, "method": "2022-blake3-aes-128-gcm"}, nil)
+	if code != 201 {
+		t.Fatalf("second node: %d %v", code, node)
+	}
+	if code, out, _ := l.p.do("POST", "/api/routes", map[string]any{"name": "different node", "entryServerId": entry2, "nodeId": node["id"],
+		"enabled": true, "port": 50000, "hops": []map[string]any{{"serverIds": []string{l.t1}}}}, nil); code != 409 {
+		t.Fatalf("different exit node shared the port: %d %v", code, out)
+	}
+}
+
+func singleServerHops(ids ...string) []map[string]any {
+	hops := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		hops = append(hops, map[string]any{"serverIds": []string{id}})
+	}
+	return hops
+}
+
+func createSharedTestRoute(t *testing.T, l *routeLab, name, entry string, hops []map[string]any) string {
+	t.Helper()
+	code, route := l.route(map[string]any{"name": name, "entryServerId": entry, "nodeId": l.nodeID, "enabled": true, "port": 50000, "hops": hops})
+	if code != 201 {
+		t.Fatalf("create %s: %d %v", name, code, route)
+	}
+	return route["id"].(string)
+}
+
+func requireSharedHop(t *testing.T, l *routeLab, serverID string, members []string, sources, target string) {
+	t.Helper()
+	active := slices.DeleteFunc(l.forwards(serverID), func(f shared.ForwardRule) bool { return !f.Enabled })
+	if len(active) != 2 {
+		t.Fatalf("server %s needs one TCP and one UDP listener: %+v", serverID, active)
+	}
+	for _, f := range active {
+		wantPort := 50000
+		if target == "198.51.100.4" {
+			wantPort = 50010
+		}
+		if f.Port != 50000 || f.RouteID != members[0] || f.ID != routeForwardID(members[0], serverID, f.Network) ||
+			f.FirewallPolicy != "restricted" || f.FirewallSources != sources ||
+			!slices.Equal(f.Targets, []shared.ForwardTarget{{Host: target, Port: wantPort}}) {
+			t.Fatalf("wrong shared forward on %s: %+v", serverID, f)
+		}
+		if len(members) > 1 && !slices.Equal(f.RouteIDs, members) || len(members) == 1 && len(f.RouteIDs) != 0 {
+			t.Fatalf("wrong shared membership on %s: %+v", serverID, f)
+		}
+	}
+	state, err := l.p.app.desired(serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active = slices.DeleteFunc(state.Forwards, func(f shared.ForwardRule) bool { return !f.Enabled })
+	if len(active) != 2 {
+		t.Fatalf("Agent has duplicate listeners on %s: %+v", serverID, state.Forwards)
+	}
+	for _, f := range state.Forwards {
+		if len(f.RouteIDs) > 0 {
+			t.Fatalf("Agent received panel-only routeIds: %+v", f)
+		}
+	}
+}
+
+func requireRouteLive(t *testing.T, l *routeLab, routeID string) {
+	t.Helper()
+	world, err := l.p.app.loadRouteWorld()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rt := range world.routes {
+		if rt.ID == routeID {
+			live, err := l.p.app.routeLive(rt, world, "")
+			if err != nil || !live || routeStatus(rt, world.forwards) != "active" {
+				t.Fatalf("route %s not live: live=%v err=%v status=%s", rt.Name, live, err, routeStatus(rt, world.forwards))
+			}
+			return
+		}
+	}
+	t.Fatalf("route %s missing", routeID)
+}
+
+func TestRoutesShareMatchingSuffixAtEveryDepth(t *testing.T) {
+	for _, depth := range []int{2, 4, 8} {
+		t.Run(strconv.Itoa(depth)+" middle hops", func(t *testing.T) {
+			l := newRouteLab(t)
+			common := []string{l.t1, l.t2}
+			addresses := []string{"198.51.100.2", "198.51.100.3"}
+			for i := len(common); i < depth; i++ {
+				ip := "198.51.100." + strconv.Itoa(i+20)
+				id, agent := l.p.enrollAs("transit-"+strconv.Itoa(i), []string{"transit"}, map[string]any{"ipv4": ip})
+				common, addresses = append(common, id), append(addresses, ip)
+				l.agents = append(l.agents, agent)
+			}
+			entry2, agent2 := l.p.enrollAs("entry2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.9"})
+			l.agents = append(l.agents, agent2)
+			first := createSharedTestRoute(t, l, "Shanghai 1", l.entry, singleServerHops(common...))
+			second := createSharedTestRoute(t, l, "Shanghai 2", entry2, singleServerHops(common...))
+			for i, id := range common {
+				sources := "198.51.100.1,198.51.100.9"
+				if i > 0 {
+					sources = addresses[i-1]
+				}
+				target := "198.51.100.4"
+				if i+1 < len(common) {
+					target = addresses[i+1]
+				}
+				requireSharedHop(t, l, id, []string{first, second}, sources, target)
+			}
+			l.applyAll()
+			requireRouteLive(t, l, first)
+			requireRouteLive(t, l, second)
+			if depth != 2 {
+				return
+			}
+			// Changing the owner must shrink every shared hop's allowlist and
+			// leave the other route usable; re-enabling restores the union.
+			setFirst := func(enabled bool) {
+				t.Helper()
+				if code, out, _ := l.p.do("PATCH", "/api/routes/"+first, map[string]any{"name": "Shanghai 1", "entryServerId": l.entry,
+					"nodeId": l.nodeID, "enabled": enabled, "port": 50000, "hops": singleServerHops(common...)}, nil); code != 200 {
+					t.Fatalf("toggle first route: %d %v", code, out)
+				}
+			}
+			setFirst(false)
+			requireSharedHop(t, l, common[0], []string{second}, "198.51.100.9", addresses[1])
+			requireSharedHop(t, l, common[1], []string{second}, addresses[0], "198.51.100.4")
+			l.applyAll()
+			requireRouteLive(t, l, second)
+			setFirst(true)
+			requireSharedHop(t, l, common[0], []string{first, second}, "198.51.100.1,198.51.100.9", addresses[1])
+			requireSharedHop(t, l, common[1], []string{first, second}, addresses[0], "198.51.100.4")
+			l.applyAll()
+			requireRouteLive(t, l, first)
+			if code, out, _ := l.p.do("DELETE", "/api/routes/"+first, nil, nil); code != 200 {
+				t.Fatalf("delete first route: %d %v", code, out)
+			}
+			requireSharedHop(t, l, common[0], []string{second}, "198.51.100.9", addresses[1])
+			requireSharedHop(t, l, common[1], []string{second}, addresses[0], "198.51.100.4")
+			l.applyAll()
+			requireRouteLive(t, l, second)
+		})
+	}
+}
+
+func TestRoutesShareAfterMeetingMidway(t *testing.T) {
+	l := newRouteLab(t)
+	hongKong, hkAgent := l.p.enrollAs("Hong Kong", []string{"transit"}, map[string]any{"ipv4": "198.51.100.6"})
+	entry2, entryAgent := l.p.enrollAs("Shanghai 2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.9"})
+	l.agents = append(l.agents, hkAgent, entryAgent)
+	first := createSharedTestRoute(t, l, "via Hong Kong", l.entry, singleServerHops(hongKong, l.t1, l.t2))
+	second := createSharedTestRoute(t, l, "direct to Japan", entry2, singleServerHops(l.t1, l.t2))
+	if got := l.forwards(hongKong); len(got) != 2 || got[0].RouteID != first || len(got[0].RouteIDs) != 0 {
+		t.Fatalf("the route before the meeting point must remain separate: %+v", got)
+	}
+	requireSharedHop(t, l, l.t1, []string{first, second}, "198.51.100.6,198.51.100.9", "198.51.100.3")
+	requireSharedHop(t, l, l.t2, []string{first, second}, "198.51.100.2", "198.51.100.4")
+	l.applyAll()
+	requireRouteLive(t, l, first)
+	requireRouteLive(t, l, second)
+	// Distinct measurements from both shared hops must appear on both paths.
+	for _, sample := range []struct {
+		server string
+		agent  map[string]string
+		ms     int64
+	}{{l.t1, l.agents[1], 41}, {l.t2, l.agents[2], 53}} {
+		var tcp shared.ForwardRule
+		for _, f := range l.forwards(sample.server) {
+			if f.Network == "tcp" {
+				tcp = f
+			}
+		}
+		point := shared.RouteLatency{ForwardID: tcp.ID, Host: tcp.Targets[0].Host, Port: tcp.Targets[0].Port, TCPMs: sample.ms, OK: true, At: time.Now()}
+		if code, out, _ := l.p.do("POST", "/agent/report", map[string]any{"hostReported": true, "agentVersion": "0.6.23", "forwardTcpUdp": true,
+			"manualFirewallSupport": true, "multiUserStats": true, "nodeFirewallPolicies": true, "forwardSupport": true,
+			"shadowTlsAuth": true, "snellFixedPort": true, "snellV6": true, "ufwStatus": "active",
+			"routeLatencies": []shared.RouteLatency{point}}, sample.agent); code != 200 {
+			t.Fatalf("latency report: %d %v", code, out)
+		}
+	}
+	for _, rt := range l.p.list("/api/routes") {
+		edges := rt["edgeLatencies"].([]any)
+		for _, want := range []struct {
+			from string
+			ms   float64
+		}{{l.t1, 41}, {l.t2, 53}} {
+			if !slices.ContainsFunc(edges, func(edge any) bool {
+				item := edge.(map[string]any)
+				return item["fromServerId"] == want.from && item["tcpMs"] == want.ms
+			}) {
+				t.Fatalf("route %s is missing shared-hop latency %s: %+v", rt["name"], want.from, edges)
+			}
+		}
+	}
+	// Editing a shared landing node uses the same prospective route checks.
+	if code, out, _ := l.p.do("PATCH", "/api/nodes/"+l.nodeID, map[string]any{"name": "hk-ss", "protocol": "ss", "port": 50011,
+		"method": "2022-blake3-aes-128-gcm", "enabled": true}, nil); code != 200 {
+		t.Fatalf("shared node edit: %d %v", code, out)
+	}
+	for _, f := range l.forwards(l.t2) {
+		if f.Enabled && f.Targets[0].Port != 50011 {
+			t.Fatalf("shared target did not follow node edit: %+v", f)
+		}
+	}
+	l.applyAll()
+	requireRouteLive(t, l, first)
+	requireRouteLive(t, l, second)
+}
+
+func TestThreeRoutesShareAllMiddleHops(t *testing.T) {
+	l := newRouteLab(t)
+	entry2, agent2 := l.p.enrollAs("entry2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.5"})
+	entry3, agent3 := l.p.enrollAs("entry3", []string{"entry"}, map[string]any{"ipv4": "198.51.100.6"})
+	l.agents = append(l.agents, agent2, agent3)
+	hops := singleServerHops(l.t1, l.t2)
+	ids := []string{
+		createSharedTestRoute(t, l, "first", l.entry, hops),
+		createSharedTestRoute(t, l, "second", entry2, hops),
+		createSharedTestRoute(t, l, "third", entry3, hops),
+	}
+	requireSharedHop(t, l, l.t1, ids, "198.51.100.1,198.51.100.5,198.51.100.6", "198.51.100.3")
+	requireSharedHop(t, l, l.t2, ids, "198.51.100.2", "198.51.100.4")
+	l.applyAll()
+	for _, id := range ids {
+		requireRouteLive(t, l, id)
+	}
+}
+
+func TestRoutesShareMatchingLoadGroup(t *testing.T) {
+	l := newRouteLab(t)
+	backup, agent := l.p.enrollAs("backup B", []string{"transit"}, map[string]any{"ipv4": "198.51.100.6"})
+	entry2, entryAgent := l.p.enrollAs("entry2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.9"})
+	l.agents = append(l.agents, agent, entryAgent)
+	hops := []map[string]any{{"serverIds": []string{l.t1, backup}, "balance": "round-robin"}, {"serverIds": []string{l.t2}}}
+	first := createSharedTestRoute(t, l, "first", l.entry, hops)
+	second := createSharedTestRoute(t, l, "second", entry2, hops)
+	for _, id := range []string{l.t1, backup} {
+		requireSharedHop(t, l, id, []string{first, second}, "198.51.100.1,198.51.100.9", "198.51.100.3")
+	}
+	requireSharedHop(t, l, l.t2, []string{first, second}, "198.51.100.2,198.51.100.6", "198.51.100.4")
+	l.applyAll()
+	requireRouteLive(t, l, first)
+	requireRouteLive(t, l, second)
+}
+
+func TestSharedHopRejectsDifferentSuffixes(t *testing.T) {
+	for _, change := range []string{"later server", "server order", "balance", "internal", "node internal", "landing node", "load group", "same entry"} {
+		t.Run(change, func(t *testing.T) {
+			l := newRouteLab(t)
+			entry2, _ := l.p.enrollAs("entry2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.9"})
+			d, _ := l.p.enrollAs("D", []string{"transit"}, map[string]any{"ipv4": "198.51.100.6", "internalAddress": "10.0.0.6"})
+			e, _ := l.p.enrollAs("E", []string{"transit"}, map[string]any{"ipv4": "198.51.100.7", "internalAddress": "10.0.0.7"})
+			b, _ := l.p.store.Server(l.t1)
+			b.InternalAddress = "10.0.0.2"
+			if err := l.p.store.PutServer(b); err != nil {
+				t.Fatal(err)
+			}
+			baseHops := []map[string]any{{"serverIds": []string{l.t1}}, {"serverIds": []string{l.t2, d}}}
+			createSharedTestRoute(t, l, "base", l.entry, baseHops)
+			candidateHops := []map[string]any{{"serverIds": []string{l.t1}}, {"serverIds": []string{l.t2, d}}}
+			candidate := map[string]any{"name": "candidate", "entryServerId": entry2, "nodeId": l.nodeID, "enabled": true, "port": 50000, "hops": candidateHops}
+			switch change {
+			case "later server":
+				candidateHops[1]["serverIds"] = []string{l.t2, e}
+			case "server order":
+				candidateHops[1]["serverIds"] = []string{d, l.t2}
+			case "balance":
+				candidateHops[0]["balance"] = "round-robin"
+			case "internal":
+				candidateHops[1]["internal"] = true
+			case "node internal":
+				candidate["nodeInternal"] = true
+			case "landing node":
+				code, node, _ := l.p.do("POST", "/api/nodes", map[string]any{"serverId": l.exit, "name": "other", "protocol": "ss", "port": 50011,
+					"method": "2022-blake3-aes-128-gcm"}, nil)
+				if code != 201 {
+					t.Fatalf("other node: %d %v", code, node)
+				}
+				candidate["nodeId"] = node["id"]
+			case "load group":
+				candidateHops[0]["serverIds"] = []string{l.t1, e}
+			case "same entry":
+				candidate["entryServerId"] = l.entry
+			}
+			if code, out, _ := l.p.do("POST", "/api/routes", candidate, nil); code != 409 {
+				t.Fatalf("incompatible suffix accepted: %d %v", code, out)
+			}
+			if routes := l.p.list("/api/routes"); len(routes) != 1 {
+				t.Fatalf("failed save left an incompatible route: %+v", routes)
+			}
+			if err := l.p.app.syncRoutes(); err != nil {
+				t.Fatalf("failed validation blocked future sync: %v", err)
+			}
+		})
+	}
+}
+
+func TestRouteEditRejectsSharedHopConflict(t *testing.T) {
+	l := newRouteLab(t)
+	entry2, _ := l.p.enrollAs("entry2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.9"})
+	d, _ := l.p.enrollAs("D", []string{"transit"}, map[string]any{"ipv4": "198.51.100.6"})
+	first := createSharedTestRoute(t, l, "first", l.entry, singleServerHops(l.t1, l.t2))
+	second := createSharedTestRoute(t, l, "second", entry2, singleServerHops(l.t1, l.t2))
+	if code, out, _ := l.p.do("PATCH", "/api/routes/"+second, map[string]any{"name": "second", "entryServerId": entry2,
+		"nodeId": l.nodeID, "enabled": true, "port": 50000, "hops": singleServerHops(l.t1, d)}, nil); code != 409 {
+		t.Fatalf("editing a shared suffix to a different target succeeded: %d %v", code, out)
+	}
+	requireSharedHop(t, l, l.t1, []string{first, second}, "198.51.100.1,198.51.100.9", "198.51.100.3")
+	if err := l.p.app.syncRoutes(); err != nil {
+		t.Fatalf("rejected edit blocked route sync: %v", err)
+	}
+}
+
+func TestSharedHopOfflineExportOmitsRouteIDs(t *testing.T) {
+	l := newRouteLab(t)
+	offline := createOfflineServer(l.p, "offline transit", "198.51.100.8")
+	entry2, _ := l.p.enrollAs("entry2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.9"})
+	first := createSharedTestRoute(t, l, "first", l.entry, singleServerHops(offline))
+	second := createSharedTestRoute(t, l, "second", entry2, singleServerHops(offline))
+	for _, f := range l.forwards(offline) {
+		if !slices.Equal(f.RouteIDs, []string{first, second}) {
+			t.Fatalf("shared membership was not stored: %+v", f)
+		}
+	}
+	bundle := exportOffline(l.p, offline)
+	if len(bundle.Forwards) != 2 {
+		t.Fatalf("offline export has duplicate listeners: %+v", bundle.Forwards)
+	}
+	for _, f := range bundle.Forwards {
+		if len(f.RouteIDs) != 0 {
+			t.Fatalf("offline export contains routeIds: %+v", f)
+		}
+	}
+	raw, err := json.Marshal(bundle)
+	if err != nil || strings.Contains(string(raw), `"routeIds"`) {
+		t.Fatalf("offline JSON contains routeIds: %v %s", err, raw)
+	}
+}
+
+func TestUnsharedRouteSyncKeepsForwardsAndRevision(t *testing.T) {
+	l := newRouteLab(t)
+	routeID := createSharedTestRoute(t, l, "existing", l.entry, singleServerHops(l.t1, l.t2))
+	l.applyAll()
+	ids := []string{l.entry, l.t1, l.t2, l.exit}
+	beforeRevisions := map[string]int64{}
+	beforeForwards := map[string]string{}
+	for _, id := range ids {
+		s, err := l.p.store.Server(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		beforeRevisions[id] = s.Revision
+		forwards, err := l.p.store.Forwards(id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(forwards)
+		beforeForwards[id] = string(raw)
+		for _, f := range forwards {
+			if f.ID != routeForwardID(routeID, id, f.Network) || len(f.RouteIDs) != 0 {
+				t.Fatalf("unshared forward changed its ID or gained routeIds: %+v", f)
+			}
+		}
+	}
+	if err := l.p.app.syncRoutes(); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range ids {
+		s, _ := l.p.store.Server(id)
+		forwards, _ := l.p.store.Forwards(id)
+		raw, _ := json.Marshal(forwards)
+		if s.Revision != beforeRevisions[id] || string(raw) != beforeForwards[id] {
+			t.Fatalf("sync changed unshared server %s: revision %d→%d, forwards %s→%s", id,
+				beforeRevisions[id], s.Revision, beforeForwards[id], raw)
+		}
 	}
 }
 

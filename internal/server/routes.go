@@ -21,8 +21,9 @@ import (
 
 // A route is entry → hop groups → exit node. The panel turns it into one
 // forward per hop server (two when the node also needs UDP), all listening on
-// the route's port, and restricts every hop after the first, and the exit
-// node itself unless it allows direct use, to the addresses of the hop before.
+// the route's port. Compatible routes may share a middle-hop listener. Each
+// hop after the first, and the exit node unless it allows direct use, admits
+// only the addresses of the hop before.
 
 func (s *Store) Routes() ([]shared.Route, error) {
 	return queryJSON[shared.Route](s.DB, `SELECT data FROM mui_routes ORDER BY id`)
@@ -329,6 +330,9 @@ func (w routeWorld) checkRoutePort(rt shared.Route) error {
 	if rt.Port < 1024 || rt.Port > 65535 || rt.Port == shared.StatsAPIPort || rt.Port == shared.ConnectionsAPIPort {
 		return errors.New("链路端口必须为 1024–65535，且不能是本机统计接口端口")
 	}
+	if !rt.Enabled {
+		return nil // A disabled route has no listener; re-enabling checks the port.
+	}
 	for _, id := range routeServers(rt) {
 		if err := w.portFree(rt, id); err != nil {
 			return err
@@ -337,18 +341,76 @@ func (w routeWorld) checkRoutePort(rt shared.Route) error {
 	return nil
 }
 
-// portFree reports whether the route's port is unused on one hop server by
-// nodes, manual forwards and other routes, and is not an SSH port. Route
-// forwards listen on every address and always on TCP; SS additionally needs
-// UDP, so both protocols are checked when the route carries an SS node.
+// Two routes may use one listener from a middle hop onward only when their
+// remaining paths and generated listener settings agree. Their entries always
+// remain separate so client observations keep the right route identity.
+func (w routeWorld) sameSharedHop(a, b shared.Route, serverID string) bool {
+	if a.ID == b.ID || !a.Enabled || !b.Enabled || a.Port != b.Port ||
+		a.NodeID != b.NodeID || a.NodeInternal != b.NodeInternal {
+		return false
+	}
+	ai := slices.IndexFunc(a.Hops, func(h shared.RouteHop) bool { return slices.Contains(h.ServerIDs, serverID) })
+	bi := slices.IndexFunc(b.Hops, func(h shared.RouteHop) bool { return slices.Contains(h.ServerIDs, serverID) })
+	if ai < 0 || bi < 0 || len(a.Hops)-ai != len(b.Hops)-bi {
+		return false // An entry cannot share, and the suffix lengths must agree.
+	}
+	for offset := range len(a.Hops) - ai {
+		left, right := a.Hops[ai+offset], b.Hops[bi+offset]
+		if !slices.Equal(left.ServerIDs, right.ServerIDs) || left.Balance != right.Balance || left.Internal != right.Internal {
+			return false
+		}
+	}
+	// Compare the actual listeners as well as the route shape. This catches
+	// changes to target addresses, node ports and future runtime parameters.
+	var left, right []shared.ForwardRule
+	for _, f := range w.routeForwards(a) {
+		if f.ServerID == serverID {
+			left = append(left, f)
+		}
+	}
+	for _, f := range w.routeForwards(b) {
+		if f.ServerID == serverID {
+			right = append(right, f)
+		}
+	}
+	if len(left) == 0 || len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i].Network != right[i].Network || left[i].Listen != right[i].Listen ||
+			left[i].Port != right[i].Port || left[i].Balance != right[i].Balance ||
+			left[i].HealthCheck != right[i].HealthCheck || !slices.Equal(left[i].Targets, right[i].Targets) {
+			return false
+		}
+	}
+	return true
+}
+
+func forwardBelongsToRoute(f shared.ForwardRule, routeID string) bool {
+	return f.RouteID != "" && (f.RouteID == routeID || slices.Contains(f.RouteIDs, routeID))
+}
+
+// portFree rejects manual forwards, nodes and incompatible route listeners.
+// Route forwards always use TCP; SS also needs UDP on the same port.
 func (w routeWorld) portFree(rt shared.Route, serverID string) error {
 	s := w.servers[serverID]
 	if err := sshPortError(s, rt.Port, rt.Port); err != nil {
 		return fmt.Errorf("服务器 %s: %w", s.Name, err)
 	}
 	for _, f := range w.forwards {
-		if f.ServerID == serverID && f.Port == rt.Port && f.Enabled && !f.Deleting && (shared.ForwardNetworkIncludes(f.Network, "tcp") || w.nodes[rt.NodeID].Protocol == "ss") && (rt.ID == "" || f.RouteID != rt.ID) {
-			return fmt.Errorf("端口 %d 在服务器 %s 上已被转发“%s”占用", rt.Port, s.Name, f.Name)
+		if f.ServerID != serverID || f.Port != rt.Port || !f.Enabled || f.Deleting || f.RouteID != "" ||
+			!(shared.ForwardNetworkIncludes(f.Network, "tcp") || w.nodes[rt.NodeID].Protocol == "ss") {
+			continue
+		}
+		return fmt.Errorf("端口 %d 在服务器 %s 上已被转发“%s”占用", rt.Port, s.Name, f.Name)
+	}
+	// Use the prospective routes and node, rather than stored forwards: a node
+	// edit may change its target before syncRoutes regenerates those forwards.
+	for _, other := range w.routes {
+		if other.ID != rt.ID && other.Enabled && other.Port == rt.Port && slices.Contains(routeServers(other), serverID) {
+			if !w.sameSharedHop(rt, other, serverID) {
+				return fmt.Errorf("端口 %d 在服务器 %s 上已被链路“%s”占用；两条链路须从该中转到落地的路径完全相同才能共用监听", rt.Port, s.Name, other.Name)
+			}
 		}
 	}
 	for _, n := range w.nodes {
@@ -364,7 +426,8 @@ func (w routeWorld) portFree(rt shared.Route, serverID string) error {
 }
 
 // pickPort keeps one port across the whole route: the node's own port when it
-// is free on every hop, otherwise a random free one.
+// is available on every hop (including compatible shared listeners), otherwise
+// a random available one.
 func (w routeWorld) pickPort(rt shared.Route) (int, error) {
 	try := func(port int) bool {
 		rt.Port = port
@@ -456,6 +519,68 @@ func (w routeWorld) routeForwards(rt shared.Route) []shared.ForwardRule {
 	return out
 }
 
+type routeListenerKey struct {
+	serverID string
+	port     int
+	network  string
+}
+
+func mergeRouteFirewall(dst *shared.ForwardRule, other shared.ForwardRule) {
+	if dst.FirewallPolicy == "manual" || other.FirewallPolicy == "manual" {
+		dst.FirewallPolicy, dst.FirewallSources = "manual", ""
+		return
+	}
+	var sources []string
+	for _, raw := range []string{dst.FirewallSources, other.FirewallSources} {
+		for _, source := range strings.Split(raw, ",") {
+			if source != "" && !slices.Contains(sources, source) {
+				sources = append(sources, source)
+			}
+		}
+	}
+	if len(sources) == 0 {
+		dst.FirewallPolicy, dst.FirewallSources = "closed", ""
+		return
+	}
+	sort.Strings(sources)
+	dst.FirewallPolicy, dst.FirewallSources = "restricted", strings.Join(sources, ",")
+}
+
+// Merge matching middle-hop listeners, including paths that meet partway
+// through. Entries remain separate; every shared hop admits the union of its
+// members' previous-hop sources. Routes are ID-ordered, so the first enabled
+// member keeps its established forward ID.
+func (w routeWorld) desiredRouteForwards() ([]shared.ForwardRule, error) {
+	var desired []shared.ForwardRule
+	index := map[routeListenerKey]int{}
+	owners := map[routeListenerKey]shared.Route{}
+	for _, rt := range w.routes {
+		if _, ok := w.nodes[rt.NodeID]; !ok {
+			continue
+		}
+		for _, f := range w.routeForwards(rt) {
+			if rt.Enabled {
+				key := routeListenerKey{f.ServerID, f.Port, f.Network}
+				if position, found := index[key]; found {
+					if !w.sameSharedHop(rt, owners[key], f.ServerID) {
+						return nil, fmt.Errorf("服务器 %s 的端口 %d 被不兼容的链路共用", w.servers[f.ServerID].Name, f.Port)
+					}
+					shared := &desired[position]
+					if len(shared.RouteIDs) == 0 {
+						shared.RouteIDs = []string{shared.RouteID}
+					}
+					shared.RouteIDs = append(shared.RouteIDs, rt.ID)
+					mergeRouteFirewall(shared, f)
+					continue
+				}
+				index[key], owners[key] = len(desired), rt
+			}
+			desired = append(desired, f)
+		}
+	}
+	return desired, nil
+}
+
 func (w routeWorld) groupSources(group []string, internal bool, family string, targets ...string) []string {
 	var out []string
 	for _, id := range group {
@@ -493,7 +618,7 @@ func (w routeWorld) nodeRouteSources(nodeID string) string {
 func sameRouteForward(a, b shared.ForwardRule) bool {
 	return a.ServerID == b.ServerID && a.Name == b.Name && a.Network == b.Network && a.Listen == b.Listen && a.Port == b.Port && a.Balance == b.Balance && a.HealthCheck == b.HealthCheck &&
 		slices.Equal(a.Targets, b.Targets) && a.FirewallPolicy == b.FirewallPolicy && a.FirewallSources == b.FirewallSources &&
-		a.Enabled == b.Enabled && !b.Deleting
+		slices.Equal(a.RouteIDs, b.RouteIDs) && a.Enabled == b.Enabled && !b.Deleting
 }
 
 // syncRoutes makes the stored route forwards and the exit nodes' route sources
@@ -512,21 +637,20 @@ func (a *App) syncRoutes() error {
 		}
 	}
 	queue := map[string]string{}
-	for _, rt := range w.routes {
-		if _, ok := w.nodes[rt.NodeID]; !ok {
+	desired, err := w.desiredRouteForwards()
+	if err != nil {
+		return err
+	}
+	for _, f := range desired {
+		old, ok := existing[f.ID]
+		delete(existing, f.ID)
+		if ok && sameRouteForward(f, old) {
 			continue
 		}
-		for _, f := range w.routeForwards(rt) {
-			old, ok := existing[f.ID]
-			delete(existing, f.ID)
-			if ok && sameRouteForward(f, old) {
-				continue
-			}
-			if err = a.Store.PutForward(f); err != nil {
-				return err
-			}
-			queue[f.ServerID] = "forwards.apply"
+		if err = a.Store.PutForward(f); err != nil {
+			return err
 		}
+		queue[f.ServerID] = "forwards.apply"
 	}
 	for _, old := range existing {
 		if old.Deleting {
@@ -598,7 +722,7 @@ func routeStatus(rt shared.Route, forwards []shared.ForwardRule) string {
 	status := "active"
 	hasOfflineExport := false
 	for _, f := range forwards {
-		if f.RouteID != rt.ID {
+		if f.Deleting || !forwardBelongsToRoute(f, rt.ID) {
 			continue
 		}
 		switch f.Status {
@@ -697,7 +821,7 @@ func (a *App) routeLive(rt shared.Route, w routeWorld, subscriptionID string) (b
 	}
 	active := map[string]bool{}
 	for _, f := range w.forwards {
-		if f.RouteID == rt.ID && f.Network == "tcp" && (f.Status == "active" || (shared.OfflineManaged(w.servers[f.ServerID]) && f.Status == "exported")) && !f.Deleting {
+		if forwardBelongsToRoute(f, rt.ID) && f.Network == "tcp" && (f.Status == "active" || (shared.OfflineManaged(w.servers[f.ServerID]) && f.Status == "exported")) && !f.Deleting {
 			active[f.ServerID] = true
 		}
 	}

@@ -14,13 +14,16 @@ func TestForwardLifecycleAndPortConflicts(t *testing.T) {
 	if code != 200 {
 		t.Fatalf("Agent: %d %v", code, out)
 	}
-	input := map[string]any{"serverId": serverID, "name": "relay", "network": "tcp", "listen": "0.0.0.0", "port": 51000, "targets": []map[string]any{{"host": "example.com", "port": 443}}, "firewallPolicy": "restricted", "firewallSources": "192.0.2.1", "enabled": true}
+	input := map[string]any{"serverId": serverID, "name": "relay", "network": "tcp", "listen": "0.0.0.0", "port": 51000, "targets": []map[string]any{{"host": "example.com", "port": 443}}, "firewallPolicy": "restricted", "firewallSources": "192.0.2.1", "enabled": true, "routeId": "forged", "routeIds": []string{"forged"}}
 	code, forward, _ := p.do("POST", "/api/forwards", input, nil)
 	if code != 201 {
 		t.Fatalf("create: %d %v", code, forward)
 	}
 	if forward["firewallSources"] != "192.0.2.1/32" {
 		t.Fatalf("sources: %v", forward)
+	}
+	if forward["routeId"] != nil || forward["routeIds"] != nil {
+		t.Fatalf("manual forward claimed route ownership: %v", forward)
 	}
 	job := p.applyNext(agent, "success")
 	forwards := job["state"].(map[string]any)["forwards"].([]any)
@@ -50,6 +53,9 @@ func TestForwardLifecycleAndPortConflicts(t *testing.T) {
 	code, out, _ = p.do("PATCH", "/api/forwards/"+id, input, nil)
 	if code != 200 {
 		t.Fatalf("update: %d %v", code, out)
+	}
+	if out["routeId"] != nil || out["routeIds"] != nil {
+		t.Fatalf("manual forward update claimed route ownership: %v", out)
 	}
 	p.applyNext(agent, "success")
 	code, out, _ = p.do("DELETE", "/api/forwards/"+id, nil, nil)

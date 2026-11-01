@@ -198,17 +198,20 @@ type ForwardRule struct {
 	HealthCheck string `json:"healthCheck,omitempty"`
 	// RouteID marks a forward the panel generated for a route; it is edited
 	// through the route, never directly.
-	RouteID         string `json:"routeId,omitempty"`
-	ObserveClients  bool   `json:"observeClients,omitempty"`
-	ClientNodeID    string `json:"clientNodeId,omitempty"`
-	FirewallPolicy  string `json:"firewallPolicy"`
-	FirewallSources string `json:"firewallSources"`
-	Enabled         bool   `json:"enabled"`
-	Deleting        bool   `json:"deleting"`
-	Status          string `json:"status"`
-	Error           string `json:"error"`
-	Uplink          int64  `json:"uplink"`
-	Downlink        int64  `json:"downlink"`
+	RouteID string `json:"routeId,omitempty"`
+	// RouteIDs is set only when multiple routes share one final-hop listener.
+	// RouteID remains the primary owner for older Agents and UI clients.
+	RouteIDs        []string `json:"routeIds,omitempty"`
+	ObserveClients  bool     `json:"observeClients,omitempty"`
+	ClientNodeID    string   `json:"clientNodeId,omitempty"`
+	FirewallPolicy  string   `json:"firewallPolicy"`
+	FirewallSources string   `json:"firewallSources"`
+	Enabled         bool     `json:"enabled"`
+	Deleting        bool     `json:"deleting"`
+	Status          string   `json:"status"`
+	Error           string   `json:"error"`
+	Uplink          int64    `json:"uplink"`
+	Downlink        int64    `json:"downlink"`
 }
 
 type Subscription struct {

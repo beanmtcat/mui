@@ -167,6 +167,7 @@ export type ForwardRule = {
   healthCheck?: "tcp" | "none" | "";
   // Set on forwards the panel generated for a route; edit the route instead.
   routeId?: string;
+  routeIds?: string[];
   firewallPolicy: "all" | "restricted" | "manual" | "closed";
   firewallSources: string;
   enabled: boolean;

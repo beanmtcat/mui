@@ -3741,6 +3741,9 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 				break
 			}
 		}
+		// RouteIDs is panel metadata for shared final-hop listeners. The Agent
+		// needs only the primary RouteID to probe and run this one forward.
+		forward.RouteIDs = nil
 		if !forward.Deleting {
 			if shared.ManualFirewall(server.FirewallMode) {
 				forward.FirewallPolicy, forward.FirewallSources = "manual", ""
