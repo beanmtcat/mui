@@ -156,6 +156,8 @@ func (a *App) agentKomari(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "服务器不存在")
 		return
 	}
+	// DetectedIPv4 may be an outbound NAT address. Komari uses it for host
+	// monitoring; routes and subscriptions must use the configured address.
 	ipv4 := komariPanelIP(server.IPv4, server.DetectedIPv4, false)
 	ipv6 := komariPanelIP(server.IPv6, server.DetectedIPv6, true)
 	writeJSON(w, 200, map[string]string{"endpoint": endpoint, "token": token, "ipv4": ipv4, "ipv6": ipv6})

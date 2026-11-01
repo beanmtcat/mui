@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"mui/internal/forward"
 	"mui/internal/shared"
@@ -29,6 +30,7 @@ func (s *Store) Routes() ([]shared.Route, error) {
 
 func (s *Store) PutRoute(v shared.Route) error {
 	v.Status = ""
+	v.EdgeLatencies = nil
 	_, err := s.DB.Exec(`INSERT INTO mui_routes(id,data) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET data=excluded.data`, v.ID, Marshal(v))
 	return err
 }
@@ -129,6 +131,8 @@ func sourceAddressesFamily(s shared.Server, internal bool, family string, target
 	} else if family == "ipv6" {
 		ipv4 = false
 	}
+	// A detected IPv4 can be a NAT egress: valid as a firewall source, never
+	// as the destination chosen by hopAddress.
 	candidates := []string{s.IPv4, s.IPv6, s.DetectedIPv4, s.DetectedIPv6}
 	if internal {
 		candidates = []string{s.InternalAddress}
@@ -717,6 +721,7 @@ func (a *App) routes(w http.ResponseWriter, r *http.Request) {
 		}
 		for i := range world.routes {
 			world.routes[i].Status = routeStatus(world.routes[i], world.forwards)
+			world.routes[i].EdgeLatencies = routeEdgeLatencies(world.routes[i], world, time.Now())
 			if (world.routes[i].Status == "active" || world.routes[i].Status == "exported") && !offlineRouteReady(world.routes[i], world.servers) {
 				world.routes[i].Status = "pending"
 			}

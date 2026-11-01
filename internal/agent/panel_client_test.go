@@ -19,6 +19,59 @@ import (
 	"mui/internal/shared"
 )
 
+func TestPanelObservedIPv4UsesDirectIPv4Only(t *testing.T) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls atomic.Int32
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.URL.Path != "/agent/observed-ipv4" || r.Header.Get("X-Server-ID") != "server-1" ||
+			r.Header.Get("Authorization") != "Bearer token" || r.Header.Get("X-Agent-Signature") == "" {
+			t.Errorf("unexpected probe request: %s %s", r.Method, r.URL.Path)
+		}
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); err != nil || net.ParseIP(host) == nil || net.ParseIP(host).To4() == nil {
+			t.Errorf("probe did not use IPv4: %q", r.RemoteAddr)
+		}
+		_, _ = io.WriteString(w, `{"ipv4":"205.206.186.8"}`)
+	}))
+	server.Listener.Close()
+	server.Listener = listener
+	server.Start()
+	defer server.Close()
+	_, port, _ := net.SplitHostPort(listener.Addr().String())
+	config := Config{URL: "http://localhost:" + port, ServerID: "server-1", Token: "token"}
+	if got := panelObservedIPv4(context.Background(), config); got != "205.206.186.8" {
+		t.Fatalf("panel observation: %q", got)
+	}
+	config.AgentProxy = &shared.SOCKS5Proxy{Host: "127.0.0.1"}
+	if got := panelObservedIPv4(context.Background(), config); got != "" || calls.Load() != 1 {
+		t.Fatalf("proxy configuration bypassed: %q, calls=%d", got, calls.Load())
+	}
+	for _, raw := range []string{"192.168.100.11", "100.72.1.9", "::1", ""} {
+		if got := validPublicIPv4(raw); got != "" {
+			t.Fatalf("accepted non-public IPv4 %q: %q", raw, got)
+		}
+	}
+}
+
+func TestObservedIPv4CacheSurvivesProbeFailure(t *testing.T) {
+	const address = "205.206.186.8"
+	cached := nextObservedIPv4("", address, true)
+	if cached != address {
+		t.Fatalf("successful probe was not cached: %q", cached)
+	}
+	if got := nextObservedIPv4(cached, "", true); got != address {
+		t.Fatalf("failed probe discarded the last observation: %q", got)
+	}
+	for _, reason := range []string{"SOCKS5 configured", "auto sync disabled", "local public IPv4 found"} {
+		if got := nextObservedIPv4(cached, "", false); got != "" {
+			t.Fatalf("%s did not clear the observation: %q", reason, got)
+		}
+	}
+}
+
 // A real SOCKS handshake with a deliberately unresolvable destination proves
 // remote DNS, RFC1929 authentication and the absence of a direct fallback.
 func TestPanelHTTPClientSOCKS5(t *testing.T) {

@@ -1483,6 +1483,10 @@ th.num {
   gap: 8px 12px;
   margin-bottom: 8px;
 }
+.routeLatencies { display: flex; flex-wrap: wrap; gap: 4px 8px; margin-top: 5px; }
+.routeLatency { color: var(--muted); font-size: .78rem; white-space: nowrap; }
+.routeLatencyFailed { color: var(--bad); }
+
 .routeConnection {
   min-width: 0;
   width: 100%;

@@ -29,6 +29,8 @@ Ubuntu / Debian 继续使用 systemd，管理命令仍为 `systemctl`，日志�
 
 ## GitHub Release 分发
 
+Agent 0.6.23 起，开启“自动同步公网 IP”后，如果本机 IPv4 在 NAT 后且 Agent 没有使用 SOCKS5，Agent 会每 5 分钟通过 IPv4 单独连接当前 MUI 面板。面板从可信反向代理传来的连接来源取得公网 IPv4，校验后写入 `DetectedIPv4`，用于检测与链路防火墙来源。观察地址不会填入空白的 `IPv4`；若现有 `IPv4` 等于更新前的 `DetectedIPv4`，开启自动同步后它会随新的观察地址更新。若 NAT 已设置入站端口映射但 `IPv4` 仍为空，需手工填写公网 IPv4。本机网卡上的公网 IPv4 可填入空白的 `IPv4`，开启自动同步后也会更新已有的 `IPv4`。不会定时请求 ipify 等第三方服务。面板域名需有可直连的 A 记录，且代理须正确传递客户端 IP。探测失败或上报暂时缺少观察地址时，保留上次检测值；配置 SOCKS5、关闭自动同步或本机已有公网 IPv4 时，Agent 清除观察值缓存。面板拒绝直接看到的 CGNAT 地址，但若运营商将 CGNAT 转换为公网出口，检测到的出口 IP 仍不保证可供入站连接。
+
 启用 `MUI_AGENT_RELEASE_VERSION` 时，面板提供 `/download/install.sh` 和 `/download/uninstall.sh`，但不提供 Agent、sing-box 或清单文件。在线安装脚本和 Agent 升级会让**目标服务器直接访问 GitHub Release** 下载与该版本号相同的归档，并验证发布签名及文件哈希。目标服务器访问不了 GitHub 时，给 Agent 配置 SOCKS5 代理，或使用面板“手工安装”下载并上传同一版本文件。
 
 先在含有对应代码的干净提交上构建和签名 amd64、arm64，再用 `deploy/release-agent.sh <版本号>` 创建相同版本的标签和 GitHub Release。每个架构除归档外还会上传独立的 `.SHA256SUMS` 与 `.SHA256SUMS.sig`；它们必须与归档内的文件逐字节一致。面板只下载这两个小文件，使用发布公钥验签后读取哈希；页面最多等 20 秒，后台最多下载 5 分钟并缓存结果。确认归档与清单可下载后，才把生产 `.env` 的 `MUI_AGENT_RELEASE_VERSION` 改成同一版本号并发布面板。安装脚本始终来自面板，避免与面板代码版本不一致。

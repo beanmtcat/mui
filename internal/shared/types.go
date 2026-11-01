@@ -29,8 +29,9 @@ type Server struct {
 	// Set only on administrator responses; the token itself lives encrypted
 	// outside the server document and is never returned to the browser.
 	KomariTokenSet bool `json:"komariTokenSet,omitempty"`
-	// AutoSyncPublicIP replaces configured IPs with valid addresses reported
-	// by the Agent. Absent on existing servers, so static addresses stay manual.
+	// AutoSyncPublicIP updates configured addresses from local public interfaces.
+	// A panel-observed NAT IPv4 may update an existing IPv4 only when it
+	// matched the previously detected address; it never fills an empty IPv4.
 	AutoSyncPublicIP bool `json:"autoSyncPublicIp,omitempty"`
 	// InternalAddress is how other servers on the same private network or
 	// dedicated line (IPLC/IEPL) reach this one; a route hop can use it.
@@ -72,12 +73,14 @@ type Server struct {
 	LastSeen                     *time.Time `json:"lastSeen"`
 	Revision                     int64      `json:"revision"`
 	// Reported by the agent; never edited by the administrator.
-	DetectedIPv4     string   `json:"detectedIpv4"`
-	DetectedIPv6     string   `json:"detectedIpv6"`
-	ClockSkewSeconds int64    `json:"clockSkewSeconds"`
-	SSHPorts         []int    `json:"sshPorts"`
-	FirewallConflict string   `json:"firewallConflict"`
-	UFWRules         []string `json:"ufwRules"`
+	DetectedIPv4 string `json:"detectedIpv4"`
+	DetectedIPv6 string `json:"detectedIpv6"`
+	// Recent TCP connect timings from this server to the next route hop.
+	RouteLatencies   []RouteLatency `json:"routeLatencies,omitempty"`
+	ClockSkewSeconds int64          `json:"clockSkewSeconds"`
+	SSHPorts         []int          `json:"sshPorts"`
+	FirewallConflict string         `json:"firewallConflict"`
+	UFWRules         []string       `json:"ufwRules"`
 }
 
 type Node struct {
@@ -281,6 +284,25 @@ type Route struct {
 	Notes            string `json:"notes"`
 	// Filled in for the list view: whether every hop has applied its forward.
 	Status string `json:"status,omitempty"`
+	// Filled in for the list view; never persisted with the route definition.
+	EdgeLatencies []RouteEdgeLatency `json:"edgeLatencies,omitempty"`
+}
+
+type RouteLatency struct {
+	ForwardID string    `json:"forwardId"`
+	Host      string    `json:"host"`
+	Port      int       `json:"port"`
+	TCPMs     int64     `json:"tcpMs"`
+	OK        bool      `json:"ok"`
+	At        time.Time `json:"at"`
+}
+
+type RouteEdgeLatency struct {
+	FromServerID string    `json:"fromServerId"`
+	ToServerID   string    `json:"toServerId"`
+	TCPMs        int64     `json:"tcpMs"`
+	OK           bool      `json:"ok"`
+	At           time.Time `json:"at"`
 }
 
 // RouteHop is one middle hop. With several servers it is a load-balanced
@@ -487,6 +509,8 @@ type ServerTrafficPoint struct {
 
 type AgentReport struct {
 	ForwardConnections     []ForwardConnectionPoint `json:"forwardConnections,omitempty"`
+	RouteLatencies         []RouteLatency           `json:"routeLatencies,omitempty"`
+	ObservedIPv4           string                   `json:"observedIpv4,omitempty"`
 	OutboundBindingSupport bool                     `json:"outboundBindingSupport,omitempty"`
 	ManualFirewallSupport  bool                     `json:"manualFirewallSupport,omitempty"`
 	JobID                  string                   `json:"jobId,omitempty"`

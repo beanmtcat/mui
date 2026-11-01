@@ -1,7 +1,7 @@
 # Build-only recipe: build-agent.sh exports Linux binaries with --output.
 # Agents are installed on target hosts as systemd services, not containers.
-FROM golang:1.25.1-bookworm AS agent-builder
-ARG AGENT_VERSION=0.6.22
+FROM golang:1.26.10-bookworm AS agent-builder
+ARG AGENT_VERSION=0.6.23
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -9,11 +9,10 @@ COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-X mui/internal/agent.Version=${AGENT_VERSION}" -o /out/mui-agent ./cmd/agent
 
-# sing-box raises its minimum Go version on its own schedule: v1.14.2 needs
-# go >= 1.25.5. Raise this image when a newer sing-box asks for more; the
-# build fails with "go.mod requires go >= ..." until then.
-FROM golang:1.25.5-bookworm AS core-builder
-ARG SING_BOX_VERSION=v1.14.2
+# sing-box v1.14.4 needs Go >= 1.25.5. Use the patched Go 1.26.10
+# toolchain for both binaries; a newer sing-box may raise its minimum.
+FROM golang:1.26.10-bookworm AS core-builder
+ARG SING_BOX_VERSION=v1.14.4
 # Optional: pin the exact upstream commit for the tag above. A tag alone can
 # be moved; a commit cannot. Leave empty to build from the tag as before.
 ARG SING_BOX_COMMIT=""

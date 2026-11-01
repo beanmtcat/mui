@@ -80,22 +80,22 @@ CREATE DATABASE mui WITH OWNER mui ENCODING 'UTF8';
 1. 复制 `deploy/.env.example` 为 `deploy/.env`，填写 `MUI_PUBLIC_URL`（对外的 `https://` 地址），以及已有数据库的 `MUI_DB_HOST`、`MUI_DB_PORT`、`MUI_DB_NAME`、`MUI_DB_USER`、`MUI_DB_PASSWORD` 和 `MUI_DB_SSLMODE`。在数据库中提前创建库和用户（见上文 SQL）；独立生成 `MUI_SECRET` 和管理员密码。`MUI_SECRET` 必须稳定保存，丢失后数据库中的节点密钥与证书私钥无法解密。
    数据库地址必须从容器内可访问：宿主机 PostgreSQL 可填 `host.docker.internal`（Compose 已配置 Linux 宿主机映射），其他服务器填其内网 IP 或域名。`127.0.0.1` 在容器内指后端容器自身。PostgreSQL 需监听对应网卡并允许该客户端连接；不使用数据库 TLS 的可信内网实例可将 `MUI_DB_SSLMODE` 设为 `disable`。
 2. 保持 `MUI_BIND=127.0.0.1:8086`。在已有外层 Nginx 的面板域名 HTTPS `server` 块中加入 `deploy/nginx/mui-edge.location.conf` 的转发配置（已有 `location /` 时替换该块），检查 `nginx -t` 后重载外层 Nginx。证书及 HTTPS 跳转继续由外层管理；内层不配置证书。远程 Agent 访问外部 HTTPS 地址。外层默认与前端容器在同一台主机；若在另一台主机或容器，调整上游地址和 `MUI_BIND`，并将内层入口限制为仅外层可访问。
-3. 在有 Docker Buildx 的构建机运行 `deploy/build-agent.sh amd64` 和/或 `deploy/build-agent.sh arm64`。脚本默认构建 Agent 0.6.22 和 sing-box v1.14.2；第二个参数指定 sing-box 的 `vX.Y.Z` 版本，第三个参数指定 Agent 的 `X.Y.Z` 正式版本（如 `deploy/build-agent.sh amd64 v1.14.2 0.6.22`）。构建脚本要求 Git 工作区干净、提交中的 Agent 版本与指定版本一致。脚本构建带 `with_v2ray_api`、`with_clash_api` 的核心，同时构建 Agent，并生成 `SHA256SUMS`。默认本地发布模式把所需架构的整个 `bin/<架构>/` 目录放到**面板服务器**的仓库 `bin/` 下；GitHub 直下模式见下节。
+3. 在有 Docker Buildx 的构建机运行 `deploy/build-agent.sh amd64` 和/或 `deploy/build-agent.sh arm64`。脚本默认构建 Agent 0.6.23 和 sing-box v1.14.4；第二个参数指定 sing-box 的 `vX.Y.Z` 版本，第三个参数指定 Agent 的 `X.Y.Z` 正式版本（如 `deploy/build-agent.sh amd64 v1.14.4 0.6.23`）。构建脚本要求 Git 工作区干净、提交中的 Agent 版本与指定版本一致，并使用已修复 CVE-2026-111943 的 Go 1.26.10 编译 Agent 与 sing-box。脚本构建带 `with_v2ray_api`、`with_clash_api` 的核心，同时构建 Agent，并生成 `SHA256SUMS`。默认本地发布模式把所需架构的整个 `bin/<架构>/` 目录放到**面板服务器**的仓库 `bin/` 下；GitHub 直下模式见下节。
 4. 在 `deploy` 目录运行 `docker compose --env-file .env -f compose.yaml up -d --build`。内层 Nginx 提供页面及接口代理，Go 容器只读挂载 `../bin`，通过 Nginx 的 `/download/` 路径提供安装脚本和构建产物。当前 Compose 使用已有的外部网络 `docker_default`，启动前需确认网络存在。用 `docker network inspect docker_default --format '{{json .IPAM.Config}}'` 查看真实网段和网关；`MUI_PROXY_SUBNET` 仅作为 Go 的默认可信代理范围，填写实际网段或单独设置 `MUI_TRUSTED_PROXIES`，修改它不会创建或更改外部网络。`MUI_EDGE_PROXY_CIDR` 则填写外层 Nginx 的实际来源地址。
 5. 目标机支持 Ubuntu 22.04/24.04/26.04、Debian 11/12/13（systemd），以及 Alpine 3.19+（OpenRC），需要 OpenSSH、`curl`、`sha256sum` 和 `ss`；GitHub 直下模式还需要 `tar`。Debian 11 从 Agent 0.6.20 起支持；0.6.19 的发行版检查仍会拒绝它。Debian 11 已结束官方 LTS 安全更新，建议升级至 Debian 12/13；若仍使用 Debian 11，应自行安排 Extended LTS。Alpine 依赖安装、服务管理及小内存机器优化见 [Agent 运维说明](docs/agent-operations.md)。UFW 托管时需安装 UFW（`apt-get install ufw`）；手动管理无需 UFW，安装 iproute2 提供 `ss`。Agent 0.6.3 起同时核对实际 SSH TCP 监听、SSH socket 和 `sshd -T` 配置，无法确认实际监听时拒绝初始化 UFW。LXC 内按容器真实监听端口放行，不能将宿主机映射端口当作容器端口。面板新建服务器时选择类型：带落地类型的下载并安装 Agent 与 sing-box；只做入口、线路、中转的只下载 Agent，不创建 sing-box 账户或服务。在目标机执行显示的一次性接入命令；命令先从面板获取小型安装脚本，再通过标准输入传递一次性接入 token；token 不会放进子进程参数，不需要手动设置环境变量。构建文件按已配置的发布模式从面板或 GitHub 下载，按 `SHA256SUMS` 和已配置的发布签名校验后安装。令牌 10 分钟有效；超时可重新生成。面板的 `MUI_PUBLIC_URL` 在面板服务器的 `.env` 中配置，必须是目标机可访问的 HTTPS 地址。
 6. Agent 上线后，UFW 托管服务器在面板执行“初始化 UFW”；手动管理服务器跳过此步，自行配置宿主机或安全组放行。启用 UFW 会按默认策略拒绝 SSH 以外的入站连接；机器上若有别的对外服务，初始化后立即在防火墙页为它们添加允许规则。若机器上 firewalld、nftables、netfilter-persistent 或 shorewall 正在运行，Agent 会拒绝写入 UFW 并在面板提示冲突。AnyTLS 先上传对应域名的 PEM 证书链和私钥。端口从云安全组放行后才能从公网访问。
 
 ### 从 GitHub Release 直接下载 Agent
 
-设置 `MUI_AGENT_RELEASE_VERSION=0.6.22` 后，在线接入命令仍从**当前面板**获取 `/download/install.sh`，脚本按第七个参数指定的版本让**目标服务器直接**从 GitHub Release 下载对应架构的压缩包并验证签名、哈希。Agent 0.6.19 起的一键升级也从 GitHub 下载。面板只读取 Release 中独立的 `SHA256SUMS` 和 `SHA256SUMS.sig`，先验签再显示可用构建，不再下载整份归档，也不向目标服务器提供二进制；`/download/<架构>/...` 在此模式下返回 404。接入和任务通信仍走面板。
+设置 `MUI_AGENT_RELEASE_VERSION=0.6.23` 后，在线接入命令仍从**当前面板**获取 `/download/install.sh`，脚本按第七个参数指定的版本让**目标服务器直接**从 GitHub Release 下载对应架构的压缩包并验证签名、哈希。Agent 0.6.19 起的一键升级也从 GitHub 下载。面板只读取 Release 中独立的 `SHA256SUMS` 和 `SHA256SUMS.sig`，先验签再显示可用构建，不再下载整份归档，也不向目标服务器提供二进制；`/download/<架构>/...` 在此模式下返回 404。接入和任务通信仍走面板。
 
 目标服务器必须能访问 GitHub Release；访问不了时，为该服务器配置 Agent SOCKS5 代理，或使用“手工安装”把同一 Release 的归档上传到服务器。面板请求最多等待 20 秒，后台读取最多运行 5 分钟；成功后缓存哈希，失败后五分钟内复用错误。旧的 `v0.6.18`、`v0.6.19`、`v0.6.20` 标签指向未包含 GitHub 分发代码的提交，不应再用于在线接入。
 
 发布顺序：
 
-1. 在包含安装脚本和 Agent 0.6.22 代码的**干净提交**上构建并签名 amd64、arm64：`./deploy/build-agent.sh amd64 v1.14.2 0.6.22` 和 `./deploy/build-agent.sh arm64 v1.14.2 0.6.22`。脚本同时导出每个架构的签名清单供面板查询；归档内也保留同一份清单。已固定发布公钥的 Agent 必须继续使用同一私钥。
-2. 运行 `./deploy/release-agent.sh 0.6.22`；脚本检查工作区干净、提交内的 Agent 版本号和标签相同，再创建标签与 GitHub Release。确认两个归档均可下载，且标签指向构建所用的提交。
-3. 然后把面板服务器 `deploy/.env` 中的 `MUI_AGENT_RELEASE_VERSION` 改为 `0.6.22`，确认 `MUI_RELEASE_PUBLIC_KEY` 与签名私钥匹配，再发布面板。版本号必须与 Release 标签一致；无需 `--with-agent`。未升级到支持 GitHub 下载的旧 Agent 需用新接入命令重装一次。
+1. 在包含安装脚本和 Agent 0.6.23 代码的**干净提交**上构建并签名 amd64、arm64：`./deploy/build-agent.sh amd64 v1.14.4 0.6.23` 和 `./deploy/build-agent.sh arm64 v1.14.4 0.6.23`。脚本同时导出每个架构的签名清单供面板查询；归档内也保留同一份清单。已固定发布公钥的 Agent 必须继续使用同一私钥。
+2. 运行 `./deploy/release-agent.sh 0.6.23`；脚本检查工作区干净、提交内的 Agent 版本号和标签相同，再创建标签与 GitHub Release。确认两个归档均可下载，且标签指向构建所用的提交。
+3. 然后把面板服务器 `deploy/.env` 中的 `MUI_AGENT_RELEASE_VERSION` 改为 `0.6.23`，确认 `MUI_RELEASE_PUBLIC_KEY` 与签名私钥匹配，再发布面板。版本号必须与 Release 标签一致；无需 `--with-agent`。未升级到支持 GitHub 下载的旧 Agent 需用新接入命令重装一次。
 
 版本号固定到一个 Release，不会自动跟随 `latest`。发布后不要重新打包或替换归档，否则已缓存的摘要和服务器下载的文件可能不一致。
 
@@ -230,7 +230,7 @@ Agent **0.6.15** 起（修复 0.6.14 的所有来源规则冲突），UFW 托管
 | `MUI_DB_URL` | 可选完整连接 URL，优先于上述分项配置；未配置任何 PostgreSQL 参数时使用 SQLite `data/mui.db` |
 | `MUI_PUBLIC_URL` | 对外 HTTPS 地址，支持逗号分隔多个；第一个为默认，链接随当前已配置域名生成，见“多域名访问” |
 | `MUI_AGENT_BIN_DIR` | 安装文件目录，默认 `bin`；按 `amd64`、`arm64` 子目录存放三个构建产物 |
-| `MUI_AGENT_RELEASE_VERSION` | 设置如 `0.6.22` 后启用 GitHub Release 直下；要求 `MUI_RELEASE_PUBLIC_KEY`，目标服务器直接下载对应版本的归档，面板不再提供二进制下载 |
+| `MUI_AGENT_RELEASE_VERSION` | 设置如 `0.6.23` 后启用 GitHub Release 直下；要求 `MUI_RELEASE_PUBLIC_KEY`，目标服务器直接下载对应版本的归档，面板不再提供二进制下载 |
 | `MUI_LISTEN` | Go 后端监听地址，生产容器为 `:8087`；本地开发使用 `127.0.0.1:8080` |
 | `MUI_BIND` | Nginx 前端 HTTP 的宿主机端口映射，默认 `127.0.0.1:8086` → Nginx 容器 `:8086`，供已有外层 Nginx 转发 |
 | `MUI_BACKEND_URL` | Nginx 的 Go 上游地址，默认 `http://mui-service:8087`；可指向另一台服务器，不加末尾斜线 |
@@ -256,7 +256,7 @@ Agent 自升级时，root 权限的 helper 会下载并运行面板提供的二�
 **威胁模型（请勿夸大）**：签名防的是“构建产物被篡改 / 镜像投毒”——即攻击者只能写 `bin/`、改不了面板代码、配置和安装命令的场景。面板整体被攻破（代码、配置、安装命令被改）时，签名不提供保护，攻击者仍可下发自己的二进制。安装命令会从面板 HTTPS 下载安装脚本，再自动判断执行身份：root 使用 `sh`，普通用户使用 `sudo sh`，无 sudo 时提示切换到 root；安装脚本未签名，其信任根就是面板 HTTPS + 面板本身；只在受信任的面板和目标机上执行，不要转发给他人。
 
 1. 在构建机生成密钥：`mkdir -p deploy/.secrets && chmod 700 deploy/.secrets`，然后运行 `go run ./cmd/release-sign keygen deploy/.secrets/release.key`。命令会打印 `MUI_RELEASE_PUBLIC_KEY=...`，私钥仅留在构建机并备份。`deploy/.secrets/` 已排除 Git、Docker 构建和远程发布上传。
-2. `deploy/build-agent.sh amd64` 自动使用 `deploy/.secrets/release.key` 签名，生成 `bin/<架构>/SHA256SUMS.sig`。`deploy/publish.sh --with-agent` 也会在上传前用同一把本地私钥重新签名，不需要手动设置环境变量。使用其他私钥位置时，可在 `deploy/publish.env` 中填写 `MUI_RELEASE_KEY` 的绝对路径；指定的私钥不存在或签名失败会停止发布。如需钉死上游 sing-box 源码：`SING_BOX_COMMIT=<该 tag 对应的 commit> deploy/build-agent.sh amd64`，commit 用 `git ls-remote https://github.com/SagerNet/sing-box.git "refs/tags/v1.14.2^{}"` 查询；不填时只校验 tag，tag 被移动则构建物会变。
+2. `deploy/build-agent.sh amd64` 自动使用 `deploy/.secrets/release.key` 签名，生成 `bin/<架构>/SHA256SUMS.sig`。`deploy/publish.sh --with-agent` 也会在上传前用同一把本地私钥重新签名，不需要手动设置环境变量。使用其他私钥位置时，可在 `deploy/publish.env` 中填写 `MUI_RELEASE_KEY` 的绝对路径；指定的私钥不存在或签名失败会停止发布。如需钉死上游 sing-box 源码：`SING_BOX_COMMIT=<该 tag 对应的 commit> deploy/build-agent.sh amd64`，commit 用 `git ls-remote https://github.com/SagerNet/sing-box.git "refs/tags/v1.14.4^{}"` 查询；不填时只校验 tag，tag 被移动则构建物会变。
 3. 把公钥写进面板的 `MUI_RELEASE_PUBLIC_KEY` 并重启。此后生成的接入命令会把公钥交给 Agent，Agent 安装时校验签名并把公钥固定在 `/etc/mui-agent/release.pub`。
 4. 已接入的服务器需要用新的接入命令重新安装一次才会固定公钥；服务器列表里会显示“升级需发布签名”或“升级未启用签名校验”。固定后重新安装不能更换公钥，确需更换时先在该服务器上删除 `/etc/mui-agent/release.pub`。
 

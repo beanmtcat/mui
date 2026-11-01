@@ -307,12 +307,17 @@ func Run(ctx context.Context) error {
 	komariCtx, stopKomari := context.WithCancel(ctx)
 	defer stopKomari()
 	go runKomariManager(komariCtx, c)
+	latencyCtx, stopLatency := context.WithCancel(ctx)
+	defer stopLatency()
+	latencies := &routeLatencySampler{}
+	go latencies.run(latencyCtx)
 	revoked := false
 	markRevoked := func(err error) {
 		var response *serverStatusError
 		if errors.As(err, &response) && response.Status == http.StatusGone {
 			revoked = true
 			stopKomari()
+			stopLatency()
 		}
 	}
 	waitAfterRevocation := func() error {
@@ -361,6 +366,10 @@ func Run(ctx context.Context) error {
 		supportedWarned = true
 	}
 	var ipv4, ipv6 string
+	var autoSyncPublicIP bool
+	var lastIPv4Probe time.Time
+	var cachedObservedIPv4 string
+	var ipv4ProbeFailed bool
 	// confirmedBuild remembers what this process already confirmed through
 	// the helper, so a successful report does not re-confirm every 30s.
 	confirmedBuild := ""
@@ -454,6 +463,22 @@ func Run(ctx context.Context) error {
 				supportedWarned = true
 			}
 			ipv4, ipv6 = publicAddress("udp4", "192.0.2.1:9"), publicAddress("udp6", "[2001:db8::1]:9")
+			if ipv4 == "" && autoSyncPublicIP && (c.AgentProxy == nil || c.AgentProxy.Host == "") {
+				if time.Since(lastIPv4Probe) >= 5*time.Minute {
+					lastIPv4Probe = time.Now()
+					observed := panelObservedIPv4(ctx, c)
+					cachedObservedIPv4 = nextObservedIPv4(cachedObservedIPv4, observed, true)
+					if observed == "" && !ipv4ProbeFailed {
+						fmt.Fprintln(os.Stderr, "public IPv4 probe unavailable: check panel IPv4 access and trusted proxy IP forwarding")
+					}
+					ipv4ProbeFailed = observed == ""
+				}
+			} else {
+				// A SOCKS5 path, disabled sync, or a local public IPv4 makes
+				// the previous panel observation inapplicable.
+				cachedObservedIPv4 = nextObservedIPv4(cachedObservedIPv4, "", false)
+				ipv4ProbeFailed = false
+			}
 			lastSample = time.Now()
 		}
 		if time.Since(lastConnectionSample) >= 10*time.Second {
@@ -492,10 +517,14 @@ func Run(ctx context.Context) error {
 			report := shared.AgentReport{OS: osRelease(), Arch: runtime.GOARCH, AgentVersion: Version, AgentBuild: build, BuildDigest: build,
 				ManualFirewallSupport: host.ManualFirewallSupport, AgentSelfUpdate: host.AgentSelfUpdate, NodeFirewallPolicies: host.NodeFirewallPolicies, MultiUserStats: host.MultiUserStats, ForwardSupport: host.ForwardSupport, ForwardTCPUDP: host.ForwardTCPUDP, ShadowTLSAuth: host.ShadowTLSAuth, SnellFixedPort: host.SnellFixedPort, SnellV6: host.SnellV6, AgentProxySupport: host.AgentProxySupport, OutboundBindingSupport: host.OutboundBindingSupport, ReleaseKeyPinned: host.ReleaseKeyPinned,
 				CoreVersion: coreVersions.get(), CoreBuild: coreBuild, CoreDigest: coreBuild, CoreSelfUpdate: host.CoreSelfUpdate,
-				UFWStatus: host.UFW, StatsStatus: statsStatus, Traffic: state.Pending[:batchSize], UserTraffic: state.UserPending[:userBatch], ForwardTraffic: host.ForwardTraffic, ServerTraffic: state.NetworkPending[:networkBatch], Connections: pendingConnections, ForwardConnections: host.ForwardConnections,
-				IPv4: ipv4, IPv6: ipv6, AgentTime: &now, HostReported: true, SSHPorts: host.SSHPorts, FirewallConflict: host.Conflict, UFWRules: host.Rules}
+				UFWStatus: host.UFW, StatsStatus: statsStatus, Traffic: state.Pending[:batchSize], UserTraffic: state.UserPending[:userBatch], ForwardTraffic: host.ForwardTraffic, ServerTraffic: state.NetworkPending[:networkBatch], Connections: pendingConnections, ForwardConnections: host.ForwardConnections, RouteLatencies: latencies.snapshot(),
+				IPv4: ipv4, ObservedIPv4: cachedObservedIPv4, IPv6: ipv6, AgentTime: &now, HostReported: true, SSHPorts: host.SSHPorts, FirewallConflict: host.Conflict, UFWRules: host.Rules}
 			headers := map[string]string{"X-Server-ID": c.ServerID, "Authorization": "Bearer " + c.Token}
-			if err := sendJSON(ctx, client, "POST", c.URL+"/agent/report", report, headers, nil, c.Token); err == nil {
+			var reply struct {
+				AutoSyncPublicIP bool `json:"autoSyncPublicIp"`
+			}
+			if err := sendJSON(ctx, client, "POST", c.URL+"/agent/report", report, headers, &reply, c.Token); err == nil {
+				autoSyncPublicIP = reply.AutoSyncPublicIP
 				// Confirm the running build through the root helper, never by
 				// writing the root-owned confirmation file directly.
 				if build != "" && build != confirmedBuild {
@@ -683,6 +712,18 @@ func confirmUFWRollback(ctx context.Context) {
 	}
 }
 
+// A failed probe is not evidence that the previously observed NAT egress
+// disappeared. Only a change in how the address is obtained clears it.
+func nextObservedIPv4(previous, observed string, probing bool) string {
+	if !probing {
+		return ""
+	}
+	if observed != "" {
+		return observed
+	}
+	return previous
+}
+
 // publicAddress returns the source address the host would use for outbound
 // traffic, if that address is publicly routable. No packet is sent.
 func publicAddress(network, probe string) string {
@@ -692,7 +733,13 @@ func publicAddress(network, probe string) string {
 	}
 	defer conn.Close()
 	addr, ok := conn.LocalAddr().(*net.UDPAddr)
-	if !ok || !addr.IP.IsGlobalUnicast() || addr.IP.IsPrivate() {
+	if !ok {
+		return ""
+	}
+	if network == "udp4" {
+		return validPublicIPv4(addr.IP.String())
+	}
+	if !addr.IP.IsGlobalUnicast() || addr.IP.IsPrivate() {
 		return ""
 	}
 	return addr.IP.String()

@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { mutation } from "../api";
 import { useApp } from "../app/context";
-import { ActionMenu, Empty, parseSort, SortHeader, sortRows, Status, statusLabels, TableWrap } from "../app/ui";
+import { ActionMenu, Empty, HelpTip, parseSort, SortHeader, sortRows, Status, statusLabels, TableWrap } from "../app/ui";
 import { useUrlParam } from "../app/url";
 
 export default function Routes() {
@@ -34,16 +34,20 @@ export default function Routes() {
             <TableWrap>
               <table>
                 <thead><tr>
-                  <SortHeader sort={sort} id="name" label="名称" /><th>路径</th><SortHeader sort={sort} id="port" label="端口" />
+                  <SortHeader sort={sort} id="name" label="名称" /><th>路径 <HelpTip label="链路延迟说明" text="每个数值由上一跳 Agent 每分钟测量到下一跳 TCP 端口的建连时间。它不是整条链路或代理协议的往返延迟；无新数据时显示待测。" /></th><SortHeader sort={sort} id="port" label="端口" />
                   <SortHeader sort={sort} id="node" label="落地节点" /><SortHeader sort={sort} id="status" label="状态" /><th>操作</th>
                 </tr></thead>
                 <tbody>
                   {visible.map((r) => {
                     const node = nodes.find((n) => n.id === r.nodeId);
+                    const groups = [[r.entryServerId], ...r.hops.map((hop) => hop.serverIds), node ? [node.serverId] : []];
+                    const edges = groups.slice(0, -1).flatMap((group, i) => group.flatMap((from) => groups[i + 1].map((to) => ({
+                      from, to, point: r.edgeLatencies?.find((point) => point.fromServerId === from && point.toServerId === to),
+                    }))));
                     return (
                       <tr key={r.id}>
                         <td><strong>{r.name}</strong>{r.notes && <small>{r.notes}</small>}</td>
-                        <td>{routePath(r)}</td>
+                        <td><div>{routePath(r)}</div>{r.enabled && edges.length > 0 && <div className="routeLatencies" aria-label="各跳 TCP 建连时间">{edges.map(({ from, to, point }) => <span key={`${from}-${to}`} className={`routeLatency ${point && !point.ok ? "routeLatencyFailed" : ""}`} title={point ? `测量于 ${new Date(point.at).toLocaleString()}` : "尚无有效测量数据"}>{serverName(from)} → {serverName(to)}：{point ? point.ok ? `${point.tcpMs} ms` : "超时/失败" : "待测"}</span>)}</div>}</td>
                         <td className="mono">{r.port}</td>
                         <td>{node ? <button type="button" className="textButton rowLink" onClick={() => goTo("nodes", node.serverId, { q: node.name })}>{node.name}</button> : "已删除"}{node && <small>{node.protocol.toUpperCase()} · {serverName(node.serverId)}</small>}</td>
                         <td><Status value={r.status || "pending"} /></td>

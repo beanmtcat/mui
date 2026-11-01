@@ -194,7 +194,7 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
                         <input type="checkbox" checked={!!serverForm.autoSyncPublicIp} onChange={(e) => setServerForm({ ...serverForm, autoSyncPublicIp: e.target.checked })} />
                         自动同步 Agent 检测到的公网 IPv4 / IPv6
                       </label>
-                      <HelpTip label="自动同步公网 IP" text="适用于公网地址会变化的服务器。优先使用 Agent 检测到的公网地址；本机 IPv4 在 NAT 后且直接连接面板时，用面板看到的连接来源回填 IPv4。使用 SOCKS5 代理时不会把代理出口当成本机地址。暂时检测不到的地址不会清空。请确认出站地址也能接受客户端或链路入站连接；CGNAT 无法靠回填开放入站端口。" />
+                      <HelpTip label="自动同步公网 IP" text="本机网卡上的公网 IPv4 可填入空白地址；开启自动同步后，地址变化也会更新已有 IPv4。NAT 后面板观察到的出口 IPv4 用于检测和防火墙来源，不会填入空白的 IPv4；仅当现有 IPv4 等于上次检测值时才随新观察值更新。若已做端口映射但 IPv4 仍为空，请手工填写。Agent 每 5 分钟经 IPv4 探测面板，不访问第三方查 IP 服务；面板域名须有可直连的 A 记录。探测失败会保留上次观察值；使用 SOCKS5 时清除观察值，避免把代理出口当作本机地址。" />
                     </div>}
                     {serverForm.managementMode === "online" && <div className="serverFormWide">
                       <Field label="节点默认出口网卡" help="仅控制这台服务器上 sing-box 节点的出口，节点可单独覆盖。修改后会重新应用配置并重启 sing-box；指定网卡不存在或未启用时，保留原配置并报错。">

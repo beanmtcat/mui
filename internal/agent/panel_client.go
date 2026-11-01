@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"golang.org/x/net/proxy"
@@ -43,6 +44,48 @@ func panelHTTPClient(p *shared.SOCKS5Proxy, timeout time.Duration) (*http.Client
 		tr.DialContext = d.(proxy.ContextDialer).DialContext
 	}
 	return &http.Client{Transport: tr, Timeout: timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, nil
+}
+
+// panelObservedIPv4 makes a separate, signed IPv4-only request to the panel.
+// A host behind NAT cannot read its public IPv4 from its own interfaces; the
+// panel can see it when reached directly over IPv4. Never bypass an Agent's
+// configured SOCKS5 proxy or mistake the proxy exit for the host's address.
+func panelObservedIPv4(ctx context.Context, c Config) string {
+	if c.AgentProxy != nil && c.AgentProxy.Host != "" {
+		return ""
+	}
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.Proxy = nil
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	tr.DialContext = func(ctx context.Context, _, address string) (net.Conn, error) {
+		return dialer.DialContext(ctx, "tcp4", address)
+	}
+	defer tr.CloseIdleConnections()
+	client := &http.Client{
+		Transport: tr,
+		Timeout:   5 * time.Second,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	var result struct {
+		IPv4 string `json:"ipv4"`
+	}
+	headers := map[string]string{"X-Server-ID": c.ServerID, "Authorization": "Bearer " + c.Token}
+	if err := sendJSON(ctx, client, "GET", strings.TrimRight(c.URL, "/")+"/agent/observed-ipv4", nil, headers, &result, c.Token); err != nil {
+		return ""
+	}
+	return validPublicIPv4(result.IPv4)
+}
+
+var agentCGNAT = &net.IPNet{IP: net.IPv4(100, 64, 0, 0), Mask: net.CIDRMask(10, 32)}
+
+func validPublicIPv4(raw string) string {
+	ip := net.ParseIP(raw)
+	if ip == nil || ip.To4() == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || agentCGNAT.Contains(ip) {
+		return ""
+	}
+	return ip.String()
 }
 
 // ReadProxyFile is used only by installation. Credentials stay out of argv and

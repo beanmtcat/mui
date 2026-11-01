@@ -40,31 +40,33 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                 const targets = receivers.map(targetAddress);
                 const useV4 = targets.some((v) => !v || !v.includes(":"));
                 const useV6 = targets.some((v) => !v || v.includes(":") || !/^\d+\.\d+\.\d+\.\d+$/.test(v));
-                const allowV4 = useV4 && sourceFamily !== "ipv6";
-                const allowV6 = useV6 && sourceFamily !== "ipv4";
+                const managed = !receivers.length || receivers.some((s) => !manualFirewall(s));
+                // Without UFW rules the saved family has no effect, so only the destination decides.
+                const allowV4 = useV4 && (!managed || sourceFamily !== "ipv6");
+                const allowV6 = useV6 && (!managed || sourceFamily !== "ipv4");
                 const sourceAddresses = (s: Server) => sourceInternal
                   ? (s.internalAddress && (s.internalAddress.includes(":") ? allowV6 : allowV4) ? s.internalAddress : "未填写匹配地址族的内网 IP")
                   : [...new Set([...(allowV4 ? [s.ipv4, s.detectedIpv4] : []), ...(allowV6 ? [s.ipv6, s.detectedIpv6] : [])].filter(Boolean))].join("、") || "未填写匹配地址族的公网 IP";
-                const managed = !receivers.length || receivers.some((s) => !manualFirewall(s));
                 return (
                   <fieldset className="routeConnection">
                     <legend>{senders.map((s) => s.name).join(" / ") || "请选择发送方"} → {receivers.map((s) => s.name).join(" / ") || "请选择接收方"}</legend>
                     <div className="formGrid">
                       <Field label="防火墙来源：放行发送方的哪个 IP？">
-                        <div className="routeSourceSelectors">
-                          <select disabled={!managed} value={sourceMode || "auto"} onChange={(e) => setSource(e.target.value as RouteSourceMode)}>
+                        {managed && <div className="routeSourceSelectors">
+                          <select value={sourceMode || "auto"} onChange={(e) => setSource(e.target.value as RouteSourceMode)}>
                             <option value="auto">自动（{internal ? "内网 IP" : "公网 IP"}）</option>
                             <option value="public">公网 IP</option>
                             <option value="internal">内网 IP</option>
                           </select>
-                          <select aria-label="防火墙来源地址族" disabled={!managed} value={sourceFamily || ""} onChange={(e) => setFamily(e.target.value ? e.target.value as RouteSourceFamily : undefined)}>
+                          <select aria-label="防火墙来源地址族" value={sourceFamily || ""} onChange={(e) => setFamily(e.target.value ? e.target.value as RouteSourceFamily : undefined)}>
                             {routeForm.id && <option value="">原设置</option>}
                             <option value="ipv4">IPv4（默认）</option>
                             <option value="ipv6">IPv6</option>
                             <option value="both">IPv4 + IPv6</option>
                           </select>
-                        </div>
-                        {managed ? senders.map((s) => <small className="connectionAddress" key={s.id}>{s.name}：{sourceAddresses(s)}</small>) : <small className="connectionAddress">接收方防火墙为手动管理，请自行放行。</small>}
+                        </div>}
+                        {!managed && <small className="connectionAddress">接收方防火墙为手动管理，面板不生成规则，请自行放行：</small>}
+                        {senders.map((s) => <small className="connectionAddress" key={s.id}>{s.name}：{sourceAddresses(s)}</small>)}
                       </Field>
                       <Field label="连接地址：接收方的哪个地址？">
                         <select value={internal ? "internal" : "public"} onChange={(e) => setInternal(e.target.value === "internal")}>

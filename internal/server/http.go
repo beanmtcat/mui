@@ -424,6 +424,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /s/{token}", a.subscriptionDownload)
 	mux.HandleFunc("POST /agent/enroll", a.agentEnroll)
 	mux.HandleFunc("GET /agent/komari", a.agentAuth(a.agentKomari))
+	mux.HandleFunc("GET /agent/observed-ipv4", a.agentAuth(a.agentObservedIPv4))
 	mux.HandleFunc("GET /agent/job", a.agentAuth(a.agentJob))
 	mux.HandleFunc("POST /agent/report", a.agentAuth(a.agentReport))
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, 200, map[string]string{"status": "ok"}) })
@@ -813,6 +814,27 @@ func (a *App) agentAuth(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// agentObservedIPv4 is called over an IPv4-only connection by an Agent whose
+// local IPv4 is hidden by NAT. A SOCKS5 exit must not be mistaken for the
+// Agent host; clientIP only trusts headers from configured reverse proxies.
+func (a *App) agentObservedIPv4(w http.ResponseWriter, r *http.Request) {
+	server, err := a.Store.Server(r.Header.Get("X-Server-ID"))
+	if err != nil {
+		errorJSON(w, 404, "服务器不存在")
+		return
+	}
+	if !server.AutoSyncPublicIP || server.AgentProxyNodeID != "" || server.AgentProxyPreviousNodeID != "" {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	ip := net.ParseIP(a.clientIP(r))
+	if ip == nil || ip.To4() == nil || !publicUnicast(ip) {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"ipv4": ip.String()})
 }
 
 func (a *App) login(w http.ResponseWriter, r *http.Request) {
@@ -4269,6 +4291,10 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "too many forward connection points")
 		return
 	}
+	if len(in.RouteLatencies) > 200 {
+		errorJSON(w, 400, "too many route latency points")
+		return
+	}
 	becameClientIPs := in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.13") && !shared.VersionAtLeast(server.AgentVersion, "0.6.13")
 	becameRouteUFW := !shared.ManualFirewall(server.FirewallMode) && in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.15") && !shared.VersionAtLeast(server.AgentVersion, "0.6.15")
 	becameShadowTLSDial := in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.16") && !shared.VersionAtLeast(server.AgentVersion, "0.6.16")
@@ -4283,7 +4309,7 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 	// screen; keep each piece to a sane size.
 	in.OS, in.Arch, in.AgentVersion, in.AgentBuild = clip(in.OS, 120), clip(in.Arch, 32), clip(in.AgentVersion, 64), clip(in.AgentBuild, 64)
 	in.CoreVersion, in.CoreBuild, in.FirewallConflict, in.JobError = clip(in.CoreVersion, 120), clip(in.CoreBuild, 64), clip(in.FirewallConflict, 64), clip(in.JobError, 2000)
-	in.UFWStatus, in.StatsStatus, in.IPv4, in.IPv6 = clip(in.UFWStatus, 32), clip(in.StatsStatus, 32), clip(in.IPv4, 64), clip(in.IPv6, 64)
+	in.UFWStatus, in.StatsStatus, in.IPv4, in.IPv6, in.ObservedIPv4 = clip(in.UFWStatus, 32), clip(in.StatsStatus, 32), clip(in.IPv4, 64), clip(in.IPv6, 64), clip(in.ObservedIPv4, 64)
 	if len(in.SSHPorts) > 16 {
 		in.SSHPorts = in.SSHPorts[:16]
 	}
@@ -4333,36 +4359,62 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 	if in.StatsStatus != "" {
 		server.StatsStatus = in.StatsStatus
 	}
-	// A server opted into dynamic public IPs uses valid Agent-reported
-	// addresses as its configured addresses. Other servers keep manual values
-	// and only fill previously empty fields, preserving existing behavior.
-	// Only full reports carry them: a job result without addresses must not
-	// blank them out.
+	// Only a local public interface IPv4 may fill an empty configured IPv4.
+	// A panel-observed NAT egress is a firewall source candidate, and may
+	// follow an existing configured IPv4 only if it matched the last detected
+	// value. Empty reports must not erase previously detected addresses.
 	if in.HostReported {
-		reportedIPv4 := in.IPv4
-		// Behind a home NAT the Agent's local IPv4 is private, so it reports
-		// nothing. For a direct Agent connection the panel can use the public
-		// request source instead. A configured SOCKS5 proxy would report the
-		// proxy's address, so never use that connection for this fallback.
-		if server.AutoSyncPublicIP && reportedIPv4 == "" && server.AgentProxyNodeID == "" && server.AgentProxyPreviousNodeID == "" {
-			observed := net.ParseIP(a.clientIP(r))
-			if observed != nil && observed.To4() != nil && publicUnicast(observed) {
-				reportedIPv4 = observed.String()
+		localIPv4 := net.ParseIP(in.IPv4)
+		validLocalIPv4 := localIPv4 != nil && localIPv4.To4() != nil && publicUnicast(localIPv4)
+		observedIPv4 := net.ParseIP(in.ObservedIPv4)
+		validObservedIPv4 := observedIPv4 != nil && observedIPv4.To4() != nil && publicUnicast(observedIPv4)
+		previousDetectedIPv4 := server.DetectedIPv4
+		detectedIPv4 := ""
+		observedAddress := ""
+		noProxy := server.AgentProxyNodeID == "" && server.AgentProxyPreviousNodeID == ""
+		if validLocalIPv4 {
+			detectedIPv4 = localIPv4.String()
+		} else if noProxy {
+			if validObservedIPv4 {
+				observedAddress = observedIPv4.String()
+			} else if server.AutoSyncPublicIP && !shared.VersionAtLeast(server.AgentVersion, "0.6.23") {
+				// Agents before 0.6.23 did not send observedIpv4. Their direct
+				// report source can still reveal the NAT egress address. A newer
+				// Agent's empty observation means its probe has not succeeded yet.
+				observed := net.ParseIP(a.clientIP(r))
+				if observed != nil && observed.To4() != nil && publicUnicast(observed) {
+					observedAddress = observed.String()
+				}
+			}
+			if observedAddress != "" {
+				detectedIPv4 = observedAddress
+			} else if server.AutoSyncPublicIP {
+				// A restart or failed probe can omit the observation. Keep the
+				// last source so route firewalls do not remove its allow rule.
+				detectedIPv4 = previousDetectedIPv4
 			}
 		}
-		ipv4, ipv6 := net.ParseIP(reportedIPv4), net.ParseIP(in.IPv6)
-		validIPv4 := ipv4 != nil && ipv4.To4() != nil && publicUnicast(ipv4)
+		ipv6 := net.ParseIP(in.IPv6)
 		validIPv6 := ipv6 != nil && ipv6.To4() == nil && publicUnicast(ipv6)
-		updateIPv4 := validIPv4 && (server.IPv4 == "" || server.AutoSyncPublicIP && server.IPv4 != reportedIPv4)
+		detectedIPv6 := server.DetectedIPv6
+		if validIPv6 {
+			detectedIPv6 = ipv6.String()
+		}
+		updateIPv4 := validLocalIPv4 && (server.IPv4 == "" || server.AutoSyncPublicIP && server.IPv4 != localIPv4.String())
+		updateIPv4 = updateIPv4 || server.AutoSyncPublicIP && observedAddress != "" && server.IPv4 != "" && server.IPv4 == previousDetectedIPv4 && server.IPv4 != observedAddress
 		updateIPv6 := validIPv6 && (server.IPv6 == "" || server.AutoSyncPublicIP && server.IPv6 != in.IPv6)
-		if server.DetectedIPv4 != reportedIPv4 || server.DetectedIPv6 != in.IPv6 || updateIPv4 || updateIPv6 {
+		if server.DetectedIPv4 != detectedIPv4 || server.DetectedIPv6 != detectedIPv6 || updateIPv4 || updateIPv6 {
 			// Route firewalls admit hops by these addresses. The sync takes
 			// the server locks itself, so it runs after this report is done.
 			defer func() { go a.syncRoutesInBackground() }()
 		}
-		server.DetectedIPv4, server.DetectedIPv6 = reportedIPv4, in.IPv6
+		server.DetectedIPv4, server.DetectedIPv6 = detectedIPv4, detectedIPv6
 		if updateIPv4 {
-			server.IPv4 = reportedIPv4
+			if validLocalIPv4 {
+				server.IPv4 = localIPv4.String()
+			} else {
+				server.IPv4 = observedAddress
+			}
 		}
 		if updateIPv6 {
 			server.IPv6 = in.IPv6
@@ -4375,6 +4427,14 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		server.SSHPorts, server.FirewallConflict, server.UFWRules = in.SSHPorts, in.FirewallConflict, in.UFWRules
 		if len(server.UFWRules) > 300 {
 			server.UFWRules = server.UFWRules[:300]
+		}
+		if len(in.RouteLatencies) > 0 {
+			forwards, e := a.Store.Forwards(id)
+			if e != nil {
+				errorJSON(w, 500, e.Error())
+				return
+			}
+			server.RouteLatencies = validRouteLatencies(in.RouteLatencies, forwards, now)
 		}
 	}
 	if err = a.Store.PutServer(server); err != nil {
@@ -4655,5 +4715,5 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	writeJSON(w, 200, map[string]bool{"ok": true})
+	writeJSON(w, 200, map[string]bool{"ok": true, "autoSyncPublicIp": server.AutoSyncPublicIP})
 }
