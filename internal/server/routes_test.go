@@ -560,8 +560,69 @@ func TestRoutesShareMatchingLoadGroup(t *testing.T) {
 	requireRouteLive(t, l, second)
 }
 
+func TestSharedHopAddressModesMustAgreeForSameServer(t *testing.T) {
+	l := newRouteLab(t)
+	entry2, _ := l.p.enrollAs("entry2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.9"})
+	server, err := l.p.store.Server(l.t1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.InternalAddress = "10.0.0.2"
+	if err := l.p.store.PutServer(server); err != nil {
+		t.Fatal(err)
+	}
+	firstHops := []map[string]any{{"serverIds": []string{l.t1}, "addressModes": map[string]string{l.t1: "internal"}, "sourceMode": "public"}}
+	first := createSharedTestRoute(t, l, "first", l.entry, firstHops)
+	publicHops := []map[string]any{{"serverIds": []string{l.t1}, "addressModes": map[string]string{l.t1: "public"}, "sourceMode": "public"}}
+	if code, out := l.route(map[string]any{"name": "public", "entryServerId": entry2, "nodeId": l.nodeID,
+		"enabled": true, "port": 50000, "hops": publicHops}); code != 409 || !strings.Contains(out["error"].(string), "端口") {
+		t.Fatalf("different effective address modes should conflict: %d %v", code, out)
+	}
+	second := createSharedTestRoute(t, l, "same internal", entry2,
+		[]map[string]any{{"serverIds": []string{l.t1}, "addressModes": map[string]string{l.t1: "internal"}, "sourceMode": "public"}})
+	requireSharedHop(t, l, l.t1, []string{first, second}, "198.51.100.1,198.51.100.9", "198.51.100.4")
+}
+
+func TestRoutesShareCurrentHopAcrossDifferentLoadGroups(t *testing.T) {
+	for _, variant := range []string{"reordered", "different members", "different balance"} {
+		t.Run(variant, func(t *testing.T) {
+			l := newRouteLab(t)
+			backup, backupAgent := l.p.enrollAs("backup", []string{"transit"}, map[string]any{"ipv4": "198.51.100.6"})
+			other, otherAgent := l.p.enrollAs("other", []string{"transit"}, map[string]any{"ipv4": "198.51.100.7"})
+			entry2, entryAgent := l.p.enrollAs("entry2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.9"})
+			l.agents = append(l.agents, backupAgent, otherAgent, entryAgent)
+			firstHops := []map[string]any{{"serverIds": []string{l.t1, backup}, "balance": "failover"}, {"serverIds": []string{l.t2}}}
+			secondGroup := map[string]any{"serverIds": []string{l.t1, backup}, "balance": "failover"}
+			switch variant {
+			case "reordered":
+				secondGroup["serverIds"] = []string{backup, l.t1}
+			case "different members":
+				secondGroup["serverIds"] = []string{l.t1, other}
+			case "different balance":
+				secondGroup["balance"] = "round-robin"
+			}
+			secondHops := []map[string]any{secondGroup, {"serverIds": []string{l.t2}}}
+			first := createSharedTestRoute(t, l, "first", l.entry, firstHops)
+			second := createSharedTestRoute(t, l, "second", entry2, secondHops)
+			requireSharedHop(t, l, l.t1, []string{first, second}, "198.51.100.1,198.51.100.9", "198.51.100.3")
+			if variant == "different members" {
+				for _, id := range []string{backup, other} {
+					for _, f := range l.forwards(id) {
+						if len(f.RouteIDs) != 0 {
+							t.Fatalf("unshared member %s gained other route: %+v", id, f)
+						}
+					}
+				}
+			}
+			l.applyAll()
+			requireRouteLive(t, l, first)
+			requireRouteLive(t, l, second)
+		})
+	}
+}
+
 func TestSharedHopRejectsDifferentSuffixes(t *testing.T) {
-	for _, change := range []string{"later server", "server order", "balance", "internal", "node internal", "landing node", "load group", "same entry"} {
+	for _, change := range []string{"later server", "server order", "later balance", "internal", "node internal", "landing node", "same entry"} {
 		t.Run(change, func(t *testing.T) {
 			l := newRouteLab(t)
 			entry2, _ := l.p.enrollAs("entry2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.9"})
@@ -581,8 +642,8 @@ func TestSharedHopRejectsDifferentSuffixes(t *testing.T) {
 				candidateHops[1]["serverIds"] = []string{l.t2, e}
 			case "server order":
 				candidateHops[1]["serverIds"] = []string{d, l.t2}
-			case "balance":
-				candidateHops[0]["balance"] = "round-robin"
+			case "later balance":
+				candidateHops[1]["balance"] = "round-robin"
 			case "internal":
 				candidateHops[1]["internal"] = true
 			case "node internal":
@@ -594,8 +655,6 @@ func TestSharedHopRejectsDifferentSuffixes(t *testing.T) {
 					t.Fatalf("other node: %d %v", code, node)
 				}
 				candidate["nodeId"] = node["id"]
-			case "load group":
-				candidateHops[0]["serverIds"] = []string{l.t1, e}
 			case "same entry":
 				candidate["entryServerId"] = l.entry
 			}

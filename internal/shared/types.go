@@ -272,11 +272,15 @@ func InstallsCore(s Server) bool {
 // hops to a node on an exit or transit server. Every hop listens on the same Port; the
 // panel generates the forwards.
 type Route struct {
-	ID            string     `json:"id"`
-	Name          string     `json:"name"`
-	EntryServerID string     `json:"entryServerId"`
-	Hops          []RouteHop `json:"hops"`
-	NodeID        string     `json:"nodeId"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	EntryServerID string `json:"entryServerId"`
+	// EntryFirewallPolicy controls which clients may reach the first hop.
+	// Empty preserves the unrestricted behavior of existing routes.
+	EntryFirewallPolicy  string     `json:"entryFirewallPolicy,omitempty"`
+	EntryFirewallSources string     `json:"entryFirewallSources,omitempty"`
+	Hops                 []RouteHop `json:"hops"`
+	NodeID               string     `json:"nodeId"`
 	// NodeInternal makes the last hop reach the exit server by its internal
 	// address instead of its public one.
 	NodeInternal bool `json:"nodeInternal"`

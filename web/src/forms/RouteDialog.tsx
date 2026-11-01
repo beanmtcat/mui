@@ -8,7 +8,9 @@ import { ItemPicker } from "./ItemPicker";
 
 export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
   const { servers, nodes, serverName, act, closeModal } = useApp();
-  const [routeForm, setRouteForm] = useState(initial);
+  // Format stored CIDRs for the editor once; keep subsequent typing untouched.
+  const displayInitial = { ...initial, entryFirewallSources: initial.entryFirewallSources?.replaceAll(",", "\n") };
+  const [routeForm, setRouteForm] = useState(displayInitial);
   const { busy, run } = useBusy();
   const submitRoute = (e: React.FormEvent) => {
     e.preventDefault();
@@ -88,7 +90,7 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                   </fieldset>
                 );
               };
-  return <Dialog title={routeForm.id ? "编辑链路" : "新建链路"} value={routeForm} initial={initial} busy={busy}>
+  return <Dialog title={routeForm.id ? "编辑链路" : "新建链路"} value={routeForm} initial={displayInitial} busy={busy}>
                 <form onSubmit={submitRoute}>
                   <div className="formGrid">
                     <Field label="名称 *"><input required maxLength={100} value={routeForm.name || ""} onChange={(e) => setRouteForm({ ...routeForm, name: e.target.value })} /></Field>
@@ -98,13 +100,21 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                         {servers.filter((s) => s.roles?.some((r) => r === "entry" || r === "line")).map((s) => <option key={s.id} value={s.id}>{s.name}（{rolesText(s.roles)}）</option>)}
                       </select>
                     </Field>
+                    <Field label="入口放行来源" help="限制客户端能从哪些 IP 连接首跳端口；不影响中转之间的放行规则。指定来源后，其他来源即使有主机的宽泛放行规则，也会被链路优先规则拦住。UFW 默认入站策略必须是 deny 或 reject，否则配置应用会失败。">
+                      <select value={routeForm.entryFirewallPolicy || "all"} onChange={(e) => setRouteForm({ ...routeForm, entryFirewallPolicy: e.target.value as "all" | "restricted", entryFirewallSources: e.target.value === "restricted" ? routeForm.entryFirewallSources : "" })}>
+                        <option value="all">允许所有来源（默认）</option>
+                        <option value="restricted">只允许指定 IP / 网段</option>
+                      </select>
+                      {routeForm.entryFirewallPolicy === "restricted" && <textarea required rows={3} placeholder="每行一个 IP 或 CIDR，例如 183.129.141.26/32" value={routeForm.entryFirewallSources || ""} onChange={(e) => setRouteForm({ ...routeForm, entryFirewallSources: e.target.value })} />}
+                      {manualFirewall(servers.find((s) => s.id === routeForm.entryServerId)) && <small className="hint">入口防火墙为手动管理，面板不会写入 UFW；请在主机防火墙中自行限制来源。</small>}
+                    </Field>
                     <Field label="落地节点 *">
                       <select required value={routeForm.nodeId || ""} onChange={(e) => setRouteForm({ ...routeForm, nodeId: e.target.value })}>
                         <option value="">选择节点</option>
                         {nodes.filter((n) => !n.deleting).map((n) => <option key={n.id} value={n.id}>{n.name}（{n.protocol.toUpperCase()} · {serverName(n.serverId)}）</option>)}
                       </select>
                     </Field>
-                    <Field label="端口（留空自动）" help="两条链路从某一中转到落地的路径完全相同时，可共用这些中转的监听。中转上已有相同目标的手动转发，且协议和监听地址兼容时，也可复用；原有放行来源会保留。入口仍单独监听。"><input type="number" min={1024} max={65535} value={routeForm.port || ""} placeholder="优先使用落地节点端口" onChange={(e) => setRouteForm({ ...routeForm, port: Number(e.target.value) || 0 })} /></Field>
+                    <Field label="端口（留空自动）" help="同一中转的公网／内网连接方式、转发目标和后续路径相同时，可共用监听；上一跳负载组的成员和顺序可以不同。中转上已有相同目标的手动转发，且协议和监听地址兼容时，也可复用；原有放行来源会保留。入口仍单独监听。"><input type="number" min={1024} max={65535} value={routeForm.port || ""} placeholder="优先使用落地节点端口" onChange={(e) => setRouteForm({ ...routeForm, port: Number(e.target.value) || 0 })} /></Field>
                     <Field label="备注"><input maxLength={200} value={routeForm.notes || ""} onChange={(e) => setRouteForm({ ...routeForm, notes: e.target.value })} /></Field>
                     <Field label="状态"><label className="check"><input type="checkbox" checked={!!routeForm.enabled} onChange={(e) => setRouteForm({ ...routeForm, enabled: e.target.checked })} /> 启用链路</label></Field>
                   </div>

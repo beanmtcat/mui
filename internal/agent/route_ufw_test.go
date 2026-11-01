@@ -76,6 +76,34 @@ func TestRouteUFWPolicyGuardsEachTransportAndFamily(t *testing.T) {
 	}
 }
 
+func TestRouteUFWRestrictedEntryBlocksUnlistedIPv4AndAllIPv6(t *testing.T) {
+	state := shared.DesiredState{Forwards: []shared.ForwardRule{{
+		ID: "entry-tcp", RouteID: "route", Network: "tcp", Port: 53611,
+		Enabled: true, FirewallPolicy: "restricted", FirewallSources: "183.129.141.26/32",
+	}, {
+		ID: "entry-udp", RouteID: "route", Network: "udp", Port: 53611,
+		Enabled: true, FirewallPolicy: "restricted", FirewallSources: "183.129.141.26/32",
+	}}}
+	rules := routeUFWRules(state)
+	if len(rules) != 4 {
+		t.Fatalf("expected an allow and a deny per transport: %+v", rules)
+	}
+	for _, network := range []string{"tcp", "udp"} {
+		var group []shared.FirewallRule
+		for _, r := range rules {
+			if r.Network == network {
+				group = append(group, r)
+			}
+		}
+		if len(group) != 2 || group[0].Action != "allow" || group[0].Source != "183.129.141.26/32" ||
+			!routeUFWFamily(group[0], false) || routeUFWFamily(group[0], true) ||
+			group[1].Action != "deny" || group[1].Source != "" ||
+			!routeUFWFamily(group[1], false) || !routeUFWFamily(group[1], true) {
+			t.Fatalf("%s did not restrict both address families: %+v", network, group)
+		}
+	}
+}
+
 func TestRouteUFWNodeRemovalDoesNotReopenLanding(t *testing.T) {
 	state := shared.DesiredState{Nodes: []shared.ManagedNode{{Node: shared.Node{ID: "landing", Protocol: "ss", Enabled: true, Port: 52000, FirewallPolicy: "restricted", FirewallSources: "192.0.2.1/32", RouteSources: "192.0.2.1"}}}}
 	if len(routeUFWRules(state)) != 4 {

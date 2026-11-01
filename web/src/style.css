@@ -660,6 +660,16 @@ main > .filters {
   border-color: var(--bad);
   color: var(--bad);
 }
+.routeEntryAccess {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin-top: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  overflow-wrap: anywhere;
+}
 
 /* Command and link output */
 .commandBox {

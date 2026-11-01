@@ -216,6 +216,12 @@ func (w routeWorld) checkRouteShape(rt shared.Route) error {
 	if len([]rune(rt.Notes)) > 200 {
 		return errors.New("链路备注不能超过 200 字符")
 	}
+	if rt.EntryFirewallPolicy != "" && rt.EntryFirewallPolicy != "all" && rt.EntryFirewallPolicy != "restricted" {
+		return errors.New("入口放行模式无效")
+	}
+	if _, _, err := shared.NormalizeAdminFirewallAccess(rt.EntryFirewallPolicy, rt.EntryFirewallSources); err != nil {
+		return fmt.Errorf("入口放行来源：%w", err)
+	}
 	if !validRouteSourceMode(rt.NodeSourceMode) {
 		return errors.New("落地 UFW 来源地址模式无效")
 	}
@@ -349,9 +355,11 @@ func (w routeWorld) checkRoutePort(rt shared.Route) error {
 	return nil
 }
 
-// Two routes may use one listener from a middle hop onward only when their
-// remaining paths and generated listener settings agree. Their entries always
-// remain separate so client observations keep the right route identity.
+// Two routes may use one middle-hop listener when that server's outbound
+// settings, its selected public/private address and the path after its group
+// agree. The current group's other members, order and balance only affect
+// the previous hop, not this listener.
+// Entries remain separate so client observations keep the right route identity.
 func (w routeWorld) sameSharedHop(a, b shared.Route, serverID string) bool {
 	if a.ID == b.ID || !a.Enabled || !b.Enabled || a.Port != b.Port ||
 		a.NodeID != b.NodeID || a.NodeInternal != b.NodeInternal {
@@ -362,7 +370,10 @@ func (w routeWorld) sameSharedHop(a, b shared.Route, serverID string) bool {
 	if ai < 0 || bi < 0 || len(a.Hops)-ai != len(b.Hops)-bi {
 		return false // An entry cannot share, and the suffix lengths must agree.
 	}
-	for offset := range len(a.Hops) - ai {
+	if a.Hops[ai].UsesInternal(serverID) != b.Hops[bi].UsesInternal(serverID) {
+		return false
+	}
+	for offset := 1; offset < len(a.Hops)-ai; offset++ {
 		left, right := a.Hops[ai+offset], b.Hops[bi+offset]
 		if !slices.Equal(left.ServerIDs, right.ServerIDs) || left.Balance != right.Balance {
 			return false
@@ -465,7 +476,7 @@ func (w routeWorld) portFree(rt shared.Route, serverID string) error {
 	for _, other := range w.routes {
 		if other.ID != rt.ID && other.Enabled && other.Port == rt.Port && slices.Contains(routeServers(other), serverID) {
 			if !w.sameSharedHop(rt, other, serverID) {
-				return fmt.Errorf("端口 %d 在服务器 %s 上已被链路“%s”占用；两条链路须从该中转到落地的路径完全相同才能共用监听", rt.Port, s.Name, other.Name)
+				return fmt.Errorf("端口 %d 在服务器 %s 上已被链路“%s”占用；该中转的连接地址、转发目标和后续路径相同时才能共用监听", rt.Port, s.Name, other.Name)
 			}
 		}
 	}
@@ -556,7 +567,9 @@ func (w routeWorld) routeForwards(rt shared.Route) []shared.ForwardRule {
 		}
 		for _, id := range group {
 			policy, sources := "all", ""
-			if k > 0 {
+			if k == 0 && rt.EntryFirewallPolicy == "restricted" {
+				policy, sources = "restricted", rt.EntryFirewallSources
+			} else if k > 0 {
 				incoming := rt.Hops[k-1]
 				selectedInternal := incoming.UsesInternal(id)
 				internal := routeSourceInternal(selectedInternal, incoming.SourceMode)
@@ -1132,6 +1145,13 @@ func (a *App) saveRoute(w http.ResponseWriter, r *http.Request, in shared.Route,
 	}
 	in.Name = strings.TrimSpace(in.Name)
 	in.Status = ""
+	if in.EntryFirewallPolicy == "restricted" {
+		_, in.EntryFirewallSources, err = shared.NormalizeAdminFirewallAccess(in.EntryFirewallPolicy, in.EntryFirewallSources)
+		if err != nil {
+			errorJSON(w, 400, "入口放行来源："+err.Error())
+			return
+		}
+	}
 	if in.Hops == nil {
 		in.Hops = []shared.RouteHop{}
 	}

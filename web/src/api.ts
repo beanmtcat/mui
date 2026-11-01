@@ -200,6 +200,8 @@ export type Route = {
   id: string;
   name: string;
   entryServerId: string;
+  entryFirewallPolicy?: "all" | "restricted";
+  entryFirewallSources?: string;
   hops: RouteHop[];
   nodeId: string;
   nodeInternal: boolean;
