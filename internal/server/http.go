@@ -3741,9 +3741,17 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 				break
 			}
 		}
-		// RouteIDs is panel metadata for shared final-hop listeners. The Agent
-		// needs only the primary RouteID to probe and run this one forward.
+		// A reused manual listener is a route listener only in the desired
+		// state. Its stored RouteID stays empty so it can be restored unchanged
+		// after the last route is removed. The Agent uses this transient owner
+		// for priority UFW rules and TCP latency probes.
+		if forward.RouteID == "" && len(forward.RouteIDs) > 0 {
+			forward.RouteID = forward.RouteIDs[0]
+		}
+		// RouteIDs and the manual baseline stay on the panel, not the Agent.
 		forward.RouteIDs = nil
+		forward.ManualBasePolicy, forward.ManualBaseSources = "", ""
+		forward.ManualBaseTargets = nil
 		if !forward.Deleting {
 			if shared.ManualFirewall(server.FirewallMode) {
 				forward.FirewallPolicy, forward.FirewallSources = "manual", ""

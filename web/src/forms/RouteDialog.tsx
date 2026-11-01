@@ -96,7 +96,7 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                         {nodes.filter((n) => !n.deleting).map((n) => <option key={n.id} value={n.id}>{n.name}（{n.protocol.toUpperCase()} · {serverName(n.serverId)}）</option>)}
                       </select>
                     </Field>
-                    <Field label="端口（留空自动）" help="两条链路使用同一端口、同一落地节点，并且从某一中转开始到落地的路径完全相同时，可共用这些中转的监听。每条链路的入口仍单独监听。"><input type="number" min={1024} max={65535} value={routeForm.port || ""} placeholder="优先使用落地节点端口" onChange={(e) => setRouteForm({ ...routeForm, port: Number(e.target.value) || 0 })} /></Field>
+                    <Field label="端口（留空自动）" help="两条链路从某一中转到落地的路径完全相同时，可共用这些中转的监听。中转上已有相同目标的手动转发，且协议和监听地址兼容时，也可复用；原有放行来源会保留。入口仍单独监听。"><input type="number" min={1024} max={65535} value={routeForm.port || ""} placeholder="优先使用落地节点端口" onChange={(e) => setRouteForm({ ...routeForm, port: Number(e.target.value) || 0 })} /></Field>
                     <Field label="备注"><input maxLength={200} value={routeForm.notes || ""} onChange={(e) => setRouteForm({ ...routeForm, notes: e.target.value })} /></Field>
                     <Field label="状态"><label className="check"><input type="checkbox" checked={!!routeForm.enabled} onChange={(e) => setRouteForm({ ...routeForm, enabled: e.target.checked })} /> 启用链路</label></Field>
                   </div>

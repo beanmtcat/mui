@@ -209,6 +209,7 @@ export type Route = {
   enabled: boolean;
   notes: string;
   status?: string;
+  error?: string;
   edgeLatencies?: { fromServerId: string; toServerId: string; tcpMs: number; ok: boolean; at: string }[];
 };
 export type AuditEntry = { id: string; at: string; action: string; target: string; detail: string; ip: string };

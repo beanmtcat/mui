@@ -693,6 +693,392 @@ func TestUnsharedRouteSyncKeepsForwardsAndRevision(t *testing.T) {
 	}
 }
 
+func TestRouteReusesMatchingManualTransitForward(t *testing.T) {
+	l := newRouteLab(t)
+	entry2, agent2 := l.p.enrollAs("entry2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.5"})
+	l.agents = append(l.agents, agent2)
+	input := map[string]any{"serverId": l.t1, "name": "53611", "network": "tcp+udp", "listen": "0.0.0.0", "port": 53611,
+		"targets": []map[string]any{{"host": "198.51.100.4", "port": 50010}}, "firewallPolicy": "restricted",
+		"firewallSources": "198.51.100.8", "enabled": true}
+	code, manual, _ := l.p.do("POST", "/api/forwards", input, nil)
+	if code != 201 {
+		t.Fatalf("manual forward: %d %v", code, manual)
+	}
+	manualID := manual["id"].(string)
+	create := func(name, entry string) string {
+		t.Helper()
+		code, rt := l.route(map[string]any{"name": name, "entryServerId": entry, "nodeId": l.nodeID,
+			"enabled": true, "port": 53611, "hops": singleServerHops(l.t1)})
+		if code != 201 {
+			t.Fatalf("route %s did not reuse manual forward: %d %v", name, code, rt)
+		}
+		return rt["id"].(string)
+	}
+	first, second := create("first", l.entry), create("second", entry2)
+	check := func(members []string, sources string) {
+		t.Helper()
+		forwards := slices.DeleteFunc(l.forwards(l.t1), func(f shared.ForwardRule) bool { return !f.Enabled })
+		if len(forwards) != 1 || forwards[0].ID != manualID || forwards[0].RouteID != "" ||
+			!slices.Equal(forwards[0].RouteIDs, members) || forwards[0].FirewallSources != sources ||
+			forwards[0].ManualBasePolicy != "restricted" || forwards[0].ManualBaseSources != "198.51.100.8/32" {
+			t.Fatalf("manual listener was not safely reused: %+v", forwards)
+		}
+		state, err := l.p.app.desired(l.t1)
+		activeState := slices.DeleteFunc(state.Forwards, func(f shared.ForwardRule) bool { return !f.Enabled })
+		if err != nil || len(activeState) != 1 || activeState[0].RouteID != members[0] || len(activeState[0].RouteIDs) != 0 ||
+			activeState[0].ManualBasePolicy != "" || activeState[0].ManualBaseSources != "" {
+			t.Fatalf("Agent received duplicate listeners or panel metadata: %+v %v", state.Forwards, err)
+		}
+	}
+	check([]string{first, second}, "198.51.100.1/32,198.51.100.5/32,198.51.100.8/32")
+	if code, out, _ := l.p.do("DELETE", "/api/forwards/"+manualID, nil, nil); code != 409 {
+		t.Fatalf("deleted a manual listener in use by routes: %d %v", code, out)
+	}
+	l.applyAll()
+	requireRouteLive(t, l, first)
+	requireRouteLive(t, l, second)
+	if code, out, _ := l.p.do("PATCH", "/api/routes/"+first, map[string]any{"name": "first", "entryServerId": l.entry,
+		"nodeId": l.nodeID, "enabled": false, "port": 53611, "hops": singleServerHops(l.t1)}, nil); code != 200 {
+		t.Fatalf("disable first: %d %v", code, out)
+	}
+	check([]string{second}, "198.51.100.5/32,198.51.100.8/32")
+	l.applyAll()
+	requireRouteLive(t, l, second)
+	for _, id := range []string{first, second} {
+		if code, out, _ := l.p.do("DELETE", "/api/routes/"+id, nil, nil); code != 200 {
+			t.Fatalf("delete route: %d %v", code, out)
+		}
+	}
+	forwards := l.forwards(l.t1)
+	if len(forwards) != 1 || forwards[0].ID != manualID || len(forwards[0].RouteIDs) != 0 ||
+		forwards[0].FirewallSources != "198.51.100.8/32" || forwards[0].ManualBasePolicy != "" {
+		t.Fatalf("manual forward was not restored: %+v", forwards)
+	}
+	l.applyAll()
+	if code, out, _ := l.p.do("PATCH", "/api/forwards/"+manualID, input, nil); code != 200 {
+		t.Fatalf("restored manual forward cannot be edited: %d %v", code, out)
+	}
+}
+
+func manualReuseFixture(t *testing.T, listen string) (*routeLab, string, string) {
+	t.Helper()
+	l := newRouteLab(t)
+	code, manual, _ := l.p.do("POST", "/api/forwards", map[string]any{
+		"serverId": l.t1, "name": "manual", "network": "tcp+udp", "listen": listen, "port": 53611,
+		"targets":        []map[string]any{{"host": "198.51.100.4", "port": 50010}},
+		"firewallPolicy": "restricted", "firewallSources": "198.51.100.8", "enabled": true,
+	}, nil)
+	if code != 201 {
+		t.Fatalf("manual forward: %d %v", code, manual)
+	}
+	code, route := l.route(map[string]any{"name": "attached", "entryServerId": l.entry, "nodeId": l.nodeID,
+		"enabled": true, "port": 53611, "hops": singleServerHops(l.t1)})
+	if code != 201 {
+		t.Fatalf("attach route: %d %v", code, route)
+	}
+	return l, manual["id"].(string), route["id"].(string)
+}
+
+func requireManualTarget(t *testing.T, l *routeLab, id, host string, port int) shared.ForwardRule {
+	t.Helper()
+	f, err := l.p.store.Forward(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.Targets, []shared.ForwardTarget{{Host: host, Port: port}}) {
+		t.Fatalf("manual target: %+v", f.Targets)
+	}
+	return f
+}
+
+func TestManualRouteTargetFollowsAddressAndRestoresBaseline(t *testing.T) {
+	l, manualID, routeID := manualReuseFixture(t, "0.0.0.0")
+	l.applyAll()
+	exit, _ := l.p.store.Server(l.exit)
+	exit.IPv4 = "198.51.100.44"
+	if err := l.p.store.PutServer(exit); err != nil {
+		t.Fatal(err)
+	}
+	if err := l.p.app.syncRoutes(); err != nil {
+		t.Fatal(err)
+	}
+	f := requireManualTarget(t, l, manualID, "198.51.100.44", 50010)
+	if !slices.Equal(f.ManualBaseTargets, []shared.ForwardTarget{{Host: "198.51.100.4", Port: 50010}}) {
+		t.Fatalf("lost original manual target: %+v", f)
+	}
+	l.applyAll()
+	requireRouteLive(t, l, routeID)
+	if code, out, _ := l.p.do("DELETE", "/api/routes/"+routeID, nil, nil); code != 200 {
+		t.Fatalf("delete route: %d %v", code, out)
+	}
+	f = requireManualTarget(t, l, manualID, "198.51.100.4", 50010)
+	if len(f.RouteIDs) != 0 || f.ManualBaseTargets != nil || f.ManualBasePolicy != "" ||
+		f.FirewallPolicy != "restricted" || f.FirewallSources != "198.51.100.8/32" {
+		t.Fatalf("manual baseline not restored: %+v", f)
+	}
+}
+
+func TestManualRouteTargetFollowsNodePort(t *testing.T) {
+	l, manualID, routeID := manualReuseFixture(t, "::")
+	n, _ := l.p.store.Node(l.nodeID)
+	secret, err := l.p.store.NodeSecret(n.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.Port = 50011
+	if err = l.p.store.PutNode(n, secret); err != nil {
+		t.Fatal(err)
+	}
+	if err = l.p.app.checkNodeRoutes(n); err != nil {
+		t.Fatalf("node edit blocked by its attached manual listener: %v", err)
+	}
+	if err = l.p.app.syncRoutes(); err != nil {
+		t.Fatal(err)
+	}
+	requireManualTarget(t, l, manualID, "198.51.100.4", 50011)
+	if err = l.p.app.queueApply(l.exit, "nodes.apply"); err != nil {
+		t.Fatal(err)
+	}
+	l.applyAll()
+	requireRouteLive(t, l, routeID)
+}
+
+func TestManualRouteConflictIsLocalAndCanBeRemoved(t *testing.T) {
+	l, manualID, first := manualReuseFixture(t, "::")
+	entry2, agent2 := l.p.enrollAs("entry2", []string{"entry"}, map[string]any{"ipv4": "198.51.100.5"})
+	l.agents = append(l.agents, agent2)
+	code, secondOut := l.route(map[string]any{"name": "second", "entryServerId": entry2, "nodeId": l.nodeID,
+		"enabled": true, "port": 53611, "hops": singleServerHops(l.t1)})
+	if code != 201 {
+		t.Fatalf("second route: %d %v", code, secondOut)
+	}
+	second := secondOut["id"].(string)
+	// Simulate drift in an existing member after both listeners were attached.
+	// The exit has a different internal address, so the two members now want
+	// different targets on one manual socket.
+	routes, err := l.p.store.Routes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := routes[slices.IndexFunc(routes, func(item shared.Route) bool { return item.ID == second })]
+	rt.NodeInternal = true
+	if err = l.p.store.PutRoute(rt); err != nil {
+		t.Fatal(err)
+	}
+	if err = l.p.app.syncRoutes(); err != nil {
+		t.Fatalf("one bad manual listener blocked all routes: %v", err)
+	}
+	for _, row := range l.p.list("/api/routes") {
+		if row["id"] == first || row["id"] == second {
+			if row["status"] != "error" || !strings.Contains(row["error"].(string), "目标不一致") {
+				t.Fatalf("member error is not visible: %+v", row)
+			}
+		}
+	}
+	world, _ := l.p.app.loadRouteWorld()
+	for _, route := range world.routes {
+		if route.ID == first || route.ID == second {
+			if live, err := l.p.app.routeLive(route, world, ""); err != nil || live {
+				t.Fatalf("broken route remains usable: %s %v %v", route.Name, live, err)
+			}
+		}
+	}
+	code, unrelated := l.route(map[string]any{"name": "unrelated", "entryServerId": l.entry, "nodeId": l.nodeID,
+		"enabled": true, "port": 53612})
+	if code != 201 {
+		t.Fatalf("unrelated route rejected: %d %v", code, unrelated)
+	}
+	node, _ := l.p.store.Node(l.nodeID)
+	if err := l.p.app.checkNodeRoutes(node); err != nil {
+		t.Fatalf("existing route error blocked node validation: %v", err)
+	}
+	if code, out, _ := l.p.do("DELETE", "/api/routes/"+second, nil, nil); code != 200 {
+		t.Fatalf("cannot remove bad member: %d %v", code, out)
+	}
+	l.applyAll()
+	requireRouteLive(t, l, first)
+	if code, out, _ := l.p.do("DELETE", "/api/routes/"+first, nil, nil); code != 200 {
+		t.Fatalf("cannot remove final member: %d %v", code, out)
+	}
+	if code, out, _ := l.p.do("PATCH", "/api/forwards/"+manualID, map[string]any{
+		"name": "edited", "network": "tcp+udp", "listen": "::", "port": 53611,
+		"targets":        []map[string]any{{"host": "198.51.100.4", "port": 50010}},
+		"firewallPolicy": "all", "enabled": true}, nil); code != 200 {
+		t.Fatalf("restored manual rule cannot be edited: %d %v", code, out)
+	}
+	if code, out, _ := l.p.do("DELETE", "/api/forwards/"+manualID, nil, nil); code != 202 {
+		t.Fatalf("restored manual rule cannot be deleted: %d %v", code, out)
+	}
+}
+
+func TestManualRouteListenDriftAndSourceOverflowAreLocal(t *testing.T) {
+	t.Run("listen", func(t *testing.T) {
+		l, manualID, routeID := manualReuseFixture(t, "198.51.100.2")
+		transit, _ := l.p.store.Server(l.t1)
+		transit.IPv4 = "198.51.100.22"
+		if err := l.p.store.PutServer(transit); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.p.app.syncRoutes(); err != nil {
+			t.Fatal(err)
+		}
+		row := l.p.list("/api/routes")[0]
+		if row["status"] != "error" || !strings.Contains(row["error"].(string), "监听地址") {
+			t.Fatalf("listen drift not isolated: %+v", row)
+		}
+		code, unrelated := l.route(map[string]any{"name": "unrelated", "entryServerId": l.entry, "nodeId": l.nodeID,
+			"enabled": true, "port": 53612})
+		if code != 201 {
+			t.Fatalf("unrelated route rejected: %d %v", code, unrelated)
+		}
+		if code, out, _ := l.p.do("DELETE", "/api/routes/"+routeID, nil, nil); code != 200 {
+			t.Fatalf("delete bad route: %d %v", code, out)
+		}
+		if len(requireManualTarget(t, l, manualID, "198.51.100.4", 50010).RouteIDs) != 0 {
+			t.Fatal("manual route membership was not removed")
+		}
+	})
+	t.Run("sources", func(t *testing.T) {
+		l, manualID, routeID := manualReuseFixture(t, "::")
+		f, _ := l.p.store.Forward(manualID)
+		var sources []string
+		for i := range 256 {
+			sources = append(sources, "203.0.113."+strconv.Itoa(i)+"/32")
+		}
+		f.ManualBaseSources = strings.Join(sources, ",")
+		if err := l.p.store.PutForward(f); err != nil {
+			t.Fatal(err)
+		}
+		if err := l.p.app.syncRoutes(); err != nil {
+			t.Fatalf("source overflow blocked global sync: %v", err)
+		}
+		row := l.p.list("/api/routes")[0]
+		if row["status"] != "error" || !strings.Contains(row["error"].(string), "共用来源") {
+			t.Fatalf("overflow not isolated: %+v", row)
+		}
+		code, unrelated := l.route(map[string]any{"name": "unrelated", "entryServerId": l.entry, "nodeId": l.nodeID,
+			"enabled": true, "port": 53612})
+		if code != 201 {
+			t.Fatalf("unrelated route rejected: %d %v", code, unrelated)
+		}
+		if code, out, _ := l.p.do("DELETE", "/api/routes/"+routeID, nil, nil); code != 200 {
+			t.Fatalf("delete overflowing route: %d %v", code, out)
+		}
+		f, _ = l.p.store.Forward(manualID)
+		if len(f.RouteIDs) != 0 || f.FirewallSources != strings.Join(sources, ",") {
+			t.Fatalf("manual sources not restored: %+v", f)
+		}
+	})
+}
+
+func TestManualBaseTargetsStayOnPanel(t *testing.T) {
+	l, manualID, _ := manualReuseFixture(t, "::")
+	f, _ := l.p.store.Forward(manualID)
+	if len(f.ManualBaseTargets) != 1 {
+		t.Fatalf("missing panel baseline: %+v", f)
+	}
+	state, err := l.p.app.desired(l.t1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range state.Forwards {
+		if rule.ID == manualID && len(rule.ManualBaseTargets) != 0 {
+			t.Fatalf("manual baseline leaked to Agent: %+v", rule)
+		}
+	}
+	offline, err := l.p.app.offlineForwards(l.t1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(offline)
+	if strings.Contains(string(raw), "manualBaseTargets") {
+		t.Fatalf("manual baseline leaked to offline config: %s", raw)
+	}
+}
+
+func TestGeneratedSharedSourceOverflowIsLocal(t *testing.T) {
+	w := routeWorld{
+		servers: map[string]shared.Server{},
+		nodes:   map[string]shared.Node{},
+	}
+	w.servers["transit"] = shared.Server{ID: "transit", Name: "transit", IPv4: "198.51.100.2"}
+	w.servers["exit"] = shared.Server{ID: "exit", Name: "exit", IPv4: "198.51.100.4"}
+	w.nodes["node"] = shared.Node{ID: "node", ServerID: "exit", Protocol: "ss", Port: 50010}
+	for i := range 257 {
+		id := "entry-" + strconv.Itoa(i)
+		w.servers[id] = shared.Server{ID: id, Name: id, IPv4: "203.0." + strconv.Itoa(i/256) + "." + strconv.Itoa(i%256)}
+		w.routes = append(w.routes, shared.Route{ID: id, Name: id, EntryServerID: id, NodeID: "node", Port: 53611,
+			Enabled: true, Hops: []shared.RouteHop{{ServerIDs: []string{"transit"}, Balance: "failover"}}})
+	}
+	forwardRules, _, routeErrors := w.desiredRouteForwards()
+	if len(routeErrors) != 257 {
+		t.Fatalf("source overflow must mark every member: %d errors", len(routeErrors))
+	}
+	for _, f := range forwardRules {
+		if f.ServerID == "transit" {
+			t.Fatalf("overflowing shared listener would be deployed: %+v", f)
+		}
+	}
+}
+
+func TestRouteReusesManualTCPAndGeneratesOnlyUDP(t *testing.T) {
+	l := newRouteLab(t)
+	code, manual, _ := l.p.do("POST", "/api/forwards", map[string]any{"serverId": l.t1, "name": "existing TCP", "network": "tcp",
+		"port": 53611, "targets": []map[string]any{{"host": "198.51.100.4", "port": 50010}}, "firewallPolicy": "all", "enabled": true}, nil)
+	if code != 201 {
+		t.Fatalf("manual TCP: %d %v", code, manual)
+	}
+	routeID := createSharedTestRoute(t, l, "SS", l.entry, singleServerHops(l.t1))
+	// createSharedTestRoute uses port 50000; move it to the occupied port.
+	if code, out, _ := l.p.do("PATCH", "/api/routes/"+routeID, map[string]any{"name": "SS", "entryServerId": l.entry,
+		"nodeId": l.nodeID, "enabled": true, "port": 53611, "hops": singleServerHops(l.t1)}, nil); code != 200 {
+		t.Fatalf("route did not reuse manual TCP: %d %v", code, out)
+	}
+	forwards := slices.DeleteFunc(l.forwards(l.t1), func(f shared.ForwardRule) bool { return !f.Enabled })
+	if len(forwards) != 2 || !slices.ContainsFunc(forwards, func(f shared.ForwardRule) bool { return f.ID == manual["id"] && f.Network == "tcp" }) ||
+		!slices.ContainsFunc(forwards, func(f shared.ForwardRule) bool { return f.RouteID == routeID && f.Network == "udp" }) {
+		t.Fatalf("expected existing TCP and one generated UDP: %+v", forwards)
+	}
+	l.applyAll()
+	requireRouteLive(t, l, routeID)
+	point := shared.RouteLatency{ForwardID: manual["id"].(string), Host: "198.51.100.4", Port: 50010, TCPMs: 17, OK: true, At: time.Now()}
+	if code, out, _ := l.p.do("POST", "/agent/report", map[string]any{"hostReported": true, "routeLatencies": []shared.RouteLatency{point}}, l.agents[1]); code != 200 {
+		t.Fatalf("manual TCP latency report: %d %v", code, out)
+	}
+	route := l.p.list("/api/routes")[0]
+	edges := route["edgeLatencies"].([]any)
+	if !slices.ContainsFunc(edges, func(edge any) bool {
+		item := edge.(map[string]any)
+		return item["fromServerId"] == l.t1 && item["tcpMs"] == float64(17)
+	}) {
+		t.Fatalf("reused TCP listener latency was lost: %+v", route)
+	}
+}
+
+func TestRouteRejectsIncompatibleManualForward(t *testing.T) {
+	l := newRouteLab(t)
+	if code, out, _ := l.p.do("POST", "/api/forwards", map[string]any{"serverId": l.t1, "name": "different target", "network": "tcp",
+		"port": 53611, "targets": []map[string]any{{"host": "198.51.100.3", "port": 50010}}, "firewallPolicy": "all", "enabled": true}, nil); code != 201 {
+		t.Fatalf("manual forward: %d %v", code, out)
+	}
+	if code, out, _ := l.p.do("POST", "/api/routes", map[string]any{"name": "must conflict", "entryServerId": l.entry,
+		"nodeId": l.nodeID, "enabled": true, "port": 53611, "hops": singleServerHops(l.t1)}, nil); code != 409 || !strings.Contains(out["error"].(string), "无法复用") {
+		t.Fatalf("incompatible target was silently reused: %d %v", code, out)
+	}
+}
+
+func TestRouteEntryCannotReuseManualForward(t *testing.T) {
+	l := newRouteLab(t)
+	if code, out, _ := l.p.do("POST", "/api/forwards", map[string]any{"serverId": l.entry, "name": "existing entry", "network": "tcp+udp",
+		"port": 53611, "targets": []map[string]any{{"host": "198.51.100.2", "port": 53611}}, "firewallPolicy": "all", "enabled": true}, nil); code != 201 {
+		t.Fatalf("manual entry: %d %v", code, out)
+	}
+	if code, out, _ := l.p.do("POST", "/api/routes", map[string]any{"name": "must conflict", "entryServerId": l.entry,
+		"nodeId": l.nodeID, "enabled": true, "port": 53611, "hops": singleServerHops(l.t1)}, nil); code != 409 {
+		t.Fatalf("entry reused a manual forward and lost client attribution: %d %v", code, out)
+	}
+}
+
 func TestRouteRolesAndReferences(t *testing.T) {
 	l := newRouteLab(t)
 	// A transit server cannot be the first hop, and only an exit carries nodes.

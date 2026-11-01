@@ -43,6 +43,8 @@ func (a *App) offlineForwards(id string) ([]shared.ForwardRule, error) {
 		f.Status, f.Error, f.Uplink, f.Downlink = "", "", 0, 0
 		f.ObserveClients, f.ClientNodeID = false, ""
 		f.RouteIDs = nil
+		f.ManualBasePolicy, f.ManualBaseSources = "", ""
+		f.ManualBaseTargets = nil
 		out = append(out, f)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

@@ -15,7 +15,7 @@ const routeLatencyFreshness = 2 * time.Minute
 func validRouteLatencies(points []shared.RouteLatency, forwards []shared.ForwardRule, now time.Time) []shared.RouteLatency {
 	allowed := make(map[string]map[shared.ForwardTarget]bool)
 	for _, rule := range forwards {
-		if rule.RouteID == "" || rule.Network != "tcp" || !rule.Enabled || rule.Deleting {
+		if rule.RouteID == "" && len(rule.RouteIDs) == 0 || rule.Network != "tcp" || !rule.Enabled || rule.Deleting {
 			continue
 		}
 		for _, target := range rule.Targets {
@@ -69,9 +69,11 @@ func routeEdgeLatencies(rt shared.Route, world routeWorld, now time.Time) []shar
 				}
 			}
 			for _, rule := range world.forwards {
-				if rule.ServerID == fromID && rule.Network == "tcp" && rule.Enabled && !rule.Deleting && forwardBelongsToRoute(rule, rt.ID) &&
-					rule.Port == wanted.Port && rule.Balance == wanted.Balance && rule.HealthCheck == wanted.HealthCheck &&
-					len(wanted.Targets) > 0 && slices.Equal(rule.Targets, wanted.Targets) {
+				matchingSettings := rule.RouteID == "" && world.manualForwardMatches(rt, wanted, rule) ||
+					rule.RouteID != "" && rule.Balance == wanted.Balance && rule.HealthCheck == wanted.HealthCheck &&
+						len(wanted.Targets) > 0 && slices.Equal(rule.Targets, wanted.Targets)
+				if rule.ServerID == fromID && shared.ForwardNetworkIncludes(rule.Network, "tcp") && rule.Enabled && !rule.Deleting && forwardBelongsToRoute(rule, rt.ID) &&
+					rule.Port == wanted.Port && matchingSettings {
 					forwardID = rule.ID
 					break
 				}

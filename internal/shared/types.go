@@ -199,19 +199,23 @@ type ForwardRule struct {
 	// RouteID marks a forward the panel generated for a route; it is edited
 	// through the route, never directly.
 	RouteID string `json:"routeId,omitempty"`
-	// RouteIDs is set only when multiple routes share one final-hop listener.
-	// RouteID remains the primary owner for older Agents and UI clients.
-	RouteIDs        []string `json:"routeIds,omitempty"`
-	ObserveClients  bool     `json:"observeClients,omitempty"`
-	ClientNodeID    string   `json:"clientNodeId,omitempty"`
-	FirewallPolicy  string   `json:"firewallPolicy"`
-	FirewallSources string   `json:"firewallSources"`
-	Enabled         bool     `json:"enabled"`
-	Deleting        bool     `json:"deleting"`
-	Status          string   `json:"status"`
-	Error           string   `json:"error"`
-	Uplink          int64    `json:"uplink"`
-	Downlink        int64    `json:"downlink"`
+	// RouteIDs lists routes using a shared listener. On a manual forward,
+	// RouteID stays empty and the original firewall is saved below so removing
+	// the last route restores the administrator's rule.
+	RouteIDs          []string        `json:"routeIds,omitempty"`
+	ManualBasePolicy  string          `json:"manualBasePolicy,omitempty"`
+	ManualBaseSources string          `json:"manualBaseSources,omitempty"`
+	ManualBaseTargets []ForwardTarget `json:"manualBaseTargets,omitempty"`
+	ObserveClients    bool            `json:"observeClients,omitempty"`
+	ClientNodeID      string          `json:"clientNodeId,omitempty"`
+	FirewallPolicy    string          `json:"firewallPolicy"`
+	FirewallSources   string          `json:"firewallSources"`
+	Enabled           bool            `json:"enabled"`
+	Deleting          bool            `json:"deleting"`
+	Status            string          `json:"status"`
+	Error             string          `json:"error"`
+	Uplink            int64           `json:"uplink"`
+	Downlink          int64           `json:"downlink"`
 }
 
 type Subscription struct {
@@ -287,6 +291,8 @@ type Route struct {
 	Notes            string `json:"notes"`
 	// Filled in for the list view: whether every hop has applied its forward.
 	Status string `json:"status,omitempty"`
+	// Error is calculated for the list view and is not stored with the route.
+	Error string `json:"error,omitempty"`
 	// Filled in for the list view; never persisted with the route definition.
 	EdgeLatencies []RouteEdgeLatency `json:"edgeLatencies,omitempty"`
 }

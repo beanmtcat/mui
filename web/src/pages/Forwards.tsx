@@ -22,7 +22,7 @@ export default function Forwards() {
     const server = forwardServers.get(f.serverId);
     return (!forwardFilters.serverId || f.serverId === forwardFilters.serverId) &&
       (!forwardFilters.network || f.network === forwardFilters.network) &&
-      (!forwardFilters.source || (forwardFilters.source === "route" ? !!f.routeId : !f.routeId)) &&
+      (!forwardFilters.source || (forwardFilters.source === "route" ? !!f.routeId || !!f.routeIds?.length : !f.routeId)) &&
       (!forwardFilters.status || (forwardDisplayStatus(f, server) || "unknown") === forwardFilters.status) &&
       matches(forwardFilters.query, f.name, server?.name, server?.ipv4, server?.ipv6,
         f.listen, String(f.port), ...(f.routeIds?.length ? f.routeIds : [f.routeId || ""]).map((id) => forwardRoutes.get(id)?.name),
@@ -83,9 +83,10 @@ export default function Forwards() {
                   {visibleForwards.map((f) => {
                     const server = servers.find((s) => s.id === f.serverId);
                     const offline = server?.managementMode === "offline";
+                    const linkedRoute = f.routeId || f.routeIds?.[0];
                     return (
                       <tr key={f.id}>
-                        <td><strong>{f.name}</strong>{f.routeId && <small>{f.routeIds && f.routeIds.length > 1 ? `${f.routeIds.length} 条链路共用` : "链路自动生成"}</small>}</td>
+                        <td><strong>{f.name}</strong>{linkedRoute && <small>{f.routeId ? f.routeIds && f.routeIds.length > 1 ? `${f.routeIds.length} 条链路共用` : "链路自动生成" : `被 ${f.routeIds?.length || 1} 条链路复用`}</small>}</td>
                         <td><button type="button" className="textButton rowLink" onClick={() => goTo("servers", "", { q: serverName(f.serverId) })}>{serverName(f.serverId)}</button>{offline && <small>离线管理</small>}</td>
                         <td className="mono">{f.network.toUpperCase().replace("+", " + ")} {f.listen || "0.0.0.0"}:{f.port}</td>
                         <td className="mono">{f.targets.map((t) => `${t.host}:${t.port}`).join("、")}{f.targets.length > 1 && <small>{f.balance === "round-robin" ? "轮询" : "主备"}</small>}</td>
@@ -99,7 +100,7 @@ export default function Forwards() {
                             {!server?.forwardSupport && <small className="hint">等待 Agent 更新</small>}
                           </>}
                         </td>
-                        <td>{f.routeId ? <button className="textButton" style={{ whiteSpace: "nowrap" }} onClick={() => goTo("routes", "", { q: forwardRoutes.get(f.routeId || "")?.name || "" })}>在链路中管理</button> : <div className="actions">
+                        <td>{linkedRoute ? <button className="textButton" style={{ whiteSpace: "nowrap" }} onClick={() => goTo("routes", "", { q: forwardRoutes.get(linkedRoute)?.name || "" })}>在链路中管理</button> : <div className="actions">
                           <button disabled={f.deleting} onClick={() => openForward(f)}>编辑</button>
                           <button disabled={f.deleting} onClick={() => void act(() => mutation("/api/forwards/" + f.id, "PATCH", { ...f, enabled: !f.enabled }), offline ? "转发配置已保存，请重新导出并在离线目标机应用" : f.enabled ? "转发已停用" : "转发已启用")}>{f.enabled ? "停用" : "启用"}</button>
                           <button className="dangerText" onClick={() => deleteItem("/api/forwards/" + f.id, "转发", offline ? { message: "确定删除这条离线转发？保存后还需导出完整配置并在目标机应用，才会停止该机上的转发。", success: "删除配置已保存，请重新导出并在离线目标机应用" } : undefined)}>删除</button>

@@ -31,6 +31,7 @@ func (s *Store) Routes() ([]shared.Route, error) {
 
 func (s *Store) PutRoute(v shared.Route) error {
 	v.Status = ""
+	v.Error = ""
 	v.EdgeLatencies = nil
 	_, err := s.DB.Exec(`INSERT INTO mui_routes(id,data) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET data=excluded.data`, v.ID, Marshal(v))
 	return err
@@ -387,22 +388,65 @@ func (w routeWorld) sameSharedHop(a, b shared.Route, serverID string) bool {
 }
 
 func forwardBelongsToRoute(f shared.ForwardRule, routeID string) bool {
-	return f.RouteID != "" && (f.RouteID == routeID || slices.Contains(f.RouteIDs, routeID))
+	return f.RouteID == routeID && routeID != "" || slices.Contains(f.RouteIDs, routeID)
 }
 
-// portFree rejects manual forwards, nodes and incompatible route listeners.
+func (w routeWorld) manualForwardListenCompatible(rt shared.Route, manual shared.ForwardRule) bool {
+	hopIndex := slices.IndexFunc(rt.Hops, func(h shared.RouteHop) bool { return slices.Contains(h.ServerIDs, manual.ServerID) })
+	if hopIndex < 0 {
+		return false // An entry always needs its own listener.
+	}
+	address := hopAddress(w.servers[manual.ServerID], rt.Hops[hopIndex].Internal)
+	addressIP := net.ParseIP(address)
+	return manual.Listen == "::" || manual.Listen == address || manual.Listen == "0.0.0.0" && addressIP != nil && addressIP.To4() != nil
+}
+
+// A first attachment must match the current manual rule exactly. Existing
+// members follow the route target, so target drift is checked as a group in
+// desiredRouteForwards rather than preventing the whole plan from being built.
+func (w routeWorld) manualForwardMatches(rt shared.Route, generated, manual shared.ForwardRule) bool {
+	if manual.RouteID != "" || !manual.Enabled || manual.Deleting || manual.ServerID != generated.ServerID ||
+		manual.Port != generated.Port || !shared.ForwardNetworkIncludes(manual.Network, generated.Network) ||
+		!slices.Equal(manual.Targets, generated.Targets) {
+		return false
+	}
+	if !w.manualForwardListenCompatible(rt, manual) {
+		return false
+	}
+	if len(generated.Targets) > 1 && (manual.Balance != generated.Balance || manual.HealthCheck != generated.HealthCheck) {
+		return false
+	}
+	return true
+}
+
+func (w routeWorld) manualForwardFor(rt shared.Route, generated shared.ForwardRule) (shared.ForwardRule, bool, error) {
+	for _, manual := range w.forwards {
+		if manual.RouteID != "" || !manual.Enabled || manual.Deleting || manual.ServerID != generated.ServerID ||
+			manual.Port != generated.Port || !shared.ForwardNetworkIncludes(manual.Network, generated.Network) {
+			continue
+		}
+		if !slices.Contains(manual.RouteIDs, rt.ID) && !w.manualForwardMatches(rt, generated, manual) {
+			return shared.ForwardRule{}, false, fmt.Errorf("端口 %d 在服务器 %s 上的转发“%s”无法复用：需是中转，且协议、监听地址和转发目标与链路一致",
+				generated.Port, w.servers[generated.ServerID].Name, manual.Name)
+		}
+		return manual, true, nil
+	}
+	return shared.ForwardRule{}, false, nil
+}
+
+// portFree rejects incompatible manual forwards, nodes and route listeners.
 // Route forwards always use TCP; SS also needs UDP on the same port.
 func (w routeWorld) portFree(rt shared.Route, serverID string) error {
 	s := w.servers[serverID]
 	if err := sshPortError(s, rt.Port, rt.Port); err != nil {
 		return fmt.Errorf("服务器 %s: %w", s.Name, err)
 	}
-	for _, f := range w.forwards {
-		if f.ServerID != serverID || f.Port != rt.Port || !f.Enabled || f.Deleting || f.RouteID != "" ||
-			!(shared.ForwardNetworkIncludes(f.Network, "tcp") || w.nodes[rt.NodeID].Protocol == "ss") {
-			continue
+	for _, generated := range w.routeForwards(rt) {
+		if generated.ServerID == serverID {
+			if _, _, err := w.manualForwardFor(rt, generated); err != nil {
+				return err
+			}
 		}
-		return fmt.Errorf("端口 %d 在服务器 %s 上已被转发“%s”占用", rt.Port, s.Name, f.Name)
 	}
 	// Use the prospective routes and node, rather than stored forwards: a node
 	// edit may change its target before syncRoutes regenerates those forwards.
@@ -450,14 +494,21 @@ func (a *App) checkNodeRoutes(n shared.Node) error {
 	if err != nil {
 		return err
 	}
+	before := world
+	world.nodes = make(map[string]shared.Node, len(before.nodes))
+	for id, node := range before.nodes {
+		world.nodes[id] = node
+	}
 	world.nodes[n.ID] = n
 	for _, rt := range world.routes {
 		if rt.NodeID == n.ID && rt.Enabled {
-			if err := world.checkRoutePort(rt); err != nil {
+			if err := world.checkRoutePort(rt); err != nil && before.checkRoutePort(rt) == nil {
 				return fmt.Errorf("链路“%s”：%w", rt.Name, err)
 			}
 		}
 	}
+	// Existing route errors must not prevent a node edit that may repair them.
+	// Runtime drift in an attached manual listener is isolated by syncRoutes.
 	return nil
 }
 
@@ -550,20 +601,72 @@ func mergeRouteFirewall(dst *shared.ForwardRule, other shared.ForwardRule) {
 // through. Entries remain separate; every shared hop admits the union of its
 // members' previous-hop sources. Routes are ID-ordered, so the first enabled
 // member keeps its established forward ID.
-func (w routeWorld) desiredRouteForwards() ([]shared.ForwardRule, error) {
+func (w routeWorld) desiredRouteForwards() ([]shared.ForwardRule, map[string]shared.ForwardRule, map[string]string) {
 	var desired []shared.ForwardRule
+	manualDesired := map[string]shared.ForwardRule{}
+	routeErrors := map[string]string{}
+	manualTargets := map[string][]shared.ForwardTarget{}
+	manualProblems := map[string]string{}
+	for _, f := range w.forwards {
+		if f.RouteID == "" && (f.ManualBasePolicy != "" || len(f.RouteIDs) > 0) {
+			if f.ManualBaseTargets == nil {
+				f.ManualBaseTargets = slices.Clone(f.Targets) // Existing attachments from older panel builds.
+			}
+			f.FirewallPolicy, f.FirewallSources = f.ManualBasePolicy, f.ManualBaseSources
+			f.RouteIDs = nil
+			manualDesired[f.ID] = f // Restore the original rule if no route still uses it.
+		}
+	}
 	index := map[routeListenerKey]int{}
 	owners := map[routeListenerKey]shared.Route{}
+	badGenerated := map[routeListenerKey]string{}
 	for _, rt := range w.routes {
 		if _, ok := w.nodes[rt.NodeID]; !ok {
 			continue
 		}
 		for _, f := range w.routeForwards(rt) {
 			if rt.Enabled {
+				manual, found, err := w.manualForwardFor(rt, f)
+				if err != nil {
+					routeErrors[rt.ID] = err.Error()
+					continue
+				}
+				if found {
+					current, ok := manualDesired[manual.ID]
+					if !ok {
+						current = manual
+					}
+					if current.ManualBasePolicy == "" {
+						current.ManualBasePolicy, current.ManualBaseSources = manual.FirewallPolicy, manual.FirewallSources
+						current.ManualBaseTargets = slices.Clone(manual.Targets)
+					}
+					if !slices.Contains(current.RouteIDs, rt.ID) {
+						current.RouteIDs = append(current.RouteIDs, rt.ID)
+					}
+					if !w.manualForwardListenCompatible(rt, manual) {
+						manualProblems[manual.ID] = fmt.Sprintf("转发“%s”的监听地址与服务器当前地址不兼容；请修改或删除关联链路", manual.Name)
+					}
+					if target, seen := manualTargets[manual.ID]; seen {
+						if !slices.Equal(target, f.Targets) {
+							manualProblems[manual.ID] = fmt.Sprintf("转发“%s”的关联链路目标不一致；请修改或删除关联链路", manual.Name)
+						}
+					} else {
+						manualTargets[manual.ID] = slices.Clone(f.Targets)
+					}
+					current.Targets = slices.Clone(f.Targets)
+					if current.ManualBasePolicy != "all" {
+						mergeRouteFirewall(&current, f)
+					}
+					manualDesired[manual.ID] = current
+					continue
+				}
 				key := routeListenerKey{f.ServerID, f.Port, f.Network}
 				if position, found := index[key]; found {
 					if !w.sameSharedHop(rt, owners[key], f.ServerID) {
-						return nil, fmt.Errorf("服务器 %s 的端口 %d 被不兼容的链路共用", w.servers[f.ServerID].Name, f.Port)
+						message := fmt.Sprintf("服务器 %s 的端口 %d 被不兼容的链路共用；请修改或删除关联链路", w.servers[f.ServerID].Name, f.Port)
+						routeErrors[rt.ID], routeErrors[owners[key].ID] = message, message
+						badGenerated[key] = message
+						continue
 					}
 					shared := &desired[position]
 					if len(shared.RouteIDs) == 0 {
@@ -578,7 +681,74 @@ func (w routeWorld) desiredRouteForwards() ([]shared.ForwardRule, error) {
 			desired = append(desired, f)
 		}
 	}
-	return desired, nil
+	// A generated listener can also exceed the firewall source limit after
+	// several routes merge. Keep its last usable rule, while the rest of the
+	// deployment proceeds. Do not canonicalize valid sources here: that would
+	// rewrite old forwards on an otherwise unchanged panel upgrade.
+	usable := desired[:0]
+	for _, f := range desired {
+		if !f.Enabled {
+			usable = append(usable, f)
+			continue
+		}
+		key := routeListenerKey{f.ServerID, f.Port, f.Network}
+		problem := badGenerated[key]
+		if problem == "" && f.FirewallPolicy == "restricted" {
+			if _, _, err := shared.NormalizeFirewallAccess(f.FirewallPolicy, f.FirewallSources); err != nil {
+				problem = fmt.Sprintf("服务器 %s 的链路转发来源无效：%v；请修改或删除关联链路", w.servers[f.ServerID].Name, err)
+			}
+		}
+		if problem == "" {
+			usable = append(usable, f)
+			continue
+		}
+		members := f.RouteIDs
+		if len(members) == 0 {
+			members = []string{f.RouteID}
+		}
+		for _, routeID := range members {
+			routeErrors[routeID] = problem
+		}
+		for _, old := range w.forwards {
+			if old.ID == f.ID && !old.Deleting {
+				if old.FirewallPolicy == "restricted" {
+					if _, _, err := shared.NormalizeFirewallAccess(old.FirewallPolicy, old.FirewallSources); err != nil {
+						break
+					}
+				}
+				usable = append(usable, old)
+				break
+			}
+		}
+	}
+	desired = usable
+	for id, f := range manualDesired {
+		if len(f.RouteIDs) == 0 {
+			f.Targets = slices.Clone(f.ManualBaseTargets)
+			f.ManualBasePolicy, f.ManualBaseSources, f.ManualBaseTargets = "", "", nil
+		} else if f.FirewallPolicy == "restricted" {
+			var err error
+			f.FirewallPolicy, f.FirewallSources, err = shared.NormalizeFirewallAccess(f.FirewallPolicy, f.FirewallSources)
+			if err != nil {
+				manualProblems[id] = fmt.Sprintf("转发“%s”的共用来源无效：%v；请修改或删除关联链路", f.Name, err)
+			}
+		}
+		if problem := manualProblems[id]; problem != "" {
+			for _, routeID := range f.RouteIDs {
+				routeErrors[routeID] = problem
+			}
+			// Keep the last valid runtime rule. A bad member must not rewrite
+			// its target or firewall, or block unrelated route deployments.
+			for _, old := range w.forwards {
+				if old.ID == id {
+					f = old
+					break
+				}
+			}
+		}
+		manualDesired[id] = f
+	}
+	return desired, manualDesired, routeErrors
 }
 
 func (w routeWorld) groupSources(group []string, internal bool, family string, targets ...string) []string {
@@ -637,9 +807,27 @@ func (a *App) syncRoutes() error {
 		}
 	}
 	queue := map[string]string{}
-	desired, err := w.desiredRouteForwards()
-	if err != nil {
-		return err
+	desired, manualDesired, routeErrors := w.desiredRouteForwards()
+	for routeID, reason := range routeErrors {
+		log.Printf("sync routes: route %s: %s", routeID, reason)
+	}
+	for id, next := range manualDesired {
+		old, err := a.Store.Forward(id)
+		if err != nil {
+			return err
+		}
+		if slices.Equal(old.RouteIDs, next.RouteIDs) && slices.Equal(old.Targets, next.Targets) && slices.Equal(old.ManualBaseTargets, next.ManualBaseTargets) &&
+			old.FirewallPolicy == next.FirewallPolicy && old.FirewallSources == next.FirewallSources &&
+			old.ManualBasePolicy == next.ManualBasePolicy && old.ManualBaseSources == next.ManualBaseSources {
+			continue
+		}
+		// Route membership changes the transient RouteID sent to the Agent,
+		// even when the firewall was already open to all sources.
+		next.Status = "pending"
+		queue[next.ServerID] = "forwards.apply"
+		if err := a.Store.PutForward(next); err != nil {
+			return err
+		}
 	}
 	for _, f := range desired {
 		old, ok := existing[f.ID]
@@ -811,6 +999,10 @@ func (a *App) routeLive(rt shared.Route, w routeWorld, subscriptionID string) (b
 	if !rt.Enabled || w.checkRouteShape(rt) != nil || !offlineRouteReady(rt, w.servers) {
 		return false, nil
 	}
+	_, _, routeErrors := w.desiredRouteForwards()
+	if routeErrors[rt.ID] != "" {
+		return false, nil
+	}
 	node := w.nodes[rt.NodeID]
 	live, err := a.nodeLive(node, w.servers[node.ServerID], subscriptionID)
 	if err != nil || !live {
@@ -821,7 +1013,7 @@ func (a *App) routeLive(rt shared.Route, w routeWorld, subscriptionID string) (b
 	}
 	active := map[string]bool{}
 	for _, f := range w.forwards {
-		if forwardBelongsToRoute(f, rt.ID) && f.Network == "tcp" && (f.Status == "active" || (shared.OfflineManaged(w.servers[f.ServerID]) && f.Status == "exported")) && !f.Deleting {
+		if forwardBelongsToRoute(f, rt.ID) && shared.ForwardNetworkIncludes(f.Network, "tcp") && (f.Status == "active" || (shared.OfflineManaged(w.servers[f.ServerID]) && f.Status == "exported")) && !f.Deleting {
 			active[f.ServerID] = true
 		}
 	}
@@ -843,8 +1035,12 @@ func (a *App) routes(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
+		_, _, routeErrors := world.desiredRouteForwards()
 		for i := range world.routes {
 			world.routes[i].Status = routeStatus(world.routes[i], world.forwards)
+			if reason := routeErrors[world.routes[i].ID]; reason != "" {
+				world.routes[i].Status, world.routes[i].Error = "error", reason
+			}
 			world.routes[i].EdgeLatencies = routeEdgeLatencies(world.routes[i], world, time.Now())
 			if (world.routes[i].Status == "active" || world.routes[i].Status == "exported") && !offlineRouteReady(world.routes[i], world.servers) {
 				world.routes[i].Status = "pending"
@@ -966,6 +1162,21 @@ func (a *App) saveRoute(w http.ResponseWriter, r *http.Request, in shared.Route,
 				return
 			}
 		}
+	}
+	// Validate only this route's part of the prospective plan. An unrelated
+	// broken route must not block edits or new routes elsewhere.
+	prospective := world
+	prospective.routes = slices.Clone(world.routes)
+	if old == nil {
+		prospective.routes = append(prospective.routes, in)
+	} else {
+		idx := slices.IndexFunc(prospective.routes, func(rt shared.Route) bool { return rt.ID == in.ID })
+		prospective.routes[idx] = in
+	}
+	_, _, routeErrors := prospective.desiredRouteForwards()
+	if reason := routeErrors[in.ID]; reason != "" {
+		errorJSON(w, 409, reason)
+		return
 	}
 	if err = a.Store.PutRoute(in); err != nil {
 		errorJSON(w, 500, err.Error())

@@ -35,6 +35,8 @@ func (a *App) forwards(w http.ResponseWriter, r *http.Request) {
 	in.ID = ID()
 	in.RouteID = ""
 	in.RouteIDs = nil
+	in.ManualBasePolicy, in.ManualBaseSources = "", ""
+	in.ManualBaseTargets = nil
 	in.Deleting = false
 	in.Status = "pending"
 	if err := normalizeForward(&in); err != nil {
@@ -66,8 +68,8 @@ func (a *App) forwardByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "转发不存在")
 		return
 	}
-	if old.RouteID != "" {
-		errorJSON(w, 409, "该转发由链路生成，请在链路中修改或删除")
+	if old.RouteID != "" || len(old.RouteIDs) > 0 {
+		errorJSON(w, 409, "该转发正在被链路使用，请先修改或删除关联链路")
 		return
 	}
 	if r.Method == http.MethodDelete {
@@ -100,6 +102,8 @@ func (a *App) forwardByID(w http.ResponseWriter, r *http.Request) {
 	}
 	in.ID, in.ServerID, in.RouteID = old.ID, old.ServerID, ""
 	in.RouteIDs = nil
+	in.ManualBasePolicy, in.ManualBaseSources = "", ""
+	in.ManualBaseTargets = nil
 	in.Deleting, in.Status, in.Error = false, "pending", ""
 	if err := normalizeForward(&in); err != nil {
 		errorJSON(w, 400, err.Error())
