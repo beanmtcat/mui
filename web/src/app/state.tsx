@@ -221,6 +221,13 @@ export function useAppState() {
             setOperations(o);
           }
           break;
+        case "globe": {
+          const [s, n, r] = await Promise.all([loadAll<Server>("/api/servers"), loadAll<Node>("/api/nodes"), loadAll<Route>("/api/routes")]);
+          setServers(s);
+          setNodes(n);
+          setRoutes(r);
+          break;
+        }
         case "nodes": {
           const n = await loadAll<Node>("/api/nodes");
           setNodes(n);

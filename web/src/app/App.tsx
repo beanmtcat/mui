@@ -17,6 +17,7 @@ const groups: { title: string; entries: Entry[] }[] = [
   { title: "", entries: [{ id: "dashboard", label: "总览", icon: "dashboard" }] },
   { title: "资源", entries: [
     { id: "servers", label: "服务器", icon: "servers" },
+    { id: "globe", label: "全球网络", icon: "globe" },
     { id: "nodes", label: "节点", icon: "nodes" },
     { id: "templates", label: "节点模板", icon: "templates" },
     { id: "certificates", label: "证书", icon: "certificates" },
@@ -47,6 +48,7 @@ const entries = groups.flatMap((group) => group.entries);
 
 const Dashboard = lazy(() => import("../pages/Dashboard"));
 const Servers = lazy(() => import("../pages/Servers"));
+const Globe = lazy(() => import("../pages/Globe"));
 const Nodes = lazy(() => import("../pages/Nodes"));
 const Templates = lazy(() => import("../pages/Templates"));
 const Certificates = lazy(() => import("../pages/Certificates"));
@@ -66,6 +68,7 @@ function Page({ tab, onCopy }: { tab: Tab; onCopy: (value: string) => void }) {
   switch (tab) {
     case "dashboard": return <Dashboard />;
     case "servers": return <Servers />;
+    case "globe": return <Globe />;
     case "nodes": return <Nodes />;
     case "templates": return <Templates />;
     case "certificates": return <Certificates />;

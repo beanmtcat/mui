@@ -4,7 +4,7 @@ import {
 } from "../api";
 
 export type Tab =
-  | "dashboard" | "servers" | "nodes" | "templates" | "certificates" | "firewall" | "forwards" | "routes"
+  | "dashboard" | "servers" | "globe" | "nodes" | "templates" | "certificates" | "firewall" | "forwards" | "routes"
   | "subscriptions" | "customers" | "accesses" | "connections" | "operations" | "audit" | "help" | "settings";
 export type TemplateForm = Partial<NodeTemplate> & { password?: string; shadowTlsPassword?: string };
 export type ServerForm = Partial<Server> & { komariToken?: string };
