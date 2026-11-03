@@ -7,7 +7,10 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"math/big"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -224,5 +227,76 @@ func TestSnellFixedInnerPortAndConflicts(t *testing.T) {
 	other.Port++
 	if !PortConflict(n, other) {
 		t.Fatal("two Snell inner listeners accepted on same port")
+	}
+}
+
+func TestSingBoxConfigDropsBlockedDomainsPerNode(t *testing.T) {
+	blocked := ManagedNode{Node: Node{ID: "blocked", Name: "blocked", Protocol: "ss", Method: "2022-blake3-aes-128-gcm", Port: 20001, Enabled: true,
+		OutboundMode: "interface", OutboundInterface: "ppp0", BlockedDomains: []string{"google.com", "youtu.be"}}, Password: "secret"}
+	open := ManagedNode{Node: Node{ID: "open", Name: "open", Protocol: "ss", Method: "2022-blake3-aes-128-gcm", Port: 20002, Enabled: true}, Password: "secret"}
+	raw, err := SingBoxConfig([]ManagedNode{blocked, open}, "/tmp/certs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Route struct {
+			Rules []map[string]any `json:"rules"`
+		} `json:"route"`
+	}
+	if err := json.Unmarshal(raw, &config); err != nil {
+		t.Fatal(err)
+	}
+	rules := config.Route.Rules
+	if len(rules) != 3 || rules[0]["action"] != "sniff" || rules[1]["action"] != "reject" || rules[1]["method"] != "drop" || rules[2]["action"] != "route" {
+		t.Fatalf("sniff and drop must precede the node's route rule: %+v", rules)
+	}
+	for _, rule := range rules {
+		if inbound := rule["inbound"].([]any); len(inbound) != 1 || inbound[0] != "node-blocked" {
+			t.Fatalf("rule leaked to another node: %+v", rule)
+		}
+	}
+	if domains := rules[1]["domain_suffix"].([]any); len(domains) != 2 || domains[0] != "google.com" || domains[1] != "youtu.be" {
+		t.Fatalf("domains: %+v", rules[1])
+	}
+	without, err := SingBoxConfig([]ManagedNode{open}, "/tmp/certs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	open.Node.BlockedDomains = []string{}
+	empty, err := SingBoxConfig([]ManagedNode{open}, "/tmp/certs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(without), "sniff") || string(without) != string(empty) {
+		t.Fatalf("an empty list must not change the configuration: %s", without)
+	}
+}
+
+func TestNormalizeBlockedDomains(t *testing.T) {
+	got, err := NormalizeBlockedDomains([]string{`  "Google.COM",`, "*.youtube.com\n.ytimg.com", "", "google.com", "xn--fiq228c.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(got, []string{"google.com", "youtube.com", "ytimg.com", "xn--fiq228c.com"}) {
+		t.Fatalf("normalized: %v", got)
+	}
+	pasted := "{\n\"action\":\"sniff\"\n},\n{\n\"domain_suffix\": [\n\"google.com\",\n\"youtu.be\"\n],\n\"action\": \"reject\",\n\"method\": \"drop\"\n}"
+	if got, err := NormalizeBlockedDomains([]string{pasted}); err != nil || !slices.Equal(got, []string{"google.com", "youtu.be"}) {
+		t.Fatalf("pasted rule: %v %v", got, err)
+	}
+	if !DomainBlocked([]string{"example.com"}, "Panel.Example.com.") || DomainBlocked([]string{"example.com"}, "notexample.com") {
+		t.Fatal("DomainBlocked must match whole labels")
+	}
+	for _, bad := range []string{"bad_domain.com", "a..b", "中文.com", "-a.com", "https://google.com/x", "1.1.1.1", "google.com:443"} {
+		if _, err := NormalizeBlockedDomains([]string{bad}); err == nil {
+			t.Fatalf("%q should be rejected", bad)
+		}
+	}
+	many := make([]string, MaxBlockedDomains+1)
+	for i := range many {
+		many[i] = fmt.Sprintf("d%d.example", i)
+	}
+	if _, err := NormalizeBlockedDomains(many); err == nil {
+		t.Fatal("list over the limit accepted")
 	}
 }

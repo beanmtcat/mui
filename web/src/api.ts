@@ -26,6 +26,7 @@ export type Server = {
   internalAddress: string;
   outboundInterface?: string;
   outboundBindingSupport?: boolean;
+  nodeDomainBlock?: boolean;
   firewallMode?: "ufw" | "manual";
   agentProxyNodeId?: string;
   agentProxyInternal?: boolean;
@@ -90,6 +91,7 @@ export type Node = {
   publishAddress: string;
   outboundMode?: "inherit" | "system" | "interface" | "";
   outboundInterface?: string;
+  blockedDomains?: string[];
   method: string;
   snellVersion: number;
   snellPort?: number;

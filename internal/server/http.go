@@ -1698,6 +1698,19 @@ func (a *App) enrollment(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"enrollToken": token, "installCommand": a.installCommandAt(publicURL, id, token, server), "offlineInstall": a.offlineInstallAt(publicURL, id, token, server), "standaloneInstall": a.standaloneInstallAt(publicURL)})
 }
 
+// An older Agent ignores the field, which would show a block that is not running.
+func normalizeNodeBlock(server shared.Server, n *shared.Node) error {
+	blocked, err := shared.NormalizeBlockedDomains(n.BlockedDomains)
+	if err != nil {
+		return err
+	}
+	n.BlockedDomains = blocked
+	if n.Enabled && len(blocked) > 0 && server.AgentVersion != "" && !server.NodeDomainBlock && !shared.ExternalManaged(server) {
+		return errors.New("请先将该服务器的 Agent 升级至 0.6.24，再设置域名拦截")
+	}
+	return nil
+}
+
 func normalizeNodeTemplate(t *shared.NodeTemplate) {
 	t.Name = strings.TrimSpace(t.Name)
 	t.Listen = strings.TrimSpace(t.Listen)
@@ -1944,6 +1957,10 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 	server, err := a.Store.Server(n.ServerID)
 	if err != nil {
 		errorJSON(w, 404, "服务器不存在")
+		return
+	}
+	if err := normalizeNodeBlock(server, &n); err != nil {
+		errorJSON(w, 400, err.Error())
 		return
 	}
 	if !shared.CanHostNodes(server) {
@@ -2231,6 +2248,10 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	n.FirewallPolicy, n.FirewallSources = policy, sources
+	if err := normalizeNodeBlock(server, &n); err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
 	if shared.ExternalManaged(server) {
 		prepareExternalNode(&n)
 	}
@@ -4137,6 +4158,19 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if allowApply && !server.NodeDomainBlock {
+		nodes, err := a.Store.Nodes(id)
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		for _, node := range nodes {
+			if node.Enabled && !node.Deleting && len(node.BlockedDomains) > 0 {
+				allowApply = false
+				break
+			}
+		}
+	}
 	if !server.AgentProxySupport {
 		if server.AgentProxyNodeID != "" {
 			allowApply = false
@@ -4342,6 +4376,7 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		server.ManagementMigrationFrom = ""
 		server.AgentVersion = in.AgentVersion
 		server.NodeFirewallPolicies = in.NodeFirewallPolicies
+		server.NodeDomainBlock = in.NodeDomainBlock
 		server.ManualFirewallSupport = in.ManualFirewallSupport
 		server.MultiUserStats = in.MultiUserStats
 		server.ForwardSupport = in.ForwardSupport

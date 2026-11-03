@@ -32,6 +32,13 @@ export const emptyServer: Partial<Server> = {
   autoSyncPublicIp: false,
   domain: "",
 };
+export const googleBlockedDomains = [
+  "google.com", "google.co.jp", "google.com.hk", "google.cn", "googleapis.com", "gstatic.com", "googleusercontent.com",
+  "googlevideo.com", "youtube.com", "youtu.be", "ytimg.com", "ggpht.com", "gmail.com", "googlemail.com",
+  "googleadservices.com", "googlesyndication.com", "doubleclick.net", "googletagmanager.com", "googletagservices.com",
+  "google-analytics.com", "googleoptimize.com", "gvt1.com", "gvt2.com", "1e100.net", "blogspot.com", "blogger.com", "recaptcha.net",
+];
+
 export const emptyNode: Partial<Node> = {
   serverId: "",
   name: "",

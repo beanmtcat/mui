@@ -60,6 +60,9 @@ func (a *App) agentProxy(s shared.Server) (*shared.SOCKS5Proxy, error) {
 	if err := checkSOCKSFirewall(host, n); err != nil {
 		return nil, err
 	}
+	if err := a.checkProxyReachesPanel(n); err != nil {
+		return nil, err
+	}
 	p.Host = shared.PublishedAddress(shared.SubscriptionItem{Node: n, Server: host})
 	if s.AgentProxyInternal {
 		p.Host = host.InternalAddress
@@ -76,6 +79,16 @@ func (a *App) agentProxy(s shared.Server) (*shared.SOCKS5Proxy, error) {
 		return nil, errors.New("Agent 代理地址不能是回环或未指定地址")
 	}
 	return p, nil
+}
+
+// An Agent behind a proxy that drops the panel could not fetch the fix.
+func (a *App) checkProxyReachesPanel(n shared.Node) error {
+	for _, panel := range a.publicURLs {
+		if shared.DomainBlocked(n.BlockedDomains, panel.Hostname()) {
+			return fmt.Errorf("节点拦截了面板域名 %s，不能用作 Agent 代理", panel.Hostname())
+		}
+	}
+	return nil
 }
 
 func (a *App) validateAgentProxySelection(s shared.Server) error {
@@ -143,6 +156,11 @@ func (a *App) protectProxyNode(old, n shared.Node, password string, deleting boo
 	users, err := a.proxyUsers(old.ID)
 	if err != nil || len(users) == 0 {
 		return err
+	}
+	if !deleting {
+		if err := a.checkProxyReachesPanel(n); err != nil {
+			return err
+		}
 	}
 	secret, err := a.Store.NodeSecret(old.ID)
 	if err != nil {

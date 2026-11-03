@@ -2,6 +2,9 @@ package shared
 
 import (
 	"fmt"
+	"net"
+	"regexp"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -38,6 +41,54 @@ func ValidateNodeOutbound(n Node) error {
 		return fmt.Errorf("节点出口模式无效")
 	}
 	return nil
+}
+
+const MaxBlockedDomains = 512
+
+var blockedDomainLabel = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// The tokens of a pasted sing-box rule that are not part of its domain list.
+var blockedDomainRuleWords = []string{":", "action", "sniff", "domain_suffix", "reject", "method", "drop"}
+
+// NormalizeBlockedDomains accepts pasted lists, including whole sing-box rules,
+// and returns lowercase unique suffixes in their original order.
+func NormalizeBlockedDomains(items []string) ([]string, error) {
+	var out []string
+	for _, item := range items {
+		for _, raw := range strings.FieldsFunc(item, func(r rune) bool { return strings.ContainsRune(" \t\r\n,;\"'[]{}", r) }) {
+			if slices.Contains(blockedDomainRuleWords, strings.ToLower(raw)) {
+				continue
+			}
+			domain := strings.TrimPrefix(strings.TrimPrefix(strings.ToLower(raw), "*"), ".")
+			labels := strings.Split(domain, ".")
+			if net.ParseIP(domain) != nil {
+				return nil, fmt.Errorf("拦截域名 %q 是 IP，这里只支持域名", raw)
+			}
+			if len(domain) > 253 {
+				return nil, fmt.Errorf("拦截域名 %q 无效", raw)
+			}
+			for _, label := range labels {
+				if !blockedDomainLabel.MatchString(label) {
+					return nil, fmt.Errorf("拦截域名 %q 无效；中文域名请填写 xn-- 形式", raw)
+				}
+			}
+			if !slices.Contains(out, domain) {
+				out = append(out, domain)
+			}
+		}
+	}
+	if len(out) > MaxBlockedDomains {
+		return nil, fmt.Errorf("拦截域名最多 %d 个", MaxBlockedDomains)
+	}
+	return out, nil
+}
+
+// DomainBlocked reports whether host matches a suffix in a normalized list.
+func DomainBlocked(blocked []string, host string) bool {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	return slices.ContainsFunc(blocked, func(domain string) bool {
+		return host == domain || strings.HasSuffix(host, "."+domain)
+	})
 }
 
 func EffectiveOutboundInterface(n Node, serverDefault string) string {

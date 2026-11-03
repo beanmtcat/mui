@@ -63,6 +63,7 @@ type HostStatus struct {
 	SnellV6               bool `json:"snellV6"`
 	MultiUserStats        bool `json:"multiUserStats"`
 	NodeFirewallPolicies  bool `json:"nodeFirewallPolicies"`
+	NodeDomainBlock       bool `json:"nodeDomainBlock"`
 	CoreSelfUpdate        bool `json:"coreSelfUpdate"`
 	ReleaseKeyPinned      bool `json:"releaseKeyPinned"`
 }

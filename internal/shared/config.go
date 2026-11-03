@@ -39,6 +39,9 @@ func ValidateNode(n Node, cert *Certificate, allowExpired bool) error {
 	if err := ValidateNodeOutbound(n); err != nil {
 		return err
 	}
+	if _, err := NormalizeBlockedDomains(n.BlockedDomains); err != nil {
+		return err
+	}
 	if strings.TrimSpace(n.Name) == "" || len(n.Name) > 100 {
 		return errors.New("节点名称不能为空且不能超过 100 字符")
 	}
@@ -337,6 +340,17 @@ func SingBoxConfig(nodes []ManagedNode, certDir string, defaultInterface ...stri
 			n.Listen = "0.0.0.0"
 		}
 		tag := "node-" + n.ID
+		blocked, err := NormalizeBlockedDomains(n.BlockedDomains)
+		if err != nil {
+			return nil, err
+		}
+		// These rules must precede the node's route rule, which ends matching.
+		// Sniffing stays off for other nodes because it delays server-first protocols.
+		if len(blocked) > 0 {
+			rules = append(rules,
+				map[string]any{"inbound": []string{tag}, "action": "sniff"},
+				map[string]any{"inbound": []string{tag}, "domain_suffix": blocked, "action": "reject", "method": "drop"})
+		}
 		iface := EffectiveOutboundInterface(n, serverDefault)
 		if iface != serverDefault {
 			outboundTag, ok := outboundTags[iface]

@@ -2,7 +2,7 @@ import { useRef, useState } from "react";
 import { canHostNodes, mutation, type Node, type NodeTemplate } from "../api";
 import { useApp } from "../app/context";
 import { setError } from "../app/feedback";
-import { generatePassword, generatePort, manualFirewall, supportsGitHubUpgrade, type NodeForm } from "../app/helpers";
+import { generatePassword, generatePort, googleBlockedDomains, manualFirewall, supportsGitHubUpgrade, type NodeForm } from "../app/helpers";
 import { Advanced, Field, HelpTip, Icon, SubmitButton, useBusy } from "../app/ui";
 import { MemoSecretField as SecretField } from "../components/secrets";
 import { Dialog } from "./Dialog";
@@ -22,6 +22,8 @@ export default function NodeDialog({ initial, templateId }: { initial: NodeForm;
     ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status));
   const nodeFirewallUnsupported = !externalNode && !!nodeForm.firewallPolicy && nodeForm.firewallPolicy !== "all" &&
     !servers.find((s) => s.id === nodeForm.serverId)?.nodeFirewallPolicies;
+  const domainBlockUnsupported = !externalNode && !!selectedNodeServer?.agentVersion && !selectedNodeServer.nodeDomainBlock;
+  const topLevelBlocks = (nodeForm.blockedDomains || []).map((item) => item.trim().replace(/^\*?\./, "").toLowerCase()).filter((item) => /^[a-z0-9-]+$/.test(item));
   const clearSelectedTemplate = () => {
     templateRequest.current++;
     setTemplateLoading(false);
@@ -312,7 +314,7 @@ export default function NodeDialog({ initial, templateId }: { initial: NodeForm;
                     </Field>
                   )}
                 </div>
-                <Advanced key={externalNode ? "external" : "managed"} title="高级设置：单用户、监听与发布地址、节点出口" open={externalNode || !!initial.singleUser || !!initial.publishAddress || (initial.listen || "0.0.0.0") !== "0.0.0.0" || (initial.outboundMode || "inherit") !== "inherit"}>
+                <Advanced key={externalNode ? "external" : "managed"} title="高级设置：单用户、监听与发布地址、节点出口、域名拦截" open={!!initial.blockedDomains?.length || externalNode || !!initial.singleUser || !!initial.publishAddress || (initial.listen || "0.0.0.0") !== "0.0.0.0" || (initial.outboundMode || "inherit") !== "inherit"}>
                   <div className="formGrid">
                   <div className="serverToggleRow nodeSingleUserRow">
                     <label className="check">
@@ -347,6 +349,12 @@ export default function NodeDialog({ initial, templateId }: { initial: NodeForm;
                       <option value="interface">指定出口网卡</option>
                     </select>
                     <small>仅影响此节点的 sing-box 流量及 ShadowTLS 握手，不改变 Agent 或端口转发的出口。</small>
+                  </Field>}
+                  {!externalNode && <Field label="拦截域名" help="匹配的连接由 sing-box 直接丢弃，包含所有子域名。例如 google.com 也会拦截 www.google.com。只影响此节点，经链路到达此节点的流量同样生效。">
+                    <textarea rows={4} spellCheck={false} placeholder="每行一个域名，也可粘贴完整 sing-box 规则，留空不拦截" disabled={domainBlockUnsupported && !initial.blockedDomains?.length} value={(nodeForm.blockedDomains || []).join("\n")} onChange={(e) => setNodeForm({ ...nodeForm, blockedDomains: e.target.value.split("\n") })} />
+                    <button type="button" className="ghost" disabled={domainBlockUnsupported} onClick={() => setNodeForm({ ...nodeForm, blockedDomains: [...new Set([...(nodeForm.blockedDomains || []).filter((item) => item.trim()), ...googleBlockedDomains])] })}>添加 Google / YouTube 列表</button>
+                    {topLevelBlocks.length > 0 && <small className="dangerText">{topLevelBlocks.join("、")} 是顶级后缀，会拦截其下所有域名。</small>}
+                    <small>{domainBlockUnsupported ? initial.blockedDomains?.length ? "当前 Agent 不支持拦截，这台服务器的配置会暂停下发。升级 Agent 至 0.6.24，或清空列表后保存。" : "请先将该服务器的 Agent 升级至 0.6.24。" : "修改后 sing-box 会重启，这台服务器上的连接中断数秒。开启后此节点的新连接需先识别域名，服务器先发数据的协议（如 SSH）最多延迟约 300 毫秒。只能拦截连接时能识别出域名的流量：直连 IP 的流量不受影响。"}</small>
                   </Field>}
                   {!externalNode && nodeForm.outboundMode === "interface" && <Field label="出口网卡 *">
                     <input required maxLength={15} placeholder="例如 ppp0、eth0" value={nodeForm.outboundInterface || ""} onChange={(e) => setNodeForm({ ...nodeForm, outboundInterface: e.target.value })} />

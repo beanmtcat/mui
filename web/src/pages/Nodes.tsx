@@ -122,6 +122,10 @@ export default function Nodes() {
                         {n.error && (
                           <small className="dangerText">{n.error}</small>
                         )}
+                        {n.enabled && !n.deleting && !!n.blockedDomains?.length && (() => {
+                          const server = servers.find((s) => s.id === n.serverId);
+                          return !!server?.agentVersion && !server.nodeDomainBlock && <small className="dangerText">等待 Agent 升级至 0.6.24，这台服务器的配置暂停下发</small>;
+                        })()}
                       </td>
                       <td>
                         <div className="actions">

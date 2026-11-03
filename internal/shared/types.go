@@ -55,6 +55,7 @@ type Server struct {
 	AgentBuild                   string     `json:"agentBuild"`
 	AgentSelfUpdate              bool       `json:"agentSelfUpdate"`
 	NodeFirewallPolicies         bool       `json:"nodeFirewallPolicies"`
+	NodeDomainBlock              bool       `json:"nodeDomainBlock,omitempty"`
 	MultiUserStats               bool       `json:"multiUserStats"`
 	ForwardTCPUDP                bool       `json:"forwardTcpUdp"`
 	ForwardSupport               bool       `json:"forwardSupport"`
@@ -97,8 +98,11 @@ type Node struct {
 	PublishAddress    string `json:"publishAddress"`
 	OutboundMode      string `json:"outboundMode,omitempty"`
 	OutboundInterface string `json:"outboundInterface,omitempty"`
-	Method            string `json:"method"`
-	SnellVersion      int    `json:"snellVersion"`
+	// BlockedDomains are dropped by sing-box, each with its subdomains. Empty
+	// keeps the generated configuration identical to one without this field.
+	BlockedDomains []string `json:"blockedDomains,omitempty"`
+	Method         string   `json:"method"`
+	SnellVersion   int      `json:"snellVersion"`
 	// omitempty: a node without an inner Snell port encodes exactly as it
 	// did before the field existed.
 	SnellPort       int    `json:"snellPort,omitempty"`
@@ -551,6 +555,7 @@ type AgentReport struct {
 	AgentBuild             string                   `json:"agentBuild,omitempty"`
 	AgentSelfUpdate        bool                     `json:"agentSelfUpdate,omitempty"`
 	NodeFirewallPolicies   bool                     `json:"nodeFirewallPolicies,omitempty"`
+	NodeDomainBlock        bool                     `json:"nodeDomainBlock,omitempty"`
 	MultiUserStats         bool                     `json:"multiUserStats,omitempty"`
 	ForwardSupport         bool                     `json:"forwardSupport,omitempty"`
 	ForwardTCPUDP          bool                     `json:"forwardTcpUdp,omitempty"`
