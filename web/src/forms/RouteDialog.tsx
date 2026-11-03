@@ -42,11 +42,12 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                 const targetInternal = (s: Server) => addressModes?.[s.id] ? addressModes[s.id] === "internal" : internal;
                 const targetAddress = (s: Server) => targetInternal(s) ? s.internalAddress : (s.autoSyncPublicIp && s.domain) || s.ipv4 || s.ipv6 || s.domain;
                 const mixed = receivers.some((s) => targetInternal(s) !== internal);
-                const managed = !receivers.length || receivers.some((s) => !manualFirewall(s));
+                const manualReceivers = receivers.filter(manualFirewall);
+                const managed = !receivers.length || manualReceivers.length !== receivers.length;
                 const sourceAddresses = (sender: Server, receiver: Server) => {
                   const target = targetAddress(receiver);
-                  const allowV4 = (!target || !target.includes(":")) && (!managed || sourceFamily !== "ipv6");
-                  const allowV6 = (!target || target.includes(":") || !/^\d+\.\d+\.\d+\.\d+$/.test(target)) && (!managed || sourceFamily !== "ipv4");
+                  const allowV4 = (!target || !target.includes(":")) && sourceFamily !== "ipv6";
+                  const allowV6 = (!target || target.includes(":") || !/^\d+\.\d+\.\d+\.\d+$/.test(target)) && sourceFamily !== "ipv4";
                   const sourceInternal = sourceMode === "internal" || (!sourceMode || sourceMode === "auto") && targetInternal(receiver);
                   return sourceInternal
                     ? (sender.internalAddress && (sender.internalAddress.includes(":") ? allowV6 : allowV4) ? sender.internalAddress : "未填写匹配地址族的内网 IP")
@@ -57,8 +58,8 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                     <legend>{senders.map((s) => s.name).join(" / ") || "请选择发送方"} → {receivers.map((s) => s.name).join(" / ") || "请选择接收方"}</legend>
                     <div className="formGrid">
                       <Field label="防火墙来源：放行发送方的哪个 IP？">
-                        {managed && <div className="routeSourceSelectors">
-                          <select value={sourceMode || "auto"} onChange={(e) => setSource(e.target.value as RouteSourceMode)}>
+                        <div className="routeSourceSelectors">
+                          <select aria-label="防火墙来源地址" value={sourceMode || "auto"} onChange={(e) => setSource(e.target.value as RouteSourceMode)}>
                             <option value="auto">自动（{mixed ? "跟随各台连接地址" : internal ? "内网 IP" : "公网 IP"}）</option>
                             <option value="public">公网 IP</option>
                             <option value="internal">内网 IP</option>
@@ -69,8 +70,8 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                             <option value="ipv6">IPv6</option>
                             <option value="both">IPv4 + IPv6</option>
                           </select>
-                        </div>}
-                        {!managed && <small className="connectionAddress">接收方防火墙为手动管理，面板不生成规则，请自行放行：</small>}
+                        </div>
+                        {manualReceivers.length > 0 && <small className="connectionAddress">{manualReceivers.map((s) => s.name).join(" / ")} 的防火墙为手动管理；以下来源仅供参考，面板不生成规则，请自行放行：</small>}
                         {receivers.flatMap((receiver) => senders.map((sender) => <small className="connectionAddress" key={`${receiver.id}-${sender.id}`}>{receivers.length > 1 && `${receiver.name} ← `}{sender.name}：{sourceAddresses(sender, receiver)}</small>))}
                       </Field>
                       <Field label="连接地址：接收方的哪个地址？">
@@ -86,7 +87,7 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                         </div>)}
                       </Field>
                     </div>
-                    {managed && <p className="hint">按接收方实际看到的来源 IP 选择；此设置只生成放行规则，不改变发送方的出口或路由。</p>}
+                    <p className="hint">按接收方实际看到的来源 IP 选择；{managed ? "托管防火墙据此生成放行规则" : "手动防火墙仅显示来源供自行配置"}，不改变发送方的出口或路由。</p>
                   </fieldset>
                 );
               };
