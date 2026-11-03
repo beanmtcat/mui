@@ -50,6 +50,7 @@ func (s *routeLatencySampler) run(ctx context.Context) {
 // These are TCP connect times between adjacent servers, not an end-to-end
 // application RTT. Only route forwards from the applied state are probed, so
 // the Agent cannot be given arbitrary targets through a reporting response.
+// A manual TCP + UDP forward reused by a route arrives with its RouteID set.
 func sampleRouteLatencies(ctx context.Context, forwards []shared.ForwardRule) []shared.RouteLatency {
 	type task struct {
 		index  int
@@ -59,7 +60,7 @@ func sampleRouteLatencies(ctx context.Context, forwards []shared.ForwardRule) []
 	jobs := make([]task, 0)
 	seen := make(map[string]bool)
 	for _, rule := range forwards {
-		if rule.RouteID == "" || rule.Network != "tcp" || !rule.Enabled || rule.Deleting {
+		if rule.RouteID == "" || !shared.ForwardNetworkIncludes(rule.Network, "tcp") || !rule.Enabled || rule.Deleting {
 			continue
 		}
 		for _, target := range rule.Targets {

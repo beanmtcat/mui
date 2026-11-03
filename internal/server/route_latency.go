@@ -15,7 +15,7 @@ const routeLatencyFreshness = 2 * time.Minute
 func validRouteLatencies(points []shared.RouteLatency, forwards []shared.ForwardRule, now time.Time) []shared.RouteLatency {
 	allowed := make(map[string]map[shared.ForwardTarget]bool)
 	for _, rule := range forwards {
-		if rule.RouteID == "" && len(rule.RouteIDs) == 0 || rule.Network != "tcp" || !rule.Enabled || rule.Deleting {
+		if rule.RouteID == "" && len(rule.RouteIDs) == 0 || !shared.ForwardNetworkIncludes(rule.Network, "tcp") || !rule.Enabled || rule.Deleting {
 			continue
 		}
 		for _, target := range rule.Targets {

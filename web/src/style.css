@@ -1551,7 +1551,9 @@ th.num {
 .routeStage.exit .routeHost { box-shadow: inset -3px 0 0 var(--ink); }
 .routeRow.disabled .routeHost { border-color: var(--line); color: var(--muted); box-shadow: none; }
 .routeHostName, .routeHostAddress { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.routeHostName { font-size: 12px; font-weight: 600; line-height: 16px; }
+.routeHostName { display: flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; line-height: 16px; }
+.routeHostName > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.routeHostName small { flex: none; color: var(--muted); font-size: 10px; font-weight: 400; }
 .routeHostAddress { color: var(--muted); font-size: 11px; line-height: 14px; font-variant-numeric: tabular-nums; }
 .routeStageTag { position: absolute; left: 0; right: 0; margin-top: 1px; color: var(--muted); font-size: 10px; line-height: 14px; text-align: center; }
 .routeStopMissing { color: var(--bad); font-size: 12px; text-align: center; }

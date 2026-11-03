@@ -50,8 +50,9 @@ function RouteLine({ route, node, onServer, onNode }: {
           {route.enabled && connections[i - 1].map(({ from, to, point }, n, list) => {
             const y1 = hostCenter(stages[i - 1].members.indexOf(from), stages[i - 1].members.length, height);
             const y2 = hostCenter(stage.members.indexOf(to), stage.members.length, height);
-            // Spread labels along their curves so crossing lines keep them apart.
-            const t = list.length > 1 ? .3 + .4 * n / (list.length - 1) : .5;
+            // Lines from one host part near the far end, lines into one near the
+            // start. Crossing lines spread their labels along the curves instead.
+            const t = list.length < 2 ? .5 : stages[i - 1].members.length === 1 ? .72 : stage.members.length === 1 ? .28 : .3 + .4 * n / (list.length - 1);
             return <span key={`${from}-${to}`} className={`routeFanLabel tone-${linkTone([point], true)}`} style={{ left: `${t * 100}%`, top: y1 + (y2 - y1) * (3 * t * t - 2 * t * t * t) }}
               title={point ? `${serverName(from)} → ${serverName(to)}，测量于 ${new Date(point.at).toLocaleString()}` : `${serverName(from)} → ${serverName(to)}，尚无有效测量数据`}>
               <span className="routeFanPair">{serverName(from)} → {serverName(to)}</span> <strong>{latencyLabel(point)}</strong>
@@ -66,8 +67,8 @@ function RouteLine({ route, node, onServer, onNode }: {
             const hop = stage.kind === "transit" ? route.hops[i - 1] : undefined;
             const internal = !!hop && hopUsesInternal(hop, id);
             return <button key={id} type="button" className="routeHost" onClick={() => onServer(id)} title={`${serverName(id)} ${address(id, internal)}`}>
-              <span className="routeHostName">{serverName(id)}</span>
-              <span className="routeHostAddress">{internal && "内网 "}{address(id, internal)}</span>
+              <span className="routeHostName"><span>{serverName(id)}</span>{internal && <small>内网</small>}</span>
+              <span className="routeHostAddress">{address(id, internal)}</span>
             </button>;
           })}
           {stage.tag && <span className="routeStageTag" style={{ top: `calc(50% + ${(stage.members.length * hostHeight + (stage.members.length - 1) * hostGap) / 2}px)` }}>{stage.tag}</span>}

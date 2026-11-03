@@ -98,3 +98,36 @@ func TestRouteLatencyTimeoutRemainsVisible(t *testing.T) {
 		t.Fatalf("timeout was not retained as failed: %+v", got)
 	}
 }
+
+func TestReusedManualTCPUDPForwardReportsLatency(t *testing.T) {
+	l := newRouteLab(t)
+	code, manual, _ := l.p.do("POST", "/api/forwards", map[string]any{"serverId": l.t1, "name": "existing", "network": shared.ForwardTCPUDP,
+		"port": 53611, "targets": []map[string]any{{"host": "198.51.100.4", "port": 50010}}, "firewallPolicy": "all", "enabled": true}, nil)
+	if code != 201 {
+		t.Fatalf("manual forward: %d %v", code, manual)
+	}
+	if code, rt := l.route(map[string]any{"name": "reused", "entryServerId": l.entry, "nodeId": l.nodeID, "enabled": true,
+		"port": 53611, "hops": singleServerHops(l.t1)}); code != 201 {
+		t.Fatalf("route: %d %v", code, rt)
+	}
+	l.applyAll()
+	state, err := l.p.app.desired(l.t1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if index := slices.IndexFunc(state.Forwards, func(f shared.ForwardRule) bool { return f.ID == manual["id"] }); index < 0 || state.Forwards[index].RouteID == "" {
+		t.Fatalf("Agent cannot tell the reused forward belongs to a route: %+v", state.Forwards)
+	}
+	point := shared.RouteLatency{ForwardID: manual["id"].(string), Host: "198.51.100.4", Port: 50010, TCPMs: 17, OK: true, At: time.Now()}
+	if code, out, _ := l.p.do("POST", "/agent/report", map[string]any{"hostReported": true, "routeLatencies": []shared.RouteLatency{point}}, l.agents[1]); code != 200 {
+		t.Fatalf("report: %d %v", code, out)
+	}
+	route := l.p.list("/api/routes")[0]
+	edges, _ := route["edgeLatencies"].([]any)
+	if !slices.ContainsFunc(edges, func(edge any) bool {
+		item := edge.(map[string]any)
+		return item["fromServerId"] == l.t1 && item["tcpMs"] == float64(17)
+	}) {
+		t.Fatalf("reused TCP + UDP hop has no latency: %+v", route)
+	}
+}
