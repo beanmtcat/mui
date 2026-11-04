@@ -27,6 +27,7 @@ export type Server = {
   outboundInterface?: string;
   outboundBindingSupport?: boolean;
   nodeDomainBlock?: boolean;
+  nodeSocksOutbound?: boolean;
   firewallMode?: "ufw" | "manual";
   agentProxyNodeId?: string;
   agentProxyInternal?: boolean;
@@ -89,8 +90,9 @@ export type Node = {
   port: number;
   listen: string;
   publishAddress: string;
-  outboundMode?: "inherit" | "system" | "interface" | "";
+  outboundMode?: "inherit" | "system" | "interface" | "socks5" | "";
   outboundInterface?: string;
+  outboundNodeId?: string;
   blockedDomains?: string[];
   method: string;
   snellVersion: number;
@@ -218,7 +220,7 @@ export type Route = {
 };
 export type AuditEntry = { id: string; at: string; action: string; target: string; detail: string; ip: string };
 export type Customer = { id: string; name: string; notes: string; createdAt: string };
-export type SubscriptionAccess = { id: string; subscriptionId: string; customerId: string; ip: string; at: string };
+export type SubscriptionAccess = { id: string; subscriptionId: string; customerId: string; ip: string; at: string; userAgent?: string; client?: string };
 export type ConnectionIP = { serverId: string; nodeId: string; ip: string; clientIp?: string; peerIp?: string; routeId?: string; sourceKind?: "entry" | "direct" | "relay" | "agent" | "unknown"; lastSeen: string; cursor: string };
 export type ClientActivity = { accesses: SubscriptionAccess[]; connections: ConnectionIP[] };
 export type Operation = {

@@ -353,6 +353,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/password", a.require(a.changePassword))
 	mux.HandleFunc("GET /api/settings/komari", a.require(a.komariSetting))
 	mux.HandleFunc("PUT /api/settings/komari", a.require(a.komariSetting))
+	mux.HandleFunc("GET /api/settings/surge-profile", a.require(a.surgeProfileSetting))
+	mux.HandleFunc("PUT /api/settings/surge-profile", a.require(a.surgeProfileSetting))
 	mux.HandleFunc("GET /api/help", a.require(a.helpArticles))
 	mux.HandleFunc("POST /api/help", a.require(a.helpArticles))
 	mux.HandleFunc("PATCH /api/help/{id}", a.require(a.helpArticleByID))
@@ -1439,6 +1441,14 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 409, err.Error())
 			return
 		}
+		if hosted, err := a.Store.Nodes(id); err == nil {
+			for _, n := range hosted {
+				if err := a.protectUpstreamNode(n, n, true); err != nil {
+					errorJSON(w, 409, err.Error())
+					return
+				}
+			}
+		}
 		if serverStatus(old) == "online" {
 			errorJSON(w, 409, "服务器仍在线；请先删除其节点与规则并停用 Agent，或吊销 Agent 凭据后再删除")
 			return
@@ -1670,6 +1680,23 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 	// The document write is complete; release before reconciling routes.
 	unlock()
 	unlock = nil
+	// An external server's address is the egress address of nodes that
+	// send their traffic through its SOCKS5 nodes.
+	if shared.ExternalManaged(old) && (before.Domain != old.Domain || before.IPv4 != old.IPv4 || before.IPv6 != old.IPv6) {
+		hosted, err := a.Store.Nodes(id)
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		ids := make([]string, 0, len(hosted))
+		for _, n := range hosted {
+			ids = append(ids, n.ID)
+		}
+		if err = a.reapplyUpstreamUsers(ids...); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+	}
 	if err = a.syncRoutes(); err != nil {
 		errorJSON(w, 500, err.Error())
 		return
@@ -1963,6 +1990,12 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, err.Error())
 		return
 	}
+	if !shared.ExternalManaged(server) {
+		if err := a.checkNodeUpstream(server, &n); err != nil {
+			errorJSON(w, 400, err.Error())
+			return
+		}
+	}
 	if !shared.CanHostNodes(server) {
 		errorJSON(w, 409, "只有在线管理的中转、落地或外部节点服务器可以建节点")
 		return
@@ -2170,6 +2203,10 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 409, err.Error())
 			return
 		}
+		if err := a.protectUpstreamNode(old, old, true); err != nil {
+			errorJSON(w, 409, err.Error())
+			return
+		}
 		routes, err := a.Store.Routes()
 		if err != nil {
 			errorJSON(w, 500, err.Error())
@@ -2254,8 +2291,15 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 	}
 	if shared.ExternalManaged(server) {
 		prepareExternalNode(&n)
+	} else if err := a.checkNodeUpstream(server, &n); err != nil {
+		errorJSON(w, 400, err.Error())
+		return
 	}
 	if err := a.protectProxyNode(old, n, in.Password, false); err != nil {
+		errorJSON(w, 409, err.Error())
+		return
+	}
+	if err := a.protectUpstreamNode(old, n, false); err != nil {
 		errorJSON(w, 409, err.Error())
 		return
 	}
@@ -2386,6 +2430,10 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
+	}
+	if err = a.reapplyUpstreamUsers(n.ID); err != nil {
+		errorJSON(w, 500, err.Error())
+		return
 	}
 	// A new port or protocol changes the last hop of the routes ending here.
 	if err = a.syncRoutes(); err != nil {
@@ -3299,6 +3347,13 @@ func (a *App) subscriptionDownload(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "订阅无效")
 		return
 	}
+	// ?profile=1 serves a Surge subscription as a complete profile; without it
+	// the link stays a node list for policy-path.
+	profile := r.URL.Query().Get("profile") == "1"
+	if profile && sub.Format != "surge" {
+		errorJSON(w, 400, "只有 Surge 订阅提供完整配置")
+		return
+	}
 	items, skipped, pending, err := a.subscriptionItems(sub, nil)
 	if err != nil {
 		errorJSON(w, 500, err.Error())
@@ -3319,18 +3374,35 @@ func (a *App) subscriptionDownload(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 503, "订阅中没有可用节点："+strings.Join(skipped, "; "))
 		return
 	}
-	body, _, err := shared.RenderSubscription(sub.Format, items)
-	if err != nil {
+	var body []byte
+	if profile {
+		var template string
+		if template, err = a.Store.SurgeProfileTemplate(); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		body, skipped, err = shared.RenderSurgeProfile(items, a.publicURLForRequest(r)+"/s/"+r.PathValue("token")+"?profile=1", template)
+		if err != nil {
+			if len(skipped) > 0 {
+				err = fmt.Errorf("%w：%s", err, strings.Join(skipped, "; "))
+			}
+			errorJSON(w, 503, err.Error())
+			return
+		}
+	} else if body, _, err = shared.RenderSubscription(sub.Format, items); err != nil {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	if _, err := a.Store.DB.Exec(`INSERT INTO mui_subscription_access(id,subscription_id,customer_id,ip,at_ms) VALUES($1,$2,$3,$4,$5)`, ID(), sub.ID, sub.CustomerID, a.clientIP(r), time.Now().UnixMilli()); err != nil {
+	if _, err := a.Store.DB.Exec(`INSERT INTO mui_subscription_access(id,subscription_id,customer_id,ip,at_ms,user_agent) VALUES($1,$2,$3,$4,$5,$6)`, ID(), sub.ID, sub.CustomerID, a.clientIP(r), time.Now().UnixMilli(), cleanUserAgent(r.UserAgent())); err != nil {
 		errorJSON(w, 500, "无法记录订阅访问")
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	if sub.Format == "sing-box" {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	} else if profile {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="MUI.conf"`)
 	} else {
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	}
@@ -3713,6 +3785,11 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 			return state, err
 		}
 		item := shared.ManagedNode{Node: n, Password: password, ShadowTLSPassword: shadowPassword}
+		if n.Enabled && n.OutboundMode == "socks5" {
+			if item.Upstream, err = a.nodeUpstream(n); err != nil {
+				return state, fmt.Errorf("节点 %s: %w", n.Name, err)
+			}
+		}
 		if n.Protocol == "ss" && shared.SSMultiUser(n.Method) && !n.SingleUser {
 			item.Users = append(item.Users, a.Store.SubscriptionUser(n, "direct"))
 		}
@@ -4158,6 +4235,21 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// An older Agent ignores the SOCKS5 egress and would send the traffic out
+	// of this server's own address instead.
+	if allowApply && !server.NodeSOCKSOutbound {
+		nodes, err := a.Store.Nodes(id)
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		for _, node := range nodes {
+			if node.Enabled && !node.Deleting && node.OutboundMode == "socks5" {
+				allowApply = false
+				break
+			}
+		}
+	}
 	if allowApply && !server.NodeDomainBlock {
 		nodes, err := a.Store.Nodes(id)
 		if err != nil {
@@ -4377,6 +4469,7 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		server.AgentVersion = in.AgentVersion
 		server.NodeFirewallPolicies = in.NodeFirewallPolicies
 		server.NodeDomainBlock = in.NodeDomainBlock
+		server.NodeSOCKSOutbound = in.NodeSOCKSOutbound
 		server.ManualFirewallSupport = in.ManualFirewallSupport
 		server.MultiUserStats = in.MultiUserStats
 		server.ForwardSupport = in.ForwardSupport

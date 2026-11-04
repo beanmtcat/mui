@@ -352,7 +352,26 @@ func SingBoxConfig(nodes []ManagedNode, certDir string, defaultInterface ...stri
 				map[string]any{"inbound": []string{tag}, "domain_suffix": blocked, "action": "reject", "method": "drop"})
 		}
 		iface := EffectiveOutboundInterface(n, serverDefault)
-		if iface != serverDefault {
+		if n.OutboundMode == "socks5" {
+			// Each node gets its own SOCKS5 outbound: upstreams differ in
+			// credentials. Dialling the upstream keeps the server's default
+			// interface. ShadowTLS handshakes still use their own direct route.
+			if item.Upstream == nil || item.Upstream.Host == "" {
+				return nil, fmt.Errorf("节点 %q 缺少出口 SOCKS5 配置", n.Name)
+			}
+			if err := ValidateAgentProxy(item.Upstream); err != nil {
+				return nil, fmt.Errorf("节点 %q 的出口 SOCKS5 无效: %w", n.Name, err)
+			}
+			outboundTag := "upstream-" + n.ID
+			outbound := map[string]any{"type": "socks", "tag": outboundTag, "version": "5",
+				"server": item.Upstream.Host, "server_port": item.Upstream.Port,
+				"username": item.Upstream.Username, "password": item.Upstream.Password}
+			if serverDefault != "" {
+				outbound["bind_interface"] = serverDefault
+			}
+			outbounds = append(outbounds, outbound)
+			rules = append(rules, map[string]any{"inbound": []string{tag}, "action": "route", "outbound": outboundTag})
+		} else if iface != serverDefault {
 			outboundTag, ok := outboundTags[iface]
 			if !ok {
 				outboundTag = fmt.Sprintf("egress-%d", len(outbounds))

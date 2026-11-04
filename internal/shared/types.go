@@ -56,6 +56,7 @@ type Server struct {
 	AgentSelfUpdate              bool       `json:"agentSelfUpdate"`
 	NodeFirewallPolicies         bool       `json:"nodeFirewallPolicies"`
 	NodeDomainBlock              bool       `json:"nodeDomainBlock,omitempty"`
+	NodeSOCKSOutbound            bool       `json:"nodeSocksOutbound,omitempty"`
 	MultiUserStats               bool       `json:"multiUserStats"`
 	ForwardTCPUDP                bool       `json:"forwardTcpUdp"`
 	ForwardSupport               bool       `json:"forwardSupport"`
@@ -98,6 +99,9 @@ type Node struct {
 	PublishAddress    string `json:"publishAddress"`
 	OutboundMode      string `json:"outboundMode,omitempty"`
 	OutboundInterface string `json:"outboundInterface,omitempty"`
+	// OutboundNodeID is the external SOCKS5 node that "socks5" mode sends this
+	// node's traffic through.
+	OutboundNodeID string `json:"outboundNodeId,omitempty"`
 	// BlockedDomains are dropped by sing-box, each with its subdomains. Empty
 	// keeps the generated configuration identical to one without this field.
 	BlockedDomains []string `json:"blockedDomains,omitempty"`
@@ -365,6 +369,10 @@ type SubscriptionAccess struct {
 	CustomerID     string    `json:"customerId"`
 	IP             string    `json:"ip"`
 	At             time.Time `json:"at"`
+	// UserAgent is what the client sent; Client is the software recognised
+	// from it, empty when unknown.
+	UserAgent string `json:"userAgent,omitempty"`
+	Client    string `json:"client,omitempty"`
 }
 
 type ConnectionIP struct {
@@ -430,6 +438,8 @@ type ManagedNode struct {
 	Users             []NodeUser `json:"users,omitempty"`
 	CertificatePEM    string     `json:"certificatePem,omitempty"`
 	CertificateKey    string     `json:"certificateKey,omitempty"`
+	// Upstream is the resolved SOCKS5 server for OutboundMode "socks5".
+	Upstream *SOCKS5Proxy `json:"upstream,omitempty"`
 }
 
 // NodeUser is one subscription's login on a managed node. Name is unique
@@ -556,6 +566,7 @@ type AgentReport struct {
 	AgentSelfUpdate        bool                     `json:"agentSelfUpdate,omitempty"`
 	NodeFirewallPolicies   bool                     `json:"nodeFirewallPolicies,omitempty"`
 	NodeDomainBlock        bool                     `json:"nodeDomainBlock,omitempty"`
+	NodeSOCKSOutbound      bool                     `json:"nodeSocksOutbound,omitempty"`
 	MultiUserStats         bool                     `json:"multiUserStats,omitempty"`
 	ForwardSupport         bool                     `json:"forwardSupport,omitempty"`
 	ForwardTCPUDP          bool                     `json:"forwardTcpUdp,omitempty"`

@@ -122,10 +122,11 @@ func (a *App) accessLog(query *logQuery, limit, offset int) ([]shared.Subscripti
 	for rows.Next() {
 		var item shared.SubscriptionAccess
 		var at int64
-		if err = rows.Scan(&item.ID, &item.SubscriptionID, &item.CustomerID, &item.IP, &at); err != nil {
+		if err = rows.Scan(&item.ID, &item.SubscriptionID, &item.CustomerID, &item.IP, &at, &item.UserAgent); err != nil {
 			return nil, err
 		}
 		item.At = time.UnixMilli(at).UTC()
+		item.Client = clientName(item.UserAgent)
 		out = append(out, item)
 	}
 	return out, rows.Err()
@@ -168,7 +169,7 @@ func (a *App) connectionLog(query *logQuery, limit, offset int) ([]shared.Connec
 	return out, rows.Err()
 }
 
-const accessColumns = `SELECT id,subscription_id,customer_id,ip,at_ms FROM mui_subscription_access`
+const accessColumns = `SELECT id,subscription_id,customer_id,ip,at_ms,user_agent FROM mui_subscription_access`
 const connectionColumns = `SELECT server_id,node_id,ip,at_ms,first_seen_ms,route_id,source_kind FROM (
 SELECT server_id,node_id,ip,at_ms,first_seen_ms,'' AS route_id,'node' AS source_kind FROM mui_connection_ips
 UNION ALL SELECT server_id,node_id,ip,at_ms,first_seen_ms,route_id,'entry' AS source_kind FROM mui_entry_connection_ips

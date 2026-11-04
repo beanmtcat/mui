@@ -699,10 +699,12 @@ export function useAppState() {
   }, [servers, nodes, subs, customers, routes, forwards, certificates, templates]);
   const surgeImportHelp = (value: string) => {
     const line = `MUI = select, policy-path=${value}, update-interval=3600`;
+    const profile = `${value}?profile=1`;
     return <div className="surgeImportHelp">
-      <p className="hint">导入 Surge 节点：编辑正在使用的配置，把下面这一行放进已有的 [Proxy Group] 段，保存并重新加载。然后把 MUI 加入现有规则所使用的代理组，即可从 MUI 组中选择节点。</p>
+      <p className="hint">没有现成配置：在 Surge 中选“从 URL 安装配置”，粘贴下面的完整配置链接。它按“设置 → Surge 完整配置模板”生成，默认包含节点选择、自动测速、故障转移和常用分流（AI、Telegram、流媒体、Google、Apple、广告拦截、国内直连），Surge 每 12 小时自动更新；在 Surge 里手动修改会在更新时被覆盖。</p>
+      <MaskedValue value={profile}><button className="ghost" type="button" onClick={() => void copy(profile)}>复制完整配置链接</button></MaskedValue>
+      <p className="hint">已有自己的配置：编辑正在使用的配置，把下面这一行放进已有的 [Proxy Group] 段，保存并重新加载。然后把 MUI 加入现有规则所使用的代理组，即可从 MUI 组中选择节点，原有分流规则继续使用。</p>
       <MaskedValue value={line} pre><button className="ghost" type="button" onClick={() => void copy(line)}>复制 Surge 代理组配置</button></MaskedValue>
-      <p className="hint">本链接提供节点列表。通过 policy-path 引用会自动更新节点；不要把它当完整配置安装，否则会提示“规则必须以 FINAL 结尾”。已有配置的分流规则继续使用。</p>
     </div>;
   };
   // Read marks live in this browser. Only problems still present keep theirs,

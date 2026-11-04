@@ -375,6 +375,10 @@ docker compose up -d
 ARM64 服务器将 amd64 换成 arm64。已是当前构建、Agent 不支持自更新或已有升级任务时，按钮也会不可用。',20,0) ON CONFLICT(id) DO NOTHING`,
 		`INSERT INTO mui_help_articles(id,question,answer,position,updated_at) VALUES('faq-ufw-protected','UFW 规则显示“SSH 保护”是什么意思？','这条主机规则可能放行 SSH 端口。为防止远程失联，面板不提供修改和删除操作；需要调整时，请登录服务器检查 UFW 规则和 SSH 实际端口。',30,0) ON CONFLICT(id) DO NOTHING`,
 	},
+	{
+		// The software that fetched the subscription, as it named itself.
+		`ALTER TABLE mui_subscription_access ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''`,
+	},
 }
 
 func ID() string {

@@ -4,7 +4,7 @@ React + Go 的多服务器节点面板，前端由 Nginx 独立部署，Go 后�
 
 ## 功能
 
-Surge 的节点订阅通过代理组 `policy-path` 引用。面板“查看链接”提供可复制的代理组配置；[导入步骤](docs/surge-import.md)。
+Surge 订阅可在“从 URL 安装配置”中直接安装完整配置（链接加 `?profile=1`），也可通过代理组 `policy-path` 引用到已有配置。面板“查看链接”提供两种可复制的写法；[导入步骤](docs/surge-import.md)。
 
 左侧“帮助”页可搜索、新增、编辑和删除常见问题。答案支持普通文字、行内反引号代码及以三个反引号包围的多行代码块；代码块可一键复制。条目保存在面板数据库中，并记录编辑操作到审计日志。
 
@@ -17,7 +17,7 @@ Surge 的节点订阅通过代理组 `policy-path` 引用。面板“查看链�
 - 订阅：sing-box JSON 出站、Surge `[Proxy]` 片段和 v2rayN Base64 分享链接订阅；内容是链路和开启“允许直连”的节点，启停、到期、令牌轮换和删除。订阅配置使用节点或链路的原始名称，不附加 ID 后缀。默认每条订阅在 SS 2022、AnyTLS、Snell v5/v6 节点上使用独立用户凭据，同节点可供多条订阅使用；节点也可开启“单用户”共用原有凭据。SS 2022 多用户客户端密码为“服务器密钥:用户密钥”；经 ShadowTLS v3 接入的 Snell 多用户节点由每条订阅独立的 ShadowTLS 密码鉴权，Snell 本身保持单用户，因此 Surge 等原生客户端也能使用，流量仍按订阅统计（需要 Agent 0.6.0；更早的 Agent 仍要求 sing-box 专有的 `userkey`，这类节点不会出现在 Surge 订阅里）。订阅只下发其配置已在服务器上生效的节点：某台服务器离线或有变更尚未应用时，只有受影响的节点暂不下发，其余节点照常提供；全部节点都在等待生效时返回 503 让客户端稍后重试。订阅链接加密保存，可随时在列表中再次查看。Surge 订阅支持传统 AEAD SS、AES-GCM 的 SS 2022、SOCKS5、启用 ShadowTLS 的 Snell 节点，以及 AnyTLS（Surge Mac 6.4.3+ / iOS 5.17.0+）；AnyTLS 订阅保留落地节点的 SNI 和对应密码，直连和链路均支持，默认校验证书；v2rayN 订阅支持 SS 和 AnyTLS，支持节点直连与链路入口地址；不支持 Snell / ShadowTLS，界面会提示不兼容链路的具体原因，API 也会拒绝不兼容成员。AnyTLS 在 v2rayN 中需选择 sing-box 内核；订阅链接可直接添加到订阅分组，更新后导入节点。传统 SS（例如 `aes-256-gcm`）也可加入订阅及离线链路，沿用节点原有密码，不生成多用户配置。这类节点仅统计节点总流量，无法按订阅或客户拆分；禁用、删除、到期或轮换链接只影响订阅下载，撤销已导入客户端的访问需更换节点密码。
 
   **新建、编辑、启停、删除订阅以及订阅到期，若涉及独立用户节点，会让这些节点所在服务器的 sing-box 重启一次以更新登录凭据，该服务器上所有连接会中断数秒。** 仅包含单用户或传统 SS 共享凭据节点的订阅无需为用户变更重启。sing-box 没有不重启增删用户的办法。到期日按所选日期当天 23:59:59 生效，相关自动重启因此发生在午夜前后。
-- 客户端管理：客户可关联多条订阅，客户页汇总这些订阅的流量。成功下载订阅时记录来源 IP、订阅和客户；Agent 从 sing-box 本机 Clash API 每 10 秒采样活跃节点连接的来源 IP，页面分别展示两类记录。连接快照可能漏掉短连接；订阅用户流量由登录凭据识别，不依赖来源 IP。
+- 客户端管理：客户可关联多条订阅，客户页汇总这些订阅的流量。成功下载订阅时记录来源 IP、订阅、客户和客户端 User-Agent，并识别常见软件（Surge、Stash、Shadowrocket、sing-box、Clash 系、v2rayN 等）显示在访问记录中；User-Agent 由客户端自报，只作参考，也只反映拉取订阅的软件；Agent 从 sing-box 本机 Clash API 每 10 秒采样活跃节点连接的来源 IP，页面分别展示两类记录。连接快照可能漏掉短连接；订阅用户流量由登录凭据识别，不依赖来源 IP。
 - 防火墙管理：每台服务器可选择 **UFW 托管** 或 **手动管理**，现有服务器默认 UFW 托管。已有服务器需要先升级 Agent 至 0.6.4。手动管理无需安装或启用 UFW，仍可部署节点、转发及链路；面板不增删防火墙规则、不自动修补 SSH 放行，也不启用或关闭现有 UFW。防火墙页仅供查看；端口放行、来源白名单和落地仅允许链路访问由宿主机、防火墙或安全组配置。节点“允许直连”此时仅控制能否加入直连订阅。切回 UFW 托管后重新同步面板规则，需确保 UFW 可用。
 - UFW 托管：初始化时先放行检测到的 SSH 端口；每个节点可选择自动放行所有来源、仅放行指定 IP/CIDR（最多 32 个），或不生成自动规则并用自定义规则管理。SS 自动规则覆盖 TCP/UDP，Snell 与 AnyTLS 覆盖 TCP；只清理带 `mui-` 标记的规则。指定来源模式要求 UFW 默认入站策略为 deny/reject；已有的其他 UFW 允许规则及云安全组仍会影响实际访问。指定来源和节点级手动规则可以先保存；旧 Agent 不会领取相关配置任务，升级至支持该功能的版本并上报能力后才会应用。升级前原有 UFW 放行规则仍会生效。
 - 链路：入口或线路 → 若干跳中转（每跳可多台负载均衡）→ 落地节点，面板在每一跳自动生成转发，详见下文“链路”。
@@ -80,22 +80,22 @@ CREATE DATABASE mui WITH OWNER mui ENCODING 'UTF8';
 1. 复制 `deploy/.env.example` 为 `deploy/.env`，填写 `MUI_PUBLIC_URL`（对外的 `https://` 地址），以及已有数据库的 `MUI_DB_HOST`、`MUI_DB_PORT`、`MUI_DB_NAME`、`MUI_DB_USER`、`MUI_DB_PASSWORD` 和 `MUI_DB_SSLMODE`。在数据库中提前创建库和用户（见上文 SQL）；独立生成 `MUI_SECRET` 和管理员密码。`MUI_SECRET` 必须稳定保存，丢失后数据库中的节点密钥与证书私钥无法解密。
    数据库地址必须从容器内可访问：宿主机 PostgreSQL 可填 `host.docker.internal`（Compose 已配置 Linux 宿主机映射），其他服务器填其内网 IP 或域名。`127.0.0.1` 在容器内指后端容器自身。PostgreSQL 需监听对应网卡并允许该客户端连接；不使用数据库 TLS 的可信内网实例可将 `MUI_DB_SSLMODE` 设为 `disable`。
 2. 保持 `MUI_BIND=127.0.0.1:8086`。在已有外层 Nginx 的面板域名 HTTPS `server` 块中加入 `deploy/nginx/mui-edge.location.conf` 的转发配置（已有 `location /` 时替换该块），检查 `nginx -t` 后重载外层 Nginx。证书及 HTTPS 跳转继续由外层管理；内层不配置证书。远程 Agent 访问外部 HTTPS 地址。外层默认与前端容器在同一台主机；若在另一台主机或容器，调整上游地址和 `MUI_BIND`，并将内层入口限制为仅外层可访问。
-3. 在有 Docker Buildx 的构建机运行 `deploy/build-agent.sh amd64` 和/或 `deploy/build-agent.sh arm64`。脚本默认构建 Agent 0.6.25 和 sing-box v1.14.4；第二个参数指定 sing-box 的 `vX.Y.Z` 版本，第三个参数指定 Agent 的 `X.Y.Z` 正式版本（如 `deploy/build-agent.sh amd64 v1.14.4 0.6.25`）。构建脚本要求 Git 工作区干净、提交中的 Agent 版本与指定版本一致，并使用已修复 CVE-2026-111943 的 Go 1.26.10 编译 Agent 与 sing-box。脚本构建带 `with_v2ray_api`、`with_clash_api` 的核心，同时构建 Agent，并生成 `SHA256SUMS`。默认本地发布模式把所需架构的整个 `bin/<架构>/` 目录放到**面板服务器**的仓库 `bin/` 下；GitHub 直下模式见下节。
+3. 在有 Docker Buildx 的构建机运行 `deploy/build-agent.sh amd64` 和/或 `deploy/build-agent.sh arm64`。脚本默认构建 Agent 0.6.26 和 sing-box v1.14.4；第二个参数指定 sing-box 的 `vX.Y.Z` 版本，第三个参数指定 Agent 的 `X.Y.Z` 正式版本（如 `deploy/build-agent.sh amd64 v1.14.4 0.6.26`）。构建脚本要求 Git 工作区干净、提交中的 Agent 版本与指定版本一致，并使用已修复 CVE-2026-111943 的 Go 1.26.10 编译 Agent 与 sing-box。脚本构建带 `with_v2ray_api`、`with_clash_api` 的核心，同时构建 Agent，并生成 `SHA256SUMS`。默认本地发布模式把所需架构的整个 `bin/<架构>/` 目录放到**面板服务器**的仓库 `bin/` 下；GitHub 直下模式见下节。
 4. 在 `deploy` 目录运行 `docker compose --env-file .env -f compose.yaml up -d --build`。内层 Nginx 提供页面及接口代理，Go 容器只读挂载 `../bin`，通过 Nginx 的 `/download/` 路径提供安装脚本和构建产物。当前 Compose 使用已有的外部网络 `docker_default`，启动前需确认网络存在。用 `docker network inspect docker_default --format '{{json .IPAM.Config}}'` 查看真实网段和网关；`MUI_PROXY_SUBNET` 仅作为 Go 的默认可信代理范围，填写实际网段或单独设置 `MUI_TRUSTED_PROXIES`，修改它不会创建或更改外部网络。`MUI_EDGE_PROXY_CIDR` 则填写外层 Nginx 的实际来源地址。
 5. 目标机支持 Ubuntu 22.04/24.04/26.04、Debian 11/12/13（systemd），以及 Alpine 3.19+（OpenRC），需要 OpenSSH、`curl`、`sha256sum` 和 `ss`；GitHub 直下模式还需要 `tar`。Debian 11 从 Agent 0.6.20 起支持；0.6.19 的发行版检查仍会拒绝它。Debian 11 已结束官方 LTS 安全更新，建议升级至 Debian 12/13；若仍使用 Debian 11，应自行安排 Extended LTS。Alpine 依赖安装、服务管理及小内存机器优化见 [Agent 运维说明](docs/agent-operations.md)。UFW 托管时需安装 UFW（`apt-get install ufw`）；手动管理无需 UFW，安装 iproute2 提供 `ss`。Agent 0.6.3 起同时核对实际 SSH TCP 监听、SSH socket 和 `sshd -T` 配置，无法确认实际监听时拒绝初始化 UFW。LXC 内按容器真实监听端口放行，不能将宿主机映射端口当作容器端口。面板新建服务器时选择类型：带落地类型的下载并安装 Agent 与 sing-box；只做入口、线路、中转的只下载 Agent，不创建 sing-box 账户或服务。在目标机执行显示的一次性接入命令；命令先从面板获取小型安装脚本，再通过标准输入传递一次性接入 token；token 不会放进子进程参数，不需要手动设置环境变量。构建文件按已配置的发布模式从面板或 GitHub 下载，按 `SHA256SUMS` 和已配置的发布签名校验后安装。令牌 10 分钟有效；超时可重新生成。面板的 `MUI_PUBLIC_URL` 在面板服务器的 `.env` 中配置，必须是目标机可访问的 HTTPS 地址。
 6. Agent 上线后，UFW 托管服务器在面板执行“初始化 UFW”；手动管理服务器跳过此步，自行配置宿主机或安全组放行。启用 UFW 会按默认策略拒绝 SSH 以外的入站连接；机器上若有别的对外服务，初始化后立即在防火墙页为它们添加允许规则。若机器上 firewalld、nftables、netfilter-persistent 或 shorewall 正在运行，Agent 会拒绝写入 UFW 并在面板提示冲突。AnyTLS 先上传对应域名的 PEM 证书链和私钥。端口从云安全组放行后才能从公网访问。
 
 ### 从 GitHub Release 直接下载 Agent
 
-设置 `MUI_AGENT_RELEASE_VERSION=0.6.25` 后，在线接入命令仍从**当前面板**获取 `/download/install.sh`，脚本按第七个参数指定的版本让**目标服务器直接**从 GitHub Release 下载对应架构的压缩包并验证签名、哈希。Agent 0.6.19 起的一键升级也从 GitHub 下载。面板只读取 Release 中独立的 `SHA256SUMS` 和 `SHA256SUMS.sig`，先验签再显示可用构建，不再下载整份归档，也不向目标服务器提供二进制；`/download/<架构>/...` 在此模式下返回 404。接入和任务通信仍走面板。
+设置 `MUI_AGENT_RELEASE_VERSION=0.6.26` 后，在线接入命令仍从**当前面板**获取 `/download/install.sh`，脚本按第七个参数指定的版本让**目标服务器直接**从 GitHub Release 下载对应架构的压缩包并验证签名、哈希。Agent 0.6.19 起的一键升级也从 GitHub 下载。面板只读取 Release 中独立的 `SHA256SUMS` 和 `SHA256SUMS.sig`，先验签再显示可用构建，不再下载整份归档，也不向目标服务器提供二进制；`/download/<架构>/...` 在此模式下返回 404。接入和任务通信仍走面板。
 
 目标服务器必须能访问 GitHub Release；访问不了时，为该服务器配置 Agent SOCKS5 代理，或使用“手工安装”把同一 Release 的归档上传到服务器。面板请求最多等待 20 秒，后台读取最多运行 5 分钟；成功后缓存哈希，失败后五分钟内复用错误。旧的 `v0.6.18`、`v0.6.19`、`v0.6.20` 标签指向未包含 GitHub 分发代码的提交，不应再用于在线接入。
 
 发布顺序：
 
-1. 在包含安装脚本和 Agent 0.6.25 代码的**干净提交**上构建并签名 amd64、arm64：`./deploy/build-agent.sh amd64 v1.14.4 0.6.25` 和 `./deploy/build-agent.sh arm64 v1.14.4 0.6.25`。脚本同时导出每个架构的签名清单供面板查询；归档内也保留同一份清单。已固定发布公钥的 Agent 必须继续使用同一私钥。
-2. 运行 `./deploy/release-agent.sh 0.6.25`；脚本检查工作区干净、提交内的 Agent 版本号和标签相同，再创建标签与 GitHub Release。确认两个归档均可下载，且标签指向构建所用的提交。
-3. 然后把面板服务器 `deploy/.env` 中的 `MUI_AGENT_RELEASE_VERSION` 改为 `0.6.25`，确认 `MUI_RELEASE_PUBLIC_KEY` 与签名私钥匹配，再发布面板。版本号必须与 Release 标签一致；无需 `--with-agent`。未升级到支持 GitHub 下载的旧 Agent 需用新接入命令重装一次。
+1. 在包含安装脚本和 Agent 0.6.26 代码的**干净提交**上构建并签名 amd64、arm64：`./deploy/build-agent.sh amd64 v1.14.4 0.6.26` 和 `./deploy/build-agent.sh arm64 v1.14.4 0.6.26`。脚本同时导出每个架构的签名清单供面板查询；归档内也保留同一份清单。已固定发布公钥的 Agent 必须继续使用同一私钥。
+2. 运行 `./deploy/release-agent.sh 0.6.26`；脚本检查工作区干净、提交内的 Agent 版本号和标签相同，再创建标签与 GitHub Release。确认两个归档均可下载，且标签指向构建所用的提交。
+3. 然后把面板服务器 `deploy/.env` 中的 `MUI_AGENT_RELEASE_VERSION` 改为 `0.6.26`，确认 `MUI_RELEASE_PUBLIC_KEY` 与签名私钥匹配，再发布面板。版本号必须与 Release 标签一致；无需 `--with-agent`。未升级到支持 GitHub 下载的旧 Agent 需用新接入命令重装一次。
 
 版本号固定到一个 Release，不会自动跟随 `latest`。发布后不要重新打包或替换归档，否则已缓存的摘要和服务器下载的文件可能不一致。
 
@@ -230,7 +230,7 @@ Agent **0.6.15** 起（修复 0.6.14 的所有来源规则冲突），UFW 托管
 | `MUI_DB_URL` | 可选完整连接 URL，优先于上述分项配置；未配置任何 PostgreSQL 参数时使用 SQLite `data/mui.db` |
 | `MUI_PUBLIC_URL` | 对外 HTTPS 地址，支持逗号分隔多个；第一个为默认，链接随当前已配置域名生成，见“多域名访问” |
 | `MUI_AGENT_BIN_DIR` | 安装文件目录，默认 `bin`；按 `amd64`、`arm64` 子目录存放三个构建产物 |
-| `MUI_AGENT_RELEASE_VERSION` | 设置如 `0.6.25` 后启用 GitHub Release 直下；要求 `MUI_RELEASE_PUBLIC_KEY`，目标服务器直接下载对应版本的归档，面板不再提供二进制下载 |
+| `MUI_AGENT_RELEASE_VERSION` | 设置如 `0.6.26` 后启用 GitHub Release 直下；要求 `MUI_RELEASE_PUBLIC_KEY`，目标服务器直接下载对应版本的归档，面板不再提供二进制下载 |
 | `MUI_LISTEN` | Go 后端监听地址，生产容器为 `:8087`；本地开发使用 `127.0.0.1:8080` |
 | `MUI_BIND` | Nginx 前端 HTTP 的宿主机端口映射，默认 `127.0.0.1:8086` → Nginx 容器 `:8086`，供已有外层 Nginx 转发 |
 | `MUI_BACKEND_URL` | Nginx 的 Go 上游地址，默认 `http://mui-service:8087`；可指向另一台服务器，不加末尾斜线 |
@@ -321,7 +321,7 @@ pg_restore -h db.example.com -p 5432 -U mui -W -d mui --no-owner mui.dump
 - 新建 Snell 节点必须填写 ShadowTLS v3 SNI / 握手域名，指向服务器可访问的真实 TLS 站点（服务器握手目标端口为 443）。面板为 Snell PSK 和 ShadowTLS 密码分别生成并加密保存；公网只监听 ShadowTLS 端口，认证后的连接转给内部 Snell 入站。sing-box 订阅使用 Snell 出站 `detour` 到 ShadowTLS 出站，并为每条订阅生成独立的 ShadowTLS 密码；Surge 订阅输出 `shadow-tls-password`、`shadow-tls-sni` 和 `shadow-tls-version=3`。Surge 这一行的写法已用 sing-box 客户端按同样的凭据验证可连通，但没有在真实 Surge 上测试过。
 - Snell 新建节点和模板默认 v6，可选择 v5；服务端按节点版本生成配置，Surge 输出对应的 version=5/6。sing-box v6 出站输出 version=6；仅 v5 TCP 节点使用 v4 出站兼容协议。Snell v6 PSK 为 12–255 字节，需要 Agent 0.6.11；版本变更成功应用前不下发新的客户端配置。Snell v5 的 QUIC Proxy Mode 不支持。
 - AnyTLS 需要有效证书，客户端订阅使用域名进行 TLS 校验。证书目前由管理员上传和更新。在证书页直接选择 Nginx 的 `ssl_certificate` 对应 `.pem` / `.crt` 文件及 `ssl_certificate_key` 对应 `.key` 文件，也可粘贴 PEM。一个证书文件可以包含完整证书链，无需拆分；支持 RSA PKCS#1、PKCS#8 和 EC 私钥。名称和域名可留空，从证书 SAN 自动读取；保存时检查配对、有效期和服务器用途，私钥加密保存。通配符和多域名证书按真实 SAN 范围匹配 AnyTLS 的 TLS 域名。
-- sing-box 下载内容是节点出站 JSON，供支持导入出站片段的客户端使用；Surge 下载内容是 `[Proxy]` 片段。
+- sing-box 下载内容是节点出站 JSON，供支持导入出站片段的客户端使用；Surge 下载内容是 `[Proxy]` 片段；加 `?profile=1` 时是带 `#!MANAGED-CONFIG` 的完整配置，按“设置 → Surge 完整配置模板”生成（`{{PROXIES}}` 放节点行，`{{PROXY_NAMES}}` 放节点名，`[Rule]` 须以 FINAL 结尾）；默认模板含节点选择、自动测速、故障转移和引用 blackmatrix7 规则集的常用分流，Surge 每 12 小时自动更新。
 - 订阅流量按独立登录用户采样，能分别统计同节点的不同订阅；客户流量为其当前关联订阅的合计。节点可开启“单用户”以沿用原有节点凭据，所有订阅共用该凭据，不生成订阅用户，旧版 Agent 也能下发；未开启的现有节点继续使用独立用户。单用户节点与传统 SS 的共享密码节点仅统计节点总流量，不能按订阅或客户归属；撤销已导入客户端的访问需更换节点密码。订阅链接轮换只换下载令牌，不轮换节点登录凭据。独立用户节点停用、删除或到期会排队移除该订阅的用户；Agent 离线时连接凭据要等 Agent 恢复并应用配置后才失效。节点级流量还包括管理员直接分享节点产生的流量，因此节点合计可高于订阅合计。界面显示共享凭据的统计限制，不将无法归属的流量当成 0 B。
 - 节点流量是 sing-box 入站处理字节，不等于云服务商计费流量。断电前最后一次采样可能丢失。没有目标 Linux 服务器时，无法替代真实客户端连通性及 UFW 联调。
 - 转发流量为转发进程成功写入两侧连接的字节累计值，不含 TCP/IP 头部和握手。进程异常退出前尚未上报的最后一段流量可能丢失。目标地址可达性在建立连接时决定；“已生效”表示监听成功，不表示目标服务一直健康。自有程序也不能保证不会被安全软件误判。
@@ -370,6 +370,18 @@ Snell v5 使用 `obfs_mode`；v6 使用默认流量整形 `mode: default`，不�
 - 仅影响 sing-box 节点的对外连接，不修改系统路由，不改变 Agent 与面板的通信或 Go 端口转发。域名解析仍沿用服务器的 DNS 设置。
 - Agent 应用前检查网卡存在且已启用；失败时保留原配置。运行中指定网卡断开，绑定的连接不会自动改走其他网卡。请先确保该网卡自身的路由与对端可用。
 - 保存服务器默认会重新应用配置，影响实际出口变化的节点；修改核心配置会重启 sing-box 并中断现有连接。旧 Agent 的应用任务保留排队，升级至 0.6.12 后自动继续。
+
+### 经外部 SOCKS5 出口（Agent 0.6.26+）
+
+把卖家提供的 SOCKS5（例如住宅 IP）包装成自己的 SS 等节点：客户端连自己的节点，访问的网站看到的是 SOCKS5 的出口 IP。
+
+1. 新建“外部节点”服务器，填写卖家给的地址，在其中添加 SOCKS5 节点（端口、用户名、密码）。
+2. 新建或编辑自己服务器上的节点 → **节点出口** 选“经外部 SOCKS5 节点”，选择第 1 步的节点。
+
+- sing-box 为该节点生成独立的 `socks` 出站和按入站匹配的路由；ShadowTLS 伪装握手仍走系统路由。连接 SOCKS5 时沿用服务器默认出口网卡。
+- 卖家通常按来源 IP 或账号限制访问，需确认允许这台服务器连接。UDP 是否可用取决于卖家的 SOCKS5 是否支持 UDP ASSOCIATE。
+- 被用作出口的 SOCKS5 节点不能停用、删除或更换协议；修改它的地址、端口、密码，或修改外部服务器地址，会自动为使用它的服务器重新下发配置（重启 sing-box）。
+- 旧 Agent 会忽略这个设置、改用服务器自己的 IP 出站，所以 Agent 低于 0.6.26 时不能选择；已设置的节点在升级前暂停下发配置。只支持在线 Agent 管理的服务器，只能选外部服务器上的 SOCKS5。
 
 ### 链路客户端 IP（Agent 0.6.13+）
 

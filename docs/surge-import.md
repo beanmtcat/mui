@@ -1,6 +1,37 @@
 # 在 Surge 中导入 MUI 订阅节点
 
-MUI 的 Surge 格式返回 `[Proxy]` 节点列表。它供代理组引用，不是完整的 Surge 配置；把它通过“从 URL 安装配置”导入会提示“规则必须以 FINAL 结尾”。
+MUI 的 Surge 订阅有两种用法：
+
+- **完整配置**：订阅链接加 `?profile=1`，在 Surge 中“从 URL 安装配置”。适合没有现成配置的设备。
+- **节点列表**：原始订阅链接返回 `[Proxy]` 节点列表，通过代理组 `policy-path` 引用到已有配置。适合已有自己分流规则的配置。
+
+两种写法都可以在 MUI 订阅列表的“查看链接”中复制。
+
+## 安装完整配置
+
+1. 在 MUI 的订阅列表点击 Surge 订阅的“查看链接”，复制“完整配置链接”（以 `?profile=1` 结尾）。
+2. 在 Surge 中选择“从 URL 安装配置”，粘贴链接并完成。
+
+完整配置按面板“设置 → Surge 完整配置模板”生成，所有 Surge 订阅共用一份模板。默认模板包含：
+
+- 代理组：节点选择、自动选择（测速）、故障转移，以及 AI、Telegram、流媒体、Google、Microsoft、Apple、广告拦截、国内、漏网之鱼；
+- 分流规则：引用 [blackmatrix7/ios_rule_script](https://github.com/blackmatrix7/ios_rule_script) 的 Surge 规则集，每天更新；局域网直连，中国大陆 IP 走“国内”组，其余走“漏网之鱼”。
+
+Surge 首次下载规则集需要能访问 GitHub；下载失败时对应规则不生效，流量按后面的规则处理。
+
+### 自定义模板
+
+在设置页直接编辑模板并保存：
+
+- `{{PROXIES}}` 替换为订阅的节点行，必须出现在 `[Proxy]` 段；
+- `{{PROXY_NAMES}}` 替换为逗号分隔的节点名，可在任意代理组中使用；
+- `[Rule]` 段必须以 `FINAL` 规则结尾，否则无法保存；
+- `#!MANAGED-CONFIG` 行由面板生成，模板里写的会被忽略；
+- 节点名与模板中的代理组或 Surge 内置策略（如 `DIRECT`）相同时，该节点不放入配置。
+
+清空模板或点“恢复默认”即使用默认模板，之后面板升级带来的默认模板改进会自动生效。
+
+配置开头的 `#!MANAGED-CONFIG` 让 Surge 每 12 小时从同一链接更新；更新失败时继续使用上一次的配置。这是托管配置，在 Surge 里手动修改会在下次更新时被覆盖；需要长期修改请改面板模板，或改用下面的节点列表方式。
 
 ## 导入到现有配置
 
@@ -18,6 +49,8 @@ MUI = select, policy-path=https://mui.example.com/s/YOUR_TOKEN, update-interval=
 ```
 
 `update-interval` 单位为秒，此处每小时更新。原配置的 `[Rule]` 和 `FINAL` 继续使用，不需要为了导入节点而改写分流规则。若已有名为 `MUI` 的代理组，请更换组名并在引用处使用相同名称。
+
+不带 `?profile=1` 的链接只有节点列表，把它当完整配置安装会提示“规则必须以 FINAL 结尾”。
 
 Surge 支持通过 `policy-path` 从外部文件的 `[Proxy]` 段读取节点，详见[官方说明](https://manual.nssurge.com/policy-groups/policy-including.html)。
 

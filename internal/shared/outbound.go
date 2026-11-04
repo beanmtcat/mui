@@ -32,11 +32,27 @@ func ValidateNodeOutbound(n Node) error {
 		if n.OutboundInterface != "" {
 			return fmt.Errorf("仅指定网卡模式可以填写出口网卡")
 		}
+		if n.OutboundNodeID != "" {
+			return fmt.Errorf("仅 SOCKS5 出口模式可以选择出口节点")
+		}
 	case "interface":
 		if n.OutboundInterface == "" {
 			return fmt.Errorf("请填写节点出口网卡，例如 ppp0")
 		}
+		if n.OutboundNodeID != "" {
+			return fmt.Errorf("仅 SOCKS5 出口模式可以选择出口节点")
+		}
 		return ValidateOutboundInterface(n.OutboundInterface)
+	case "socks5":
+		if n.OutboundInterface != "" {
+			return fmt.Errorf("仅指定网卡模式可以填写出口网卡")
+		}
+		if n.OutboundNodeID == "" {
+			return fmt.Errorf("请选择出口 SOCKS5 节点")
+		}
+		if n.OutboundNodeID == n.ID {
+			return fmt.Errorf("节点不能以自己作为出口")
+		}
 	default:
 		return fmt.Errorf("节点出口模式无效")
 	}

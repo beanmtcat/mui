@@ -567,6 +567,9 @@ func TestCertificateMigrationPreservesKeysAndNodeReferences(t *testing.T) {
 	if _, err := store.DB.Exec(`ALTER TABLE mui_audit DROP COLUMN ip`); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := store.DB.Exec(`ALTER TABLE mui_subscription_access DROP COLUMN user_agent`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.DB.Exec(`DELETE FROM mui_schema_migrations WHERE version>=14`); err != nil {
 		t.Fatal(err)
 	}

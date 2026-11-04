@@ -26,12 +26,13 @@ export function Accesses() {
                 </select>
                 <DateRange value={accessRange} onChange={setAccessRange} />
               </div>
-              <TableWrap cards={false}><table><thead><tr><th>时间</th><th>客户</th><th>订阅</th><th>来源 IP</th></tr></thead><tbody>
+              <TableWrap cards={false}><table><thead><tr><th>时间</th><th>客户</th><th>订阅</th><th>来源 IP</th><th>客户端</th></tr></thead><tbody>
                 {accessLog.items.map((item) => <tr key={item.id}>
                   <td>{new Date(item.at).toLocaleString()}</td>
                   <td>{customers.find((c) => c.id === item.customerId)?.name || "未关联 / 已删除"}</td>
                   <td>{subs.find((s) => s.id === item.subscriptionId)?.name || "已删除"}</td>
                   <td><code>{item.ip}</code></td>
+                  <td title={item.userAgent || undefined}>{item.client || (item.userAgent ? <span className="hint">未识别</span> : <span className="hint">未记录</span>)}</td>
                 </tr>)}
               </tbody></table>{accessLog.empty && <Empty text="暂无订阅访问记录" />}</TableWrap>
               <Pager log={accessLog} />

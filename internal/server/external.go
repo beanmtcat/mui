@@ -12,7 +12,7 @@ import (
 func prepareExternalNode(n *shared.Node) {
 	n.SingleUser = true
 	n.CertificateID = ""
-	n.OutboundMode, n.OutboundInterface = "system", ""
+	n.OutboundMode, n.OutboundInterface, n.OutboundNodeID = "system", "", ""
 	n.BlockedDomains = nil
 	n.FirewallPolicy, n.FirewallSources = "manual", ""
 	n.AgentProxySources = ""

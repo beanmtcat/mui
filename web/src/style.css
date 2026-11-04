@@ -1266,6 +1266,23 @@ form.totpBox {
   width: 100%;
   min-width: 0;
 }
+.surgeProfileForm {
+  display: grid;
+  gap: 8px;
+  margin: 12px 0 24px;
+}
+.surgeProfileForm textarea {
+  width: 100%;
+  min-width: 0;
+  font-family: var(--mono, monospace);
+  font-size: 12px;
+  white-space: pre;
+  overflow-x: auto;
+}
+.surgeProfileActions {
+  display: flex;
+  gap: 8px;
+}
 
 /* Login */
 .loginShell {

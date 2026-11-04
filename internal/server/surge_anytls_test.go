@@ -61,4 +61,35 @@ func TestSurgeAnyTLSDirectAndRouteSubscriptions(t *testing.T) {
 	if code, preview, _ := p.do("GET", "/api/subscriptions/"+sub["id"].(string)+"/preview", nil, nil); code != 200 || preview["content"] != content || len(preview["excluded"].([]any)) != 0 {
 		t.Fatal("preview differs from download", code, preview)
 	}
+	code, profile := p.fetch(path + "?profile=1")
+	if code != 200 {
+		t.Fatal(code, profile)
+	}
+	for _, want := range []string{
+		"#!MANAGED-CONFIG https://mui.example.test" + path + "?profile=1 interval=43200 strict=false\n",
+		strings.TrimSuffix(content, "\n"),
+		"节点选择 = select, 自动选择, 故障转移, 直连 AnyTLS, 链路 AnyTLS, DIRECT",
+		"FINAL,漏网之鱼,dns-failed",
+	} {
+		if !strings.Contains(profile, want) {
+			t.Fatal("profile lacks", want, profile)
+		}
+	}
+	if !strings.HasPrefix(profile, "#!MANAGED-CONFIG ") || strings.Contains(profile, "{{") {
+		t.Fatal("MANAGED-CONFIG must be the first line and every placeholder filled", profile)
+	}
+	if code, out, _ := p.do("PUT", "/api/settings/surge-profile", map[string]any{"template": "[Proxy]\n{{PROXIES}}\n[Rule]\nGEOIP,CN,DIRECT"}, nil); code != 400 {
+		t.Fatal("a template without FINAL was saved", code, out)
+	}
+	custom := "#!MANAGED-CONFIG https://elsewhere.example/x\r\n[Proxy]\r\n{{PROXIES}}\r\n[Proxy Group]\r\n出口 = select, {{PROXY_NAMES}}\r\n[Rule]\r\nFINAL,出口\r\n"
+	if code, out, _ := p.do("PUT", "/api/settings/surge-profile", map[string]any{"template": custom}, nil); code != 200 || out["custom"] != true {
+		t.Fatal(code, out)
+	}
+	if _, profile = p.fetch(path + "?profile=1"); !strings.Contains(profile, "出口 = select, 直连 AnyTLS, 链路 AnyTLS\n") ||
+		strings.Contains(profile, "elsewhere") || strings.Contains(profile, "\r") || strings.Contains(profile, "漏网之鱼") {
+		t.Fatal("custom template not applied", profile)
+	}
+	if code, out, _ := p.do("PUT", "/api/settings/surge-profile", map[string]any{"template": ""}, nil); code != 200 || out["custom"] != false || out["template"] != shared.DefaultSurgeProfileTemplate {
+		t.Fatal("clearing the template must restore the default", code, out)
+	}
 }

@@ -23,6 +23,9 @@ export default function NodeDialog({ initial, templateId }: { initial: NodeForm;
   const nodeFirewallUnsupported = !externalNode && !!nodeForm.firewallPolicy && nodeForm.firewallPolicy !== "all" &&
     !servers.find((s) => s.id === nodeForm.serverId)?.nodeFirewallPolicies;
   const domainBlockUnsupported = !externalNode && !!selectedNodeServer?.agentVersion && !selectedNodeServer.nodeDomainBlock;
+  const socksOutboundUnsupported = !externalNode && !!selectedNodeServer?.agentVersion && !selectedNodeServer.nodeSocksOutbound;
+  // Only a seller's SOCKS5 node can be an egress; it must be live to be chosen.
+  const upstreamNodes = nodes.filter((n) => n.protocol === "socks5" && !n.deleting && servers.find((s) => s.id === n.serverId)?.managementMode === "external");
   const topLevelBlocks = (nodeForm.blockedDomains || []).map((item) => item.trim().replace(/^\*?\./, "").toLowerCase()).filter((item) => /^[a-z0-9-]+$/.test(item));
   const clearSelectedTemplate = () => {
     templateRequest.current++;
@@ -343,10 +346,11 @@ export default function NodeDialog({ initial, templateId }: { initial: NodeForm;
                     />
                   </Field>
                   {!externalNode && <Field label="节点出口">
-                    <select aria-label="节点出口" value={nodeForm.outboundMode || "inherit"} onChange={(e) => setNodeForm({ ...nodeForm, outboundMode: e.target.value as Node["outboundMode"], outboundInterface: "" })}>
+                    <select aria-label="节点出口" value={nodeForm.outboundMode || "inherit"} onChange={(e) => setNodeForm({ ...nodeForm, outboundMode: e.target.value as Node["outboundMode"], outboundInterface: "", outboundNodeId: "" })}>
                       <option value="inherit">继承服务器（{servers.find((s) => s.id === nodeForm.serverId)?.outboundInterface || "系统路由"}）</option>
                       <option value="system">使用系统路由</option>
                       <option value="interface">指定出口网卡</option>
+                      <option value="socks5" disabled={socksOutboundUnsupported && initial.outboundMode !== "socks5"}>经外部 SOCKS5 节点{socksOutboundUnsupported ? "（需 Agent 0.6.26）" : ""}</option>
                     </select>
                     <small>仅影响此节点的 sing-box 流量及 ShadowTLS 握手，不改变 Agent 或端口转发的出口。</small>
                   </Field>}
@@ -355,6 +359,13 @@ export default function NodeDialog({ initial, templateId }: { initial: NodeForm;
                     <button type="button" className="ghost" disabled={domainBlockUnsupported} onClick={() => setNodeForm({ ...nodeForm, blockedDomains: [...new Set([...(nodeForm.blockedDomains || []).filter((item) => item.trim()), ...googleBlockedDomains])] })}>添加 Google / YouTube 列表</button>
                     {topLevelBlocks.length > 0 && <small className="dangerText">{topLevelBlocks.join("、")} 是顶级后缀，会拦截其下所有域名。</small>}
                     <small>{domainBlockUnsupported ? initial.blockedDomains?.length ? "当前 Agent 不支持拦截，这台服务器的配置会暂停下发。升级 Agent 至 0.6.24，或清空列表后保存。" : "请先将该服务器的 Agent 升级至 0.6.24。" : "修改后 sing-box 会重启，这台服务器上的连接中断数秒。开启后此节点的新连接需先识别域名，服务器先发数据的协议（如 SSH）最多延迟约 300 毫秒。只能拦截连接时能识别出域名的流量：直连 IP 的流量不受影响。"}</small>
+                  </Field>}
+                  {!externalNode && nodeForm.outboundMode === "socks5" && <Field label="出口 SOCKS5 节点 *">
+                    <select required aria-label="出口 SOCKS5 节点" value={nodeForm.outboundNodeId || ""} onChange={(e) => setNodeForm({ ...nodeForm, outboundNodeId: e.target.value })}>
+                      <option value="">请选择</option>
+                      {upstreamNodes.map((n) => <option key={n.id} value={n.id} disabled={!n.enabled}>{n.name} · {servers.find((s) => s.id === n.serverId)?.name}{n.enabled ? "" : "（已停用）"}</option>)}
+                    </select>
+                    <small>{upstreamNodes.length ? "客户端连接此节点，访问的网站看到的是 SOCKS5 的出口 IP。sing-box 从这台服务器连接 SOCKS5，需确认卖家允许这台服务器的 IP 访问。UDP 是否可用取决于卖家的 SOCKS5 是否支持 UDP。" : "还没有可选的 SOCKS5：先新建“外部节点”服务器，在其中添加卖家提供的 SOCKS5 节点。"}{socksOutboundUnsupported ? " 当前 Agent 不支持，这台服务器的配置会暂停下发，请升级至 0.6.26。" : ""}</small>
                   </Field>}
                   {!externalNode && nodeForm.outboundMode === "interface" && <Field label="出口网卡 *">
                     <input required maxLength={15} placeholder="例如 ppp0、eth0" value={nodeForm.outboundInterface || ""} onChange={(e) => setNodeForm({ ...nodeForm, outboundInterface: e.target.value })} />

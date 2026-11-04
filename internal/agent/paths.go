@@ -64,6 +64,7 @@ type HostStatus struct {
 	MultiUserStats        bool `json:"multiUserStats"`
 	NodeFirewallPolicies  bool `json:"nodeFirewallPolicies"`
 	NodeDomainBlock       bool `json:"nodeDomainBlock"`
+	NodeSOCKSOutbound     bool `json:"nodeSocksOutbound"`
 	CoreSelfUpdate        bool `json:"coreSelfUpdate"`
 	ReleaseKeyPinned      bool `json:"releaseKeyPinned"`
 }
