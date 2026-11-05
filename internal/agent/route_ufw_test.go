@@ -181,3 +181,30 @@ func TestRouteUFWAllSourcesDoNotCollideWithDenyGuards(t *testing.T) {
 		})
 	}
 }
+
+func TestRouteUFWCustomAllowPrecedesChainDeny(t *testing.T) {
+	state := shared.DesiredState{
+		Forwards: []shared.ForwardRule{{ID: "entry", RouteID: "route", Network: "tcp", Port: 52769, Enabled: true, FirewallPolicy: "restricted", FirewallSources: "198.176.52.66"}},
+		Rules: []shared.FirewallRule{
+			{ID: "custom1", PortFrom: 52769, PortTo: 52769, Network: "tcp", Source: "216.236.63.249", Action: "allow", Owner: "custom"},
+			{ID: "custom2", PortFrom: 52769, PortTo: 52769, Network: "tcp", Source: "198.176.52.66/32", Action: "allow", Owner: "custom"},
+			{ID: "custom3", PortFrom: 52000, PortTo: 53000, Network: "tcp", Source: "203.0.113.5", Action: "allow", Owner: "custom"},
+		},
+	}
+	rules := routeUFWRules(state)
+	var sources []string
+	for _, r := range rules {
+		sources = append(sources, r.Action+":"+r.Source)
+	}
+	if got := strings.Join(sources, ","); got != "allow:216.236.63.249,allow:198.176.52.66/32,deny:" && got != "allow:198.176.52.66,allow:216.236.63.249,deny:" && got != "allow:216.236.63.249,allow:198.176.52.66,deny:" {
+		t.Fatalf("custom allow must precede the guard once, ranges stay behind it: %s", got)
+	}
+	for _, r := range baseUFWRules(state) {
+		if r.ID == "custom1" || r.ID == "custom2" {
+			t.Fatal("custom allow also added after the guard", r)
+		}
+	}
+	if !routeUFWAtHead(routeUFWStatus(rules, true), rules, true) {
+		t.Fatal("priority prefix with custom allow not recognised")
+	}
+}

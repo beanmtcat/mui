@@ -83,7 +83,7 @@ func main() {
 	serverHTTP := &http.Server{Addr: address, Handler: api, ReadHeaderTimeout: 10 * time.Second,
 		// Request bodies are small JSON documents. There is deliberately no write
 		// timeout: agents download a 100 MB core over whatever link they have.
-		ReadTimeout: time.Minute, IdleTimeout: 2 * time.Minute}
+		ReadTimeout: time.Minute, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: 1 << 20}
 	cert, key := os.Getenv("MUI_TLS_CERT"), os.Getenv("MUI_TLS_KEY")
 	if (cert == "") != (key == "") {
 		log.Fatal("MUI_TLS_CERT and MUI_TLS_KEY must be set together")

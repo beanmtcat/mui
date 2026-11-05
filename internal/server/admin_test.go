@@ -101,6 +101,9 @@ func (p *testMui) do(method, path string, body any, headers map[string]string) (
 	if p.cookie != nil {
 		req.AddCookie(p.cookie)
 	}
+	if strings.HasPrefix(req.URL.Path, "/api/") {
+		req.Header.Set("X-Requested-With", "XMLHttpRequest") // as the panel page sends it
+	}
 	for k, v := range headers {
 		if k == "RemoteAddr" {
 			req.RemoteAddr = v

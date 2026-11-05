@@ -863,17 +863,24 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) 
 // signature covers the state with the Signature field cleared, so the panel
 // signs exactly what the helper verifies. The signature itself is base64,
 // the same encoding the release manifest signatures use. Unsigned states
-// are still accepted while panels roll out signing, and a signature without
-// a pinned panel key is accepted as well; both cases log a warning so the
-// gap is visible instead of silent.
+// are accepted only on hosts with no pinned panel key (installed before
+// key pinning existed), and a signature without a pinned key is accepted
+// with a warning so the gap is visible instead of silent.
 func verifyDesiredSignature(state shared.DesiredState, raw []byte) error {
 	panelKey, err := panelPublicKey()
 	if err != nil {
 		return err
 	}
+	return verifyDesiredSignatureWith(panelKey, state, raw)
+}
+
+func verifyDesiredSignatureWith(panelKey ed25519.PublicKey, state shared.DesiredState, raw []byte) error {
 	if state.Signature == "" {
+		// Once a panel key is pinned, an unsigned state is a stripped or forged
+		// one: the panel signs every state it sends. Refuse it, or anything
+		// that can reach the helper socket could rewrite the firewall as root.
 		if panelKey != nil {
-			fmt.Fprintln(os.Stderr, "warning: desired state is not signed, but a panel public key is pinned; accepting for compatibility")
+			return errors.New("desired state is not signed, but a panel public key is pinned; refusing it")
 		}
 		return nil
 	}

@@ -31,6 +31,7 @@ func TestServerPatchPreservesConcurrentAgentReport(t *testing.T) {
 	}
 	req := httptest.NewRequest("PATCH", "/api/servers/"+id, body)
 	req.AddCookie(p.cookie)
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
 	rec := httptest.NewRecorder()
 	patchDone := make(chan struct{})
 	go func() { defer close(patchDone); p.handler.ServeHTTP(rec, req) }()

@@ -47,6 +47,18 @@ func routeUFWPorts(state shared.DesiredState) map[portProto]bool {
 	return ports
 }
 
+// routePriorityAllow reports whether an allow must sit before a chain port's
+// catch-all deny. Besides node and forward sources, this includes the panel's
+// custom allows for exactly that port: placed after the deny, UFW would never
+// reach them. Custom port ranges stay behind the guard, so a broad range cannot
+// silently open a restricted chain port.
+func routePriorityAllow(ports map[portProto]bool, rule shared.FirewallRule) bool {
+	if !ports[portProto{rule.PortFrom, rule.Network}] || rule.PortFrom != rule.PortTo || rule.Action != "allow" {
+		return false
+	}
+	return rule.Owner == "node" || rule.Owner == "forward" || rule.Owner == "custom"
+}
+
 func routeUFWApp(rule shared.FirewallRule) string {
 	return fmt.Sprintf("MUI-Chain-%s-%d", rule.Network, rule.PortFrom)
 }
@@ -55,7 +67,7 @@ func baseUFWRules(state shared.DesiredState) []shared.FirewallRule {
 	ports := routeUFWPorts(state)
 	var out []shared.FirewallRule
 	for _, rule := range ownedRules(state) {
-		if ports[portProto{rule.PortFrom, rule.Network}] && rule.PortFrom == rule.PortTo && (rule.Owner == "node" || rule.Owner == "forward") {
+		if routePriorityAllow(ports, rule) {
 			continue // Supplied by the priority profile; do not adopt a foreign duplicate.
 		}
 		out = append(out, rule)
@@ -74,7 +86,7 @@ func routeUFWRules(state shared.DesiredState) []shared.FirewallRule {
 	allows := map[portProto][]shared.FirewallRule{}
 	for _, rule := range ownedRules(state) {
 		pp := portProto{rule.PortFrom, rule.Network}
-		if !ports[pp] || rule.PortFrom != rule.PortTo || rule.Action != "allow" || (rule.Owner != "node" && rule.Owner != "forward") {
+		if !routePriorityAllow(ports, rule) {
 			continue
 		}
 		rule.ID = routeUFWPrefix + rule.ID
@@ -96,11 +108,15 @@ func routeUFWRules(state shared.DesiredState) []shared.FirewallRule {
 		seen := map[string]bool{}
 		open4, open6 := false, false
 		for _, r := range allows[pp] {
+			// Compare normalized sources: a node's 192.0.2.1 and a custom
+			// 192.0.2.1/32 are one UFW tuple, and UFW would skip the second
+			// prepend so the priority check could never pass.
 			key := r.Source + "/" + r.Family
-			if seen[key] {
+			if dup := hostPrefix(r.Source) + "/" + r.Family; seen[dup] {
 				continue
+			} else {
+				seen[dup] = true
 			}
-			seen[key] = true
 			if normalizedUFWSource(r.Source) == "any" {
 				open4 = open4 || routeUFWFamily(r, false)
 				open6 = open6 || routeUFWFamily(r, true)
@@ -123,6 +139,15 @@ func routeUFWRules(state shared.DesiredState) []shared.FirewallRule {
 		}
 	}
 	return rules
+}
+
+// hostPrefix writes a plain address as its single-host prefix; anything else
+// is returned as is, so 0.0.0.0/0 and ::/0 stay distinct.
+func hostPrefix(source string) string {
+	if addr, err := netip.ParseAddr(source); err == nil {
+		return netip.PrefixFrom(addr, addr.BitLen()).String()
+	}
+	return source
 }
 
 func routeUFWFamily(rule shared.FirewallRule, v6 bool) bool {

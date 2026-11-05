@@ -21,6 +21,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -56,17 +57,23 @@ type App struct {
 	// mu serialises mutating admin requests. Agent traffic uses per-server
 	// locks instead (see lockServer), so one slow agent report no longer
 	// blocks every admin write and every other agent.
-	mu     sync.Mutex
-	rateMu sync.Mutex
-	rates  map[string]rateBucket
+	mu        sync.Mutex
+	rateMu    sync.Mutex
+	rates     map[string]rateBucket
+	ratePurge time.Time
+	// logins bounds concurrent password checks: bcrypt is deliberately slow,
+	// and a flood of attempts must not take every CPU.
+	logins chan struct{}
 	// serverLocks serialises server edits, agent reports and queueApply for one
 	// server. Admin writes also keep the global mu.
 	serverLocksMu sync.Mutex
 	serverLocks   map[string]*sync.Mutex
-	// nonces remembers agent request nonces for replay detection.
-	nonceMu sync.Mutex
-	nonces  map[string]time.Time
-	trusted []*net.IPNet
+	// nonces remembers agent request nonces for replay detection, per
+	// server, so one compromised Agent cannot fill the table for the others.
+	nonceMu    sync.Mutex
+	nonces     map[string]map[string]time.Time
+	noncePurge time.Time
+	trusted    []*net.IPNet
 	// downloads bounds how many release binaries are being sent at once.
 	downloads chan struct{}
 	// downloadsByIP bounds concurrent downloads per client address.
@@ -120,7 +127,7 @@ func NewApp(s *Store, publicURL string) (*App, error) {
 	if binDir == "" {
 		binDir = "bin"
 	}
-	app := &App{Store: s, PublicURL: publicURLs[0].String(), publicURLs: publicURLs, agentBinDir: binDir, rates: map[string]rateBucket{}, downloads: make(chan struct{}, 4), serverLocks: map[string]*sync.Mutex{}, nonces: map[string]time.Time{}, downloadsByIP: map[string]int{}}
+	app := &App{Store: s, PublicURL: publicURLs[0].String(), publicURLs: publicURLs, agentBinDir: binDir, rates: map[string]rateBucket{}, logins: make(chan struct{}, 4), downloads: make(chan struct{}, 4), serverLocks: map[string]*sync.Mutex{}, nonces: map[string]map[string]time.Time{}, downloadsByIP: map[string]int{}}
 	if version := strings.TrimSpace(os.Getenv("MUI_AGENT_RELEASE_VERSION")); version != "" {
 		if _, err := shared.GitHubReleaseArchive(version, "amd64"); err != nil {
 			return nil, fmt.Errorf("MUI_AGENT_RELEASE_VERSION: %w", err)
@@ -289,21 +296,52 @@ func (a *App) verifyAgentSignature(r *http.Request, body []byte, tokenHashHexes 
 	if !matched {
 		return errors.New("agent signature mismatch")
 	}
+	return a.rememberNonce(r.Header.Get("X-Server-ID"), nonce, time.Now())
+}
+
+// A nonce must be remembered as long as its timestamp is accepted (five
+// minutes either way). An Agent sends a few requests a minute, so a server
+// at its quota is replaying or flooding; only that server is refused.
+const (
+	nonceTTL       = 10 * time.Minute
+	noncesPerAgent = 2048
+)
+
+func (a *App) rememberNonce(serverID, nonce string, now time.Time) error {
 	a.nonceMu.Lock()
 	defer a.nonceMu.Unlock()
-	now := time.Now()
-	for k, t := range a.nonces {
-		if now.Sub(t) > 10*time.Minute {
-			delete(a.nonces, k)
+	expire := func(seen map[string]time.Time) {
+		for k, t := range seen {
+			if now.Sub(t) > nonceTTL {
+				delete(seen, k)
+			}
 		}
 	}
-	if _, used := a.nonces[nonce]; used {
+	// Sweeping everything on every request would cost a full scan under the
+	// lock; once a minute keeps the table to about one TTL of traffic.
+	if now.Sub(a.noncePurge) > time.Minute {
+		a.noncePurge = now
+		for id, seen := range a.nonces {
+			if expire(seen); len(seen) == 0 {
+				delete(a.nonces, id)
+			}
+		}
+	}
+	seen := a.nonces[serverID]
+	if seen == nil {
+		seen = map[string]time.Time{}
+		a.nonces[serverID] = seen
+	}
+	if t, used := seen[nonce]; used && now.Sub(t) <= nonceTTL {
 		return errors.New("agent nonce replayed")
 	}
-	if len(a.nonces) > 100000 {
-		return errors.New("agent nonce table full")
+	if len(seen) >= noncesPerAgent {
+		expire(seen)
+		if len(seen) >= noncesPerAgent {
+			return errors.New("agent nonce quota exceeded")
+		}
 	}
-	a.nonces[nonce] = now
+	seen[nonce] = now
 	return nil
 }
 
@@ -317,11 +355,30 @@ func abs64(n int64) int64 {
 // rateCount adds `add` events to the client's one-minute bucket for this scope
 // and returns the total. Pass 0 to read without counting.
 func (a *App) rateCount(r *http.Request, scope string, add int) int {
-	key := scope + ":" + a.clientIP(r)
+	key := scope + ":" + rateKey(a.clientIP(r))
 	a.rateMu.Lock()
 	defer a.rateMu.Unlock()
 	now := time.Now()
-	bucket := a.rates[key]
+	bucket, known := a.rates[key]
+	if !known && len(a.rates) >= maxRateBuckets {
+		// Sweep expired buckets at most once a second, not on every request.
+		if now.Sub(a.ratePurge) > time.Second {
+			a.ratePurge = now
+			for k, v := range a.rates {
+				if now.After(v.Reset) {
+					delete(a.rates, k)
+				}
+			}
+		}
+		// Still full of live buckets: many addresses within one minute.
+		// They share one bucket per scope, so the table stops growing and
+		// the flood is limited as a whole instead of getting a fresh
+		// allowance for every new address.
+		if len(a.rates) >= maxRateBuckets {
+			key = scope + ":overflow"
+			bucket = a.rates[key]
+		}
+	}
 	if now.After(bucket.Reset) {
 		bucket = rateBucket{Reset: now.Add(time.Minute)}
 	}
@@ -329,14 +386,19 @@ func (a *App) rateCount(r *http.Request, scope string, add int) int {
 	if add > 0 {
 		a.rates[key] = bucket
 	}
-	if len(a.rates) > 10000 {
-		for k, v := range a.rates {
-			if now.After(v.Reset) {
-				delete(a.rates, k)
-			}
-		}
-	}
 	return bucket.Count
+}
+
+const maxRateBuckets = 10000
+
+// rateKey groups an IPv6 client by its /64: one host is usually given a
+// whole /64 and could otherwise rotate addresses to get fresh allowances.
+func rateKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || !addr.Is6() || addr.Is4In6() {
+		return ip
+	}
+	return netip.PrefixFrom(addr, 64).Masked().String()
 }
 
 func (a *App) Handler() http.Handler {
@@ -595,6 +657,20 @@ func (a *App) SecurityHeaders(next http.Handler) http.Handler {
 					return
 				}
 			}
+			if strings.HasPrefix(r.URL.Path, "/api/") {
+				// The panel's own page sends this custom header, which a form
+				// on another site cannot set. Sec-Fetch-Site also catches a
+				// sibling subdomain, which counts as same-site and therefore
+				// still receives the SameSite=Strict session cookie.
+				if r.Header.Get("X-Requested-With") != "XMLHttpRequest" {
+					errorJSON(w, 403, "missing X-Requested-With header")
+					return
+				}
+				if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+					errorJSON(w, 403, "cross-site request refused")
+					return
+				}
+			}
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -762,6 +838,10 @@ func (a *App) require(next http.HandlerFunc) http.HandlerFunc {
 		next(w, r)
 	}
 }
+
+// maxAgentBody matches readJSON's limit, which the Agent handlers use next.
+const maxAgentBody = 2 << 20
+
 func (a *App) agentAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.Header.Get("X-Server-ID")
@@ -794,8 +874,15 @@ func (a *App) agentAuth(next http.HandlerFunc) http.HandlerFunc {
 		// it to sign) instead of looking offline. After its first signed
 		// request, unsigned ones are refused, so a stripped signature cannot
 		// downgrade it.
-		body, err := io.ReadAll(r.Body)
+		// The signature covers the body, so it is read whole before the
+		// handler's own JSON limit applies; bound it here as well.
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxAgentBody))
 		if err != nil {
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				errorJSON(w, http.StatusRequestEntityTooLarge, "request body too large")
+				return
+			}
 			errorJSON(w, 400, "cannot read request body")
 			return
 		}
@@ -858,7 +945,17 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, "admin unavailable")
 		return
 	}
-	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Password)) != nil {
+	select {
+	case a.logins <- struct{}{}:
+	case <-time.After(5 * time.Second):
+		errorJSON(w, 429, "登录请求过多，请稍后再试")
+		return
+	case <-r.Context().Done():
+		return
+	}
+	passwordErr := bcrypt.CompareHashAndPassword([]byte(hash), []byte(in.Password))
+	<-a.logins
+	if passwordErr != nil {
 		a.rateCount(r, "login", 1)
 		errorJSON(w, 401, "密码或验证码错误")
 		return

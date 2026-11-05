@@ -237,6 +237,11 @@ func checkStatsListenerFallback(uids map[string]bool) error {
 		if _, err := strconv.Atoi(entry.Name()); err != nil {
 			continue
 		}
+		// Any user can start a process whose arguments mention sing-box;
+		// only one running as the core user counts.
+		if info, err := os.Stat(filepath.Join("/proc", entry.Name())); err != nil || fileOwnerUID(info) != coreUID {
+			continue
+		}
 		cmdline, err := os.ReadFile(filepath.Join("/proc", entry.Name(), "cmdline"))
 		if err != nil {
 			continue

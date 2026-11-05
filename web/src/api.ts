@@ -237,10 +237,11 @@ export async function api<T>(
   path: string,
   options: RequestInit = {},
 ): Promise<T> {
+  // Spread options first: its own headers must be merged, not replace these.
   const res = await fetch(path, {
+    ...options,
     credentials: "same-origin",
     headers: { "Content-Type": "application/json", ...options.headers },
-    ...options,
   });
   if (res.status === 204) return undefined as T;
   const body = await res.json().catch(() => ({ error: "服务器响应无效" }));

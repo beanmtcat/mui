@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -35,4 +36,13 @@ func commandTimeout(name string, timeout time.Duration, args ...string) (string,
 		return string(out), fmt.Errorf("%s %v: %w: %s", name, args, err, strings.TrimSpace(string(out)))
 	}
 	return string(out), nil
+}
+
+// fileOwnerUID returns the owner of a file as a decimal string, the form
+// /etc/passwd and /proc/net/tcp use, or "" when it is not known.
+func fileOwnerUID(info os.FileInfo) string {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		return strconv.FormatUint(uint64(st.Uid), 10)
+	}
+	return ""
 }

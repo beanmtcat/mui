@@ -77,6 +77,9 @@ func TestServerNodeSubscriptionLifecycle(t *testing.T) {
 			req.Header.Set("X-Agent-Nonce", nonceHex)
 			req.Header.Set("X-Agent-Signature", hex.EncodeToString(mac.Sum(nil)))
 		}
+		if strings.HasPrefix(path, "/api/") {
+			req.Header.Set("X-Requested-With", "XMLHttpRequest")
+		}
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		var out map[string]any
