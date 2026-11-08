@@ -998,78 +998,6 @@ func driftDetected(state shared.DesiredState, hasCore bool) bool {
 	return false
 }
 
-type ufwStatusRule struct {
-	action   string
-	allowAll bool
-	ports    []portProto
-}
-
-// parseUFWStatusRule parses one `ufw status numbered` rule line, e.g.
-// "[ 2] 8000:8010/tcp ALLOW IN Anywhere". An "Anywhere" port spec means
-// the rule opens every port; a spec without "/proto" is treated as both
-// TCP and UDP, matching ufw's own display.
-func parseUFWStatusRule(line string) (ufwStatusRule, bool) {
-	close := strings.Index(line, "]")
-	if close < 0 {
-		return ufwStatusRule{}, false
-	}
-	fields := strings.Fields(line[close+1:])
-	if len(fields) < 2 {
-		return ufwStatusRule{}, false
-	}
-	rule := ufwStatusRule{}
-	for _, field := range fields[1:] {
-		if field == "ALLOW" || field == "DENY" {
-			rule.action = field
-			break
-		}
-	}
-	if rule.action == "" {
-		return ufwStatusRule{}, false
-	}
-	spec := fields[0]
-	if spec == "Anywhere" {
-		rule.allowAll = true
-		return rule, true
-	}
-	proto := ""
-	if i := strings.LastIndex(spec, "/"); i >= 0 {
-		proto = strings.ToLower(spec[i+1:])
-		spec = spec[:i]
-	}
-	protos := []string{"tcp", "udp"}
-	if proto == "tcp" || proto == "udp" {
-		protos = []string{proto}
-	}
-	from, to := 0, 0
-	if i := strings.Index(spec, ":"); i >= 0 {
-		var err error
-		from, err = strconv.Atoi(spec[:i])
-		if err != nil {
-			return ufwStatusRule{}, false
-		}
-		to, err = strconv.Atoi(spec[i+1:])
-		if err != nil {
-			return ufwStatusRule{}, false
-		}
-	} else {
-		port, err := strconv.Atoi(spec)
-		if err != nil {
-			return ufwStatusRule{}, false
-		}
-		from, to = port, port
-	}
-	if from < 1 || to < from || to > 65535 {
-		return ufwStatusRule{}, false
-	}
-	for port := from; port <= to; port++ {
-		for _, p := range protos {
-			rule.ports = append(rule.ports, portProto{port, p})
-		}
-	}
-	return rule, true
-}
-
 // checkManualUFWBypass refuses an apply when a rule UFW does not manage
 // already allows traffic to a port this batch manages. Such a rule sits
 // outside the panel's model: it would silently bypass a deny rule or a
@@ -1122,6 +1050,11 @@ func checkManualUFWBypass(state shared.DesiredState) error {
 		}
 		rule, ok := parseUFWStatusRule(trimmed)
 		if !ok || rule.action != "ALLOW" {
+			continue
+		}
+		// An allow limited to loopback or private sources (e.g. a Docker
+		// bridge subnet) is unreachable from outside and bypasses nothing.
+		if localUFWSource(rule.source) {
 			continue
 		}
 		if rule.allowAll && len(managed) > 0 {
