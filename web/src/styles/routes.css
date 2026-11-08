@@ -1,0 +1,528 @@
+.routeEntryAccess {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  margin-top: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  overflow-wrap: anywhere;
+}
+.hopList {
+  display: grid;
+  gap: 10px;
+  justify-items: start;
+}
+.hop {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 10px;
+}
+.hopHead select {
+  width: auto;
+}
+.hopHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin-bottom: 8px;
+}
+.routeFilters {
+  flex-wrap: wrap;
+  margin: 0;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.routeFilters select {
+  width: auto;
+  min-width: 150px;
+  max-width: 100%;
+}
+.routeTally {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 12px;
+}
+.routeTally .good {
+  color: var(--good);
+}
+.routeTally .bad {
+  color: var(--bad);
+}
+.routeTally .warn {
+  color: var(--warn);
+}
+.tone-good {
+  --tone: var(--good);
+}
+.tone-bad {
+  --tone: var(--bad);
+}
+.tone-pending {
+  --tone: var(--line-strong);
+}
+.tone-off {
+  --tone: var(--line);
+}
+
+/* Route topology map */
+.modal:has(.routeMap) {
+  width: min(1180px, calc(100vw - 32px));
+}
+.routeMap {
+  max-height: min(68vh, 680px);
+  overflow: auto;
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--line) 1px, transparent 1px);
+  background-size: 16px 16px;
+  scrollbar-width: thin;
+}
+.routeMapHint {
+  padding: 9px 20px;
+  border-top: 1px solid var(--line);
+}
+.routeMapCanvas {
+  position: relative;
+  min-width: 100%;
+  margin: 6px 0 10px;
+}
+.routeMapCanvas svg {
+  position: absolute;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+.routeMapColumn {
+  position: absolute;
+  top: 4px;
+  transform: translateX(-50%);
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.routeMapEdge {
+  fill: none;
+  stroke: var(--tone);
+  stroke-linecap: round;
+  transition: opacity 0.15s;
+}
+.routeMapEdge.tone-pending,
+.routeMapEdge.tone-off {
+  stroke-dasharray: 2 5;
+}
+.routeMapEdge.tone-pending {
+  stroke: var(--idle);
+}
+.routeMapEdge.tone-off {
+  stroke: var(--line-strong);
+}
+.routeMapEdge.dim {
+  opacity: 0.14;
+}
+.routeMapEdge.flowing.tone-good {
+  stroke-dasharray: 8 6;
+  animation: routeFlow 0.9s linear infinite;
+}
+@keyframes routeFlow {
+  to {
+    stroke-dashoffset: -14;
+  }
+}
+.routeMapLabel {
+  position: absolute;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--line);
+  color: var(--tone);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.routeMapNode {
+  position: absolute;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  text-align: left;
+  transition:
+    opacity 0.15s,
+    border-color 0.15s;
+}
+.routeMapNode.entry {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.routeMapNode.exit {
+  box-shadow: inset -3px 0 0 var(--ink);
+}
+.routeMapNode:hover,
+.routeMapNode:focus-visible,
+.routeMapNode.selected {
+  border-color: var(--accent);
+}
+.routeMapNode.selected {
+  outline: 1px solid var(--accent);
+}
+.routeMapNode.dim {
+  opacity: 0.35;
+}
+.routeMapNodeName,
+.routeMapNodeMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.routeMapNodeName {
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+}
+.routeMapNodeMeta {
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 13px;
+}
+
+/* Route rows & inline track */
+.routeRow {
+  display: grid;
+  grid-template-columns: minmax(140px, 200px) minmax(0, 1fr);
+  column-gap: 16px;
+  align-items: start;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+  transition: background-color 0.12s;
+}
+.routeRow:last-child {
+  border-bottom: 0;
+}
+.routeRow.disabled .routeRowTitle h3,
+.routeRow.disabled .routeStopName {
+  color: var(--muted);
+}
+.routeRowIdentity {
+  min-width: 0;
+}
+.routeRowIdentity .routeEntryAccess {
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--muted);
+}
+.routeRowTitle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 3px 8px;
+}
+.routeRowTitle h3 {
+  margin: 0;
+  min-width: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.routeRowMeta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 10px;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.routeRowNotes {
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.routeRowError {
+  grid-column: 1 / -1;
+  margin-top: 8px;
+  color: var(--bad);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.routeRowActions {
+  justify-content: flex-start;
+  gap: 14px;
+  margin-top: 6px;
+}
+
+.routeTrackViewport {
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.routeTrack {
+  display: flex;
+  align-items: stretch;
+  width: max-content;
+  min-width: 100%;
+}
+.routeStage {
+  position: relative;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  width: 118px;
+}
+.routeStage.exit {
+  width: 148px;
+}
+.routeHost {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  height: 44px;
+  padding: 0 9px;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  text-align: left;
+}
+.routeHost:hover,
+.routeHost:focus-visible {
+  border-color: var(--accent);
+}
+.routeStage.entry .routeHost {
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.routeStage.exit .routeHost {
+  box-shadow: inset -3px 0 0 var(--ink);
+}
+.routeRow.disabled .routeHost {
+  border-color: var(--line);
+  color: var(--muted);
+  box-shadow: none;
+}
+.routeHostName,
+.routeHostAddress {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.routeHostName {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 16px;
+}
+.routeHostName > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.routeHostName small {
+  flex: none;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
+}
+.routeHostAddress {
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 14px;
+  font-variant-numeric: tabular-nums;
+}
+.routeStageTag {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin-top: 1px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 14px;
+  text-align: center;
+}
+.routeStopMissing {
+  color: var(--bad);
+  font-size: 12px;
+  text-align: center;
+}
+.routeFan {
+  position: relative;
+  flex: 1 1 auto;
+}
+.routeFan svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+.routeFanLine {
+  fill: none;
+  stroke: var(--tone);
+  stroke-width: 1.75px;
+}
+.routeFanLine.tone-pending {
+  stroke: var(--idle);
+  stroke-dasharray: 2 5;
+}
+.routeFanLine.tone-off {
+  stroke: var(--line-strong);
+  stroke-dasharray: 2 5;
+}
+.routeFanLabel {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  padding: 0 5px;
+  border-radius: 3px;
+  background: var(--surface);
+  box-shadow: 0 0 0 1px var(--line);
+  color: var(--tone);
+  font-size: 11px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+.routeFanLabel.tone-pending {
+  color: var(--muted);
+}
+.routeFanLabel strong {
+  color: inherit;
+  font-weight: 400;
+}
+.routeFanPair {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .routeRow {
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 6px;
+    padding: 12px;
+  }
+  .routeFilters {
+    padding: 10px 12px;
+  }
+}
+/* A phone reads the line top to bottom, one row for each connection. */
+@media (max-width: 600px) {
+  .routeTrackViewport {
+    overflow: visible;
+  }
+  .routeTrack {
+    flex-direction: column;
+    width: 100%;
+    height: auto !important;
+  }
+  .routeStage,
+  .routeStage.exit {
+    width: 100%;
+    gap: 4px;
+  }
+  .routeStageTag {
+    position: static;
+    margin: 0;
+    text-align: left;
+  }
+  .routeFan {
+    flex: none;
+    min-width: 0 !important;
+    margin-left: 12px;
+    padding: 5px 0 5px 12px;
+    border-left: 2px solid var(--line-strong);
+  }
+  .routeFan svg {
+    display: none;
+  }
+  .routeFanLabel {
+    position: static;
+    display: block;
+    transform: none;
+    padding: 0;
+    background: none;
+    box-shadow: none;
+    line-height: 18px;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .routeFanPair {
+    display: inline;
+    color: var(--muted);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .routeMapEdge.flowing.tone-good {
+    stroke-dasharray: none;
+    animation: none;
+  }
+}
+
+/* Route connection form settings */
+.routeConnection {
+  min-width: 0;
+  width: 100%;
+  margin: 14px 0 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+.routeConnection legend {
+  max-width: 100%;
+  padding: 0 6px;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.routeConnection .connectionAddress {
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+}
+.routeReceiverChoice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 92px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+}
+.routeReceiverChoice .connectionAddress {
+  margin-top: 0;
+}
+.routeReceiverChoice select {
+  min-width: 0;
+}
+.routeConnection .field {
+  align-content: start;
+}
+.routeSourceSelectors {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 8px;
+}
+@media (max-width: 740px) {
+  .routeSourceSelectors {
+    grid-template-columns: 1fr;
+  }
+}
+.routeConnection .hint {
+  margin-bottom: 0;
+}
+.routeExitTitle {
+  margin: 18px 0 0;
+  font-size: 14px;
+}
+/* The sender's column holds two selects, the receiver's one. */
+@media (min-width: 761px) {
+  .routeConnection .formGrid {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
+}
+

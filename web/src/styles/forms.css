@@ -1,0 +1,596 @@
+/* Command and link output */
+.commandBox {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+  justify-items: start;
+  padding: 12px 16px;
+  border-top: 1px solid var(--line);
+}
+.commandBox > * {
+  min-width: 0;
+  max-width: 100%;
+}
+.commandBox > div {
+  width: 100%;
+}
+.commandBox > div span {
+  margin-left: 10px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.commandBox code,
+.commandBox pre,
+.totpBox code {
+  display: block;
+  width: 100%;
+  max-height: 320px;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 4px;
+  background: var(--code-bg);
+  overflow-wrap: anywhere;
+}
+.commandBox pre {
+  white-space: pre;
+}
+form .commandBox {
+  margin-top: 16px;
+  padding: 12px 0 0;
+}
+
+/* Forms */
+input,
+select,
+textarea {
+  width: 100%;
+  padding: 6px 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+}
+textarea {
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+input[type="checkbox"] {
+  width: auto;
+  margin: 0;
+}
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px 16px;
+}
+.formGrid > .hint {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.field,
+.loginCard label {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.formGrid .field {
+  margin-bottom: 0;
+}
+.field input,
+.field select,
+.field textarea,
+.loginCard input {
+  font-size: 14px;
+  color: var(--text);
+}
+.fieldLabelRow,
+.serverToggleRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.helpTip {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  color: var(--muted);
+}
+.helpTipButton {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.helpTipButton:hover,
+.helpTipButton[aria-expanded="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.helpTipWarning {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+.helpTipButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.helpTipPanel {
+  position: fixed;
+  z-index: 30;
+  width: 320px;
+  max-width: min(320px, calc(100vw - 48px));
+  max-height: min(60vh, 440px);
+  overflow-y: auto;
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  box-shadow: 0 6px 22px rgb(0 0 0 / 14%);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.6;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+.nodeSingleUserRow {
+  grid-column: 1 / -1;
+}
+.check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  color: var(--text);
+}
+.check small {
+  color: var(--muted);
+}
+.checkRow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.nodePicker {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  padding: 10px 12px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.hint {
+  margin-top: 12px;
+}
+.submit {
+  margin-top: 16px;
+}
+
+/* Folded form sections */
+.advanced {
+  margin-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.advanced > summary {
+  padding: 12px 0 0;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.advancedBody {
+  padding-top: 12px;
+}
+
+/* ItemPicker */
+.itemPicker {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.itemPickerRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.chipIssue {
+  border-color: var(--warn);
+}
+.pickerText {
+  display: grid;
+  min-width: 0;
+}
+.pickerText small {
+  color: var(--muted);
+}
+.itemPicker .routeChoiceIssue {
+  display: block;
+  font-size: 12px;
+  color: var(--warn);
+}
+.serverChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--code-bg);
+}
+.serverChip button {
+  width: 18px;
+  height: 18px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  line-height: 1;
+}
+.pickerPanel {
+  position: fixed;
+  z-index: 15;
+  display: grid;
+  gap: 2px;
+  align-content: start;
+  padding: 8px 10px;
+  overflow-y: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 8px 28px rgb(0 0 0 / 18%);
+}
+.pickerPanel .check {
+  padding: 3px 0;
+  align-items: flex-start;
+}
+.pickerCompact .check {
+  align-items: center;
+}
+.pickerCompact .pickerText {
+  flex: 1;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+/* Dialogs */
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10;
+  display: grid;
+  place-items: start center;
+  padding: 8vh 16px 16px;
+  overflow: auto;
+  background: rgb(0 0 0 / 40%);
+}
+.modal {
+  width: min(640px, 100%);
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.modalHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 12px 20px;
+  border-bottom: 1px solid var(--line);
+}
+.modal > form {
+  padding: 20px;
+}
+.modalFeedback {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--line);
+  box-shadow: 0 2px 6px rgb(0 0 0 / 10%);
+  align-items: start;
+}
+.modalFeedback > span {
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.serverCoreHint p {
+  margin: 0 0 8px;
+}
+.serverCoreHint button + button {
+  margin-left: 8px;
+}
+.serverFormSection + .serverFormSection {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+.serverFormSection h3 {
+  margin: 0 0 12px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.serverForm .formGrid {
+  align-items: start;
+  gap: 14px 16px;
+}
+.serverForm .field {
+  min-width: 0;
+  align-content: start;
+}
+.serverForm .field input,
+.serverForm .field select {
+  height: 36px;
+}
+.serverForm .field textarea {
+  font: inherit;
+  font-size: 14px;
+}
+.serverFormWide {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.serverRoles {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+.serverRoles legend {
+  padding: 0;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.serverRoles legend .fieldLabelRow {
+  display: inline-flex;
+}
+.serverRoles .checkRow {
+  gap: 8px;
+}
+.serverRoles .check {
+  padding: 7px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+}
+.serverFieldHelp {
+  margin-top: 6px;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.serverFieldHelp p + p {
+  margin-top: 4px;
+}
+.serverFormActions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.installModal {
+  width: min(760px, 100%);
+}
+.certificateForm > * + * {
+  margin-top: 16px;
+}
+.certificateFileField {
+  min-width: 0;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.certificateFileField label {
+  display: grid;
+  gap: 8px;
+}
+.certificateFileField input[type="file"] {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  background: var(--surface);
+}
+.certificateFileField > * + * {
+  margin-top: 8px;
+}
+.certificateFileField details summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.certificateFileField details > textarea,
+.certificateFileField details > div {
+  margin-top: 8px;
+}
+.certificateFileReady {
+  color: var(--good);
+  font-size: 12px;
+}
+.installModal > .managementMigration {
+  margin: 20px;
+}
+.installModal .installCommand {
+  display: block;
+  min-width: 0;
+  width: 100%;
+  max-width: 100%;
+  max-height: 320px;
+  margin: 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.65;
+  white-space: pre;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.installModal .commandBox {
+  padding: 20px;
+  border-top: 0;
+}
+.installModal .commandBox pre {
+  white-space: pre-wrap;
+}
+.installModal .hint {
+  margin: 0;
+}
+.installMethods {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 16px 20px 0;
+}
+.installMethods button {
+  padding: 6px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface);
+}
+.installMethods button[aria-pressed="true"] {
+  color: var(--ink-text);
+  border-color: var(--ink);
+  background: var(--ink);
+}
+.offlineInstall {
+  display: grid;
+  gap: 20px;
+  padding: 20px;
+  min-width: 0;
+}
+.installStep {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.installStep + .installStep {
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.installStep h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.installStep .field {
+  margin-bottom: 0;
+}
+.installStep > button {
+  justify-self: start;
+}
+.installDownloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.installDownloads a {
+  padding: 5px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  color: var(--accent);
+  overflow-wrap: anywhere;
+}
+.offlineInstall .commandBox {
+  padding: 0;
+  border: 0;
+}
+.confirmationOverlay {
+  z-index: 20;
+}
+.confirmModal {
+  width: min(440px, 100%);
+}
+.confirmMessage {
+  padding: 20px 20px 8px;
+  white-space: pre-line;
+}
+.confirmActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 20px 20px;
+}
+.offlineManager .offlineStep {
+  min-width: 0;
+}
+.offlineManager .offlineStep + .offlineStep {
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+}
+.offlineManager .offlineStep h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.offlineManager .offlineStep > * + * {
+  margin-top: 12px;
+}
+.offlineManager textarea {
+  display: block;
+  width: 100%;
+  font-family: var(--mono, monospace);
+}
+.offlineManager select {
+  max-width: 180px;
+}
+.offlineManager .offlineStep > button + button {
+  margin-left: 10px;
+}
+.agentDownloadList {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.agentDownloadRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  min-width: 0;
+}
+.agentDownloadRow strong,
+.agentDownloadRow small {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.agentDownloadRow small {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.agentDownloadRow a {
+  color: var(--accent);
+  white-space: nowrap;
+}
+.agentDownloadRow > .hint {
+  max-width: 45%;
+  text-align: right;
+}
+
+@media (max-width: 760px) {
+  .formGrid {
+    grid-template-columns: 1fr;
+  }
+}
+

@@ -1,0 +1,453 @@
+/* Sections and tables */
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+}
+.panel + .panel {
+  margin-top: 20px;
+}
+.panelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.panelHead p,
+.settings p,
+.hint {
+  font-size: 12px;
+  color: var(--muted);
+}
+.panelHead .headerActions,
+.offlineInstall .headerActions {
+  flex-wrap: wrap;
+}
+.tableWrap {
+  overflow-x: auto;
+}
+.serverListTable th,
+.serverListTable td {
+  padding: 10px 8px;
+  vertical-align: middle;
+}
+.serverListTable td {
+  line-height: 1.5;
+}
+.serverListTable .serverListLink {
+  display: block;
+  width: 100%;
+  text-align: left;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.serverCountry {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: nowrap;
+}
+.serverFlag {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 16px;
+  line-height: 1;
+}
+.serverListTable td small {
+  overflow: hidden;
+  max-width: 170px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.serverNameLine,
+.serverAgentLine {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.serverNameLine strong {
+  overflow: hidden;
+  max-width: 180px;
+  text-overflow: ellipsis;
+}
+.serverAddress {
+  display: inline-block;
+  overflow: hidden;
+  max-width: 180px;
+  vertical-align: middle;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.serverListTable td.mono .helpTip {
+  margin-left: 6px;
+}
+.serverTraffic {
+  white-space: nowrap;
+  font-size: 12px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+th,
+td {
+  padding: 9px 16px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid var(--line);
+}
+th {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--muted);
+  white-space: nowrap;
+}
+tbody tr:last-child td {
+  border-bottom: 0;
+}
+td strong {
+  font-weight: 600;
+}
+td small,
+.listRow small,
+.settingRow small {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+td small.dangerText {
+  max-width: 280px;
+  color: var(--bad);
+}
+.errorCell {
+  max-width: 360px;
+  font-size: 12px;
+  color: var(--bad);
+  overflow-wrap: anywhere;
+}
+.empty {
+  padding: 28px 16px;
+  text-align: center;
+  color: var(--muted);
+}
+.listRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.listRow:last-child {
+  border-bottom: 0;
+}
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+.listRow strong {
+  font-weight: 500;
+}
+.filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.serverFilters {
+  flex-wrap: wrap;
+}
+.forwardFilters {
+  flex-wrap: wrap;
+}
+.forwardFilters input,
+.forwardFilters select {
+  max-width: 100%;
+  min-width: 0;
+}
+.forwardFilters .hint {
+  margin: 0;
+  white-space: nowrap;
+}
+main > .filters {
+  padding: 0 0 14px;
+  border: 0;
+}
+.filters select {
+  width: auto;
+  min-width: 150px;
+}
+.filters input {
+  width: 260px;
+}
+.panel > pre {
+  max-height: 320px;
+  margin: 0;
+  padding: 12px 16px;
+  overflow: auto;
+  white-space: pre;
+}
+
+/* Status and tags */
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.status::before {
+  content: "";
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.status.good {
+  color: var(--good);
+}
+.status.bad {
+  color: var(--bad);
+}
+.status.warn {
+  color: var(--warn);
+}
+.status.idle {
+  color: var(--idle);
+}
+.chip {
+  padding: 1px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  font-size: 12px;
+}
+.chip.red {
+  border-color: var(--bad);
+  color: var(--bad);
+}
+
+/* Row action menu */
+.actionMenu > button::after {
+  content: " ▾";
+}
+.menuList {
+  position: fixed;
+  z-index: 5;
+  display: grid;
+  min-width: 176px;
+  max-width: 280px;
+  padding: 4px;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 14%);
+}
+.menuList button,
+.actions .menuList button,
+td .menuList button {
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: var(--text);
+  text-align: left;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.menuList button:hover:not(:disabled),
+.menuList button:focus-visible {
+  background: var(--line);
+  text-decoration: none;
+}
+.menuList button.dangerText,
+.actions .menuList button.dangerText {
+  color: var(--bad);
+}
+.menuList button:disabled {
+  color: var(--idle);
+}
+
+/* Pager and date range */
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 12px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+}
+.pager .hint {
+  margin: 0;
+}
+.pager .pages {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.pager .pages button {
+  min-width: 34px;
+}
+.pager select {
+  width: auto;
+}
+.dateRange {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.dateRange input {
+  width: auto;
+}
+.dateRange .hint {
+  margin: 0;
+}
+
+/* Sortable headings and row links */
+.sortButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+}
+.sortButton:hover {
+  color: var(--text);
+}
+.rowLink {
+  padding: 0;
+  text-align: left;
+  white-space: normal;
+}
+.selectCell {
+  width: 32px;
+}
+.selectCell input {
+  width: auto;
+  margin: 0;
+}
+
+/* Batch actions */
+.batchBar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-block: 1px solid var(--line);
+  background: var(--surface);
+}
+.batchBar strong {
+  margin-right: 8px;
+}
+.batchResult {
+  display: grid;
+  gap: 12px;
+  padding: 20px;
+}
+.batchResult p {
+  margin: 0;
+}
+.batchResult progress {
+  width: 100%;
+}
+.batchResult > button {
+  justify-self: end;
+}
+.batchFailures {
+  max-height: 240px;
+  margin: 0;
+  padding-left: 18px;
+  overflow: auto;
+  color: var(--bad);
+}
+.firewallControls {
+  border: 0;
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+}
+
+/* The actions stay reachable while a wide table scrolls sideways. */
+@media (min-width: 761px) {
+  .cardTable th:last-child,
+  .cardTable td:last-child {
+    position: sticky;
+    right: 0;
+    background: var(--surface);
+    box-shadow: -1px 0 0 var(--line);
+  }
+  /* Sticky cells stack by row, so an open menu must lift its own cell. */
+  .cardTable td:last-child:has(.menuList) {
+    z-index: 6;
+  }
+}
+
+/* Narrow screens: rows as labelled cards */
+@media (max-width: 760px) {
+  .cardTable table,
+  .cardTable tbody,
+  .cardTable tr {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .cardTable thead tr {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px 12px;
+    padding: 8px 16px;
+  }
+  .cardTable thead th {
+    padding: 0;
+    border: 0;
+    white-space: nowrap;
+  }
+  /* Only what acts on the whole table survives from the header. */
+  .cardTable thead th:not(:has(button, input)) {
+    display: none;
+  }
+  .cardTable tbody tr {
+    padding: 8px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  .cardTable tbody td {
+    display: grid;
+    grid-template-columns: 96px minmax(0, 1fr);
+    gap: 8px;
+    padding: 4px 0;
+    border: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .cardTable tbody td > * {
+    grid-column: 2;
+  }
+  .cardTable tbody td::before {
+    content: attr(data-label);
+    grid-row: 1 / span 4;
+    grid-column: 1;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .cardTable tbody td:empty {
+    display: none;
+  }
+  .cardTable td.selectCell {
+    display: block;
+  }
+  .cardTable td.selectCell::before {
+    content: none;
+  }
+  .batchBar {
+    top: 58px;
+  }
+}
+

@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useState } from "react";
 import { api, mutation } from "../api";
 import { useApp } from "../app/context";
+import { setError } from "../app/feedback";
 import { MemoMaskedValue as MaskedValue } from "../components/secrets";
 
 const QRCode = lazy(() => import("../components/QRCode"));
@@ -8,13 +9,17 @@ const QRCode = lazy(() => import("../components/QRCode"));
 type SurgeProfile = { template: string; custom: boolean; defaultTemplate: string };
 
 export default function Settings() {
-  const { totpEnabled, setTotpEnabled, komariEndpoint, setKomariEndpoint, expiring, act, copy, protect } = useApp();
-  const [passwordForm, setPasswordForm] = useState({ current: "", next: "" }),
+  const { totpEnabled, setTotpEnabled, refreshTick, expiring, act, copy, protect } = useApp();
+  const [komariEndpoint, setKomariEndpoint] = useState(""),
+    [passwordForm, setPasswordForm] = useState({ current: "", next: "" }),
     [totpOff, setTotpOff] = useState({ password: "", code: "" }),
     [code, setCode] = useState(""),
     [totpSetup, setTotpSetup] = useState<{ secret: string; uri: string } | null>(null),
     [surge, setSurge] = useState<SurgeProfile | null>(null),
     [surgeText, setSurgeText] = useState("");
+  useEffect(() => {
+    api<{ endpoint: string }>("/api/settings/komari").then((v) => setKomariEndpoint(v.endpoint)).catch((e) => setError((e as Error).message));
+  }, [refreshTick]);
   useEffect(() => {
     api<SurgeProfile>("/api/settings/surge-profile").then((v) => { setSurge(v); setSurgeText(v.template); }, () => undefined);
   }, []);

@@ -1,0 +1,361 @@
+/* Server geography and route topology. The map data is bundled locally. */
+.globePage {
+  overflow: hidden;
+}
+.globeCounts {
+  color: var(--muted);
+  white-space: nowrap;
+}
+.globeCounts strong {
+  color: var(--text);
+  font-size: 18px;
+}
+.globeCounts span {
+  padding: 0 7px;
+}
+.globeToolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.globeToolbar select {
+  width: auto;
+  min-width: 150px;
+  max-width: 250px;
+}
+.globeToolbar .check {
+  margin: 0;
+  white-space: nowrap;
+}
+.globeMode,
+.globeZoom {
+  display: inline-flex;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+}
+.globeMode button,
+.globeZoom button {
+  border: 0;
+  border-radius: 0;
+  padding: 6px 11px;
+  background: var(--surface);
+  color: var(--muted);
+}
+.globeMode button + button,
+.globeZoom button + button {
+  border-left: 1px solid var(--line-strong);
+}
+.globeMode button.active {
+  background: var(--text);
+  color: var(--surface);
+}
+.globeZoom {
+  margin-left: auto;
+}
+.globeZoom button {
+  min-width: 34px;
+  font-size: 18px;
+  line-height: 1;
+}
+.globeLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(260px, 330px);
+  min-height: 550px;
+}
+.globeCanvas {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  overflow: hidden;
+  background: radial-gradient(ellipse at 50% 50%, #152f44 0%, #091923 68%, #07121a 100%);
+}
+.globeCanvas svg {
+  display: block;
+  width: 100%;
+  max-height: 680px;
+  aspect-ratio: 8 / 5;
+  cursor: grab;
+}
+.globeCanvas.globe svg {
+  touch-action: pan-y;
+}
+.globeCanvas.flat svg {
+  touch-action: auto;
+}
+.globeCanvas svg:active {
+  cursor: grabbing;
+}
+.globeSphere {
+  fill: url(#globeOcean);
+  stroke: #5892aa;
+  stroke-width: 1.5;
+}
+.globeGraticule {
+  fill: none;
+  stroke: #acd2dc;
+  stroke-opacity: 0.15;
+  stroke-width: 0.7;
+}
+.globeLand path {
+  fill: #6a9e8d;
+  stroke: #a2c3ac;
+  stroke-opacity: 0.52;
+  stroke-width: 0.55;
+}
+.globeLinks path {
+  fill: none;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: stroke;
+}
+.globeLinkActive {
+  stroke: url(#globeLine);
+  stroke-width: 2.4;
+  stroke-opacity: 0.92;
+}
+.globeLinkDisabled {
+  stroke: #bfc9cb;
+  stroke-width: 1.7;
+  stroke-dasharray: 5 5;
+  stroke-opacity: 0.55;
+}
+.globeMarker {
+  cursor: pointer;
+  outline: none;
+}
+.globeMarker.dimmed {
+  opacity: 0.36;
+}
+.globeMarkerHalo {
+  fill: #f0bb73;
+  fill-opacity: 0.28;
+  stroke: #ffd99d;
+  stroke-opacity: 0.58;
+  stroke-width: 1;
+}
+.globeMarkerCore {
+  fill: #ffd291;
+  stroke: #fff7e4;
+  stroke-width: 1.5;
+}
+.globeMarker.online .globeMarkerHalo {
+  fill: #4de0b5;
+  stroke: #91f5d1;
+}
+.globeMarker.online .globeMarkerCore {
+  fill: #4de0b5;
+  stroke: #effff8;
+}
+.globeMarker.selected .globeMarkerHalo,
+.globeMarker:focus-visible .globeMarkerHalo {
+  stroke: white;
+  stroke-width: 3;
+  fill-opacity: 0.52;
+}
+.globeMarker text {
+  fill: #0b2a35;
+  font-size: 11px;
+  font-weight: 800;
+  pointer-events: none;
+}
+.globeLegend {
+  position: absolute;
+  left: 14px;
+  bottom: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 15px;
+  padding: 6px 10px;
+  border: 1px solid #456175;
+  border-radius: 6px;
+  background: #0b2030d9;
+  color: #dcebef;
+  font-size: 12px;
+}
+.globeLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.globeLegendDot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+.globeLegendDot.online {
+  background: #4de0b5;
+}
+.globeLegendDot.offline {
+  background: #ffd291;
+}
+.globeLegendLine {
+  display: inline-block;
+  width: 16px;
+  border-top: 2px solid #77dce4;
+}
+.globeLegendLine.disabled {
+  border-top-color: #bfc9cb;
+  border-top-style: dashed;
+}
+.globeSidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+  padding: 16px;
+  border-left: 1px solid var(--line);
+}
+.globeSelection {
+  display: grid;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 7px;
+  background: var(--code-bg);
+}
+.globeSelectionHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.globeSelectionHead strong {
+  overflow-wrap: anywhere;
+}
+.globeSelection p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+.globeSelectionActions button,
+.globeRelated button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  text-align: left;
+}
+.globeRelated {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  padding-top: 5px;
+  border-top: 1px solid var(--line-strong);
+  font-size: 12px;
+}
+.globeRelated span {
+  width: 100%;
+  color: var(--muted);
+}
+.globeListHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+.globeListHead h3 {
+  margin: 0;
+  font-size: 15px;
+}
+.globeListHead span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.globeServerList {
+  display: grid;
+  align-content: start;
+  gap: 4px;
+  max-height: 455px;
+  overflow-y: auto;
+}
+.globeServerList button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+}
+.globeServerList button:hover,
+.globeServerList button.selected {
+  border-color: var(--line-strong);
+  background: var(--code-bg);
+}
+.globeServerDot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ffd291;
+}
+.globeServerDot.online {
+  background: #4de0b5;
+}
+.globeServerInfo {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+.globeServerInfo strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.globeServerInfo small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.globeUnplaced {
+  margin-left: auto;
+  color: var(--warn);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.globeFootnote {
+  margin: 10px 16px 14px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.globeSidebar .globeFootnote {
+  margin: 0;
+}
+@media (max-width: 1050px) {
+  .globeLayout {
+    grid-template-columns: minmax(0, 1fr) 260px;
+  }
+}
+@media (max-width: 760px) {
+  .globeToolbar {
+    padding: 10px;
+  }
+  .globeToolbar select {
+    flex: 1;
+    min-width: 120px;
+  }
+  .globeLayout {
+    grid-template-columns: 1fr;
+  }
+  .globeCanvas svg {
+    min-height: 330px;
+  }
+  .globeSidebar {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .globeServerList {
+    max-height: 280px;
+  }
+}
+

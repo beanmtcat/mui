@@ -382,16 +382,20 @@ export function TableWrap({ children, cards = true }: { children: React.ReactNod
     if (!cards) return;
     root.current?.querySelectorAll("table").forEach((table) => {
       const headings = Array.from(table.querySelectorAll("thead th"), (th) => {
+        if (!th.querySelector(".helpTip")) return th.textContent?.trim() || "";
         const heading = th.cloneNode(true) as HTMLElement;
         // HelpTip's visible '?' is not part of the mobile card label.
         heading.querySelectorAll(".helpTip").forEach((tip) => tip.remove());
         return heading.textContent?.trim() || "";
       });
       table.querySelectorAll("tbody tr").forEach((row) => {
-        Array.from(row.children).forEach((cell, index) => cell.setAttribute("data-label", headings[index] || ""));
+        Array.from(row.children).forEach((cell, index) => {
+          const label = headings[index] || "";
+          if (cell.getAttribute("data-label") !== label) cell.setAttribute("data-label", label);
+        });
       });
     });
-  });
+  }, [cards, children]);
   return <div className={"tableWrap" + (cards ? " cardTable" : "")} ref={root}>{children}</div>;
 }
 

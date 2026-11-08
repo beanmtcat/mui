@@ -6,19 +6,19 @@ import {
 } from "../api";
 import { MemoSecretField as SecretField, MemoSecretTextarea as SecretTextarea, MemoMaskedValue as MaskedValue } from "../components/secrets";
 import CertificateFileField from "../components/CertificateFileField";
-import { screenshotText, screenshotView } from "../components/screenshot";
+import { screenshotView } from "../components/screenshot";
+import { useAttention, type Notice } from "./attention";
 import { clearFeedback, setError, setNotice } from "./feedback";
 import {
-  emptyForward, emptyNode, emptyRoute, emptyServer, emptyTemplate, generatePassword, manualFirewall,
+  emptyForward, emptyNode, emptyRoute, emptyServer, emptyTemplate, generatePassword,
   sharedSubscriptionPassword, targetsText, trafficRankingURL, trafficSummaryURL,
   type CertificateForm, type Confirmation, type NodeForm, type RuleForm, type ServerForm, type Tab, type TemplateForm, type TrafficPoint, type Usage,
 } from "./helpers";
-import { collator, kindLabel } from "./ui";
+import { buildScreenshotRedactor, formatNodeAccess, formatRoutePath, matchValidCertificate } from "./selectors";
+import { collator } from "./ui";
 import { navigate, parseHash, useServerParam, useTab } from "./url";
 
-// `key` names the problem, not its wording: "expires in 12 days" must stay read
-// tomorrow. The tone is part of it, so a problem that gets worse comes back.
-export type Notice = { key: string; tone: "bad" | "warn" | "info"; text: string; tab: Tab; server?: string; q?: string };
+export type { Notice };
 export type ModalSpec =
   | { kind: "server"; form: ServerForm }
   | { kind: "node"; form: NodeForm; templateId: string }
@@ -34,6 +34,7 @@ export type { ConnectionIP };
 
 const taskRunning = (o: Operation) => ["queued", "running", "activating"].includes(o.status);
 const FAST_POLL = 4000, SLOW_POLL = 30000;
+const secretComponents = new Set<unknown>([SecretField, SecretTextarea, MaskedValue, CertificateFileField]);
 
 export function useAppState() {
   // A refresh that arrives during another one runs right after it, so what a
@@ -51,6 +52,8 @@ export function useAppState() {
   const [authed, setAuthed] = useState<boolean | null>(null),
     [totpEnabled, setTotpEnabled] = useState(false);
   const tab = useTab();
+  const tabRef = useRef(tab);
+  tabRef.current = tab;
   const [currentServerId] = useServerParam();
   const [serverRecords, setServers] = useState<Server[]>([]),
     [nodes, setNodes] = useState<Node[]>([]),
@@ -63,8 +66,7 @@ export function useAppState() {
     [customers, setCustomers] = useState<Customer[]>([]),
     [operations, setOperations] = useState<Operation[]>([]),
     [agentReleases, setAgentReleases] = useState<Record<string, string>>({}),
-    [coreReleases, setCoreReleases] = useState<Record<string, string>>({}),
-    [komariEndpoint, setKomariEndpoint] = useState("");
+    [coreReleases, setCoreReleases] = useState<Record<string, string>>({});
   // Every list and picker of servers shows them by name, so "-2" comes before "-10".
   const servers = useMemo(() => [...serverRecords].sort((a, b) => collator.compare(a.name, b.name)), [serverRecords]);
   const [refreshTick, setRefreshTick] = useState(0),
@@ -90,21 +92,28 @@ export function useAppState() {
 
   // Fetch a list through the server pagination protocol (?limit=&cursor=,
   // {items, nextCursor, total}), following cursors until the list is
-  // complete. The tables still filter client-side (server/protocol/search
-  // filters have no server-side params yet), so the working set must be
-  // complete; a single-page UI pager is the follow-up once the server
-  // accepts filter params. Logs page on the server (usePagedLog).
+  // complete. Uses the server's maximum page size (500) to minimise round-trips.
   const loadAll = useCallback(async <T,>(path: string): Promise<T[]> => {
     const out: T[] = [];
     let cursor: string | undefined;
-    for (let page = 0; page < 50; page++) {
-      const res = await list<T>(path, { limit: 100, cursor });
+    for (let page = 0; page < 20; page++) {
+      const res = await list<T>(path, { limit: 500, cursor });
       out.push(...res.items);
       if (!res.nextCursor) break;
       cursor = res.nextCursor;
     }
     return out;
   }, []);
+
+  const loadDashboardTraffic = useCallback(async (onFailure?: (msg: string) => void) => {
+    const fail = (e: unknown) => { if (onFailure) onFailure((e as Error).message); };
+    await Promise.all([
+      api<{ today: { uplink: number; downlink: number }; month: { uplink: number; downlink: number } }>(trafficSummaryURL()).then(setSummary).catch(fail),
+      api<TrafficPoint[]>("/api/traffic/series?hours=24").then(setDashSeries).catch(fail),
+      api<{ nodes: Usage[]; subscriptions: Usage[] }>(trafficRankingURL()).then(setRanking).catch(fail),
+    ]);
+  }, []);
+
   const refresh = useCallback(async (manual = false) => {
     if (refreshInFlight.current) {
       refreshAgain.current = true;
@@ -114,41 +123,42 @@ export function useAppState() {
     setRefreshing(true);
     if (manual) { setError(""); setNotice("正在刷新…"); }
     try {
-    // Each list loads on its own: one failing endpoint must not leave every
-    // other part of the page showing stale data.
-    const failures: string[] = [];
-    const load = <T,>(path: string, apply: (value: T[]) => void) =>
-      loadAll<T>(path).then(apply).catch((e) => { failures.push((e as Error).message); });
-    await Promise.all([
-      load<Server>("/api/servers", setServers),
-      load<Node>("/api/nodes", (n) => {
-        setNodes(n);
-        setTrafficNode((current) => current ? n.find((item) => item.id === current.id) || current : null);
-      }),
-      load<NodeTemplate>("/api/node-templates", setTemplates),
-      load<Certificate>("/api/certificates", setCertificates),
-      load<FirewallRule>("/api/firewall", setRules),
-      load<ForwardRule>("/api/forwards", setForwards),
-      load<Route>("/api/routes", setRoutes),
-      load<Subscription>("/api/subscriptions", (u) => {
-        setSubs(u);
-        setTrafficSub((current) => current ? u.find((item) => item.id === current.id) || null : null);
-      }),
-      load<Operation>("/api/operations", setOperations),
-      // Not lists: these answer with a single document and are never paged.
-      api<typeof summary>(trafficSummaryURL()).then(setSummary).catch((e) => { failures.push((e as Error).message); }),
-      api<TrafficPoint[]>("/api/traffic/series?hours=24").then(setDashSeries).catch((e) => { failures.push((e as Error).message); }),
-      api<typeof ranking>(trafficRankingURL()).then(setRanking).catch((e) => { failures.push((e as Error).message); }),
-      load<Customer>("/api/customers", setCustomers),
-      api<Record<string, string>>("/api/agent/release").then(setAgentReleases).catch(() => setAgentReleases({})),
-      api<Record<string, string>>("/api/core/release").then(setCoreReleases).catch(() => setCoreReleases({})),
-      api<{ endpoint: string }>("/api/settings/komari").then((value) => setKomariEndpoint(value.endpoint)).catch((e) => { failures.push((e as Error).message); }),
-    ]);
-    setRefreshTick((tick) => tick + 1);
-    if (failures.length) {
-      setError(failures[0] + (failures.length > 1 ? `（另有 ${failures.length - 1} 项加载失败）` : ""));
-      if (manual) setNotice("");
-    } else if (manual) setNotice(`刷新完成 · ${new Date().toLocaleTimeString()}`);
+      // Each list loads on its own: one failing endpoint must not leave every
+      // other part of the page showing stale data.
+      const failures: string[] = [];
+      const recordFailure = (msg: string) => { failures.push(msg); };
+      const load = <T,>(path: string, apply: (value: T[]) => void) =>
+        loadAll<T>(path).then(apply).catch((e) => recordFailure((e as Error).message));
+      const withTraffic = tabRef.current === "dashboard";
+      await Promise.all([
+        load<Server>("/api/servers", setServers),
+        load<Node>("/api/nodes", (n) => {
+          setNodes(n);
+          setTrafficNode((current) => current ? n.find((item) => item.id === current.id) || current : null);
+        }),
+        load<NodeTemplate>("/api/node-templates", setTemplates),
+        load<Certificate>("/api/certificates", setCertificates),
+        load<FirewallRule>("/api/firewall", setRules),
+        load<ForwardRule>("/api/forwards", setForwards),
+        load<Route>("/api/routes", setRoutes),
+        load<Subscription>("/api/subscriptions", (u) => {
+          setSubs(u);
+          setTrafficSub((current) => current ? u.find((item) => item.id === current.id) || null : null);
+        }),
+        list<Operation>("/api/operations", { limit: 200 }).then((res) => setOperations(res.items)).catch((e) => recordFailure((e as Error).message)),
+        load<Customer>("/api/customers", setCustomers),
+        api<Record<string, string>>("/api/agent/release").then(setAgentReleases).catch(() => setAgentReleases({})),
+        api<Record<string, string>>("/api/core/release").then(setCoreReleases).catch(() => setCoreReleases({})),
+        ...(withTraffic ? [loadDashboardTraffic(recordFailure)] : []),
+      ]);
+      if (!withTraffic && tabRef.current === "dashboard") {
+        await loadDashboardTraffic(recordFailure);
+      }
+      setRefreshTick((tick) => tick + 1);
+      if (failures.length) {
+        setError(failures[0] + (failures.length > 1 ? `（另有 ${failures.length - 1} 项加载失败）` : ""));
+        if (manual) setNotice("");
+      } else if (manual) setNotice(`刷新完成 · ${new Date().toLocaleTimeString()}`);
     } finally {
       refreshInFlight.current = false;
       setRefreshing(false);
@@ -157,7 +167,8 @@ export function useAppState() {
         void refreshRef.current();
       }
     }
-  }, [loadAll]);
+  }, [loadAll, loadDashboardTraffic]);
+
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
   const serversRef = useRef(servers);
@@ -186,40 +197,31 @@ export function useAppState() {
         void refresh();
       })
       .catch(() => setAuthed(false));
-  }, []);
+  }, [refresh]);
+  useEffect(() => {
+    if (authed && tab === "dashboard" && !refreshInFlight.current) {
+      void loadDashboardTraffic((msg) => setError(msg));
+    }
+  }, [authed, tab, loadDashboardTraffic]);
   useEffect(() => {
     if (!authed) return;
     let stopped = false, timer: ReturnType<typeof setTimeout> | undefined, polling = false, wasWorking = false;
     const pollPage = async () => {
-        switch (tab) {
+      switch (tab) {
         case "dashboard": {
-          const [s, n, o, summary, series, ranks, u] = await Promise.all([
+          const [s, n, u] = await Promise.all([
             loadAll<Server>("/api/servers"),
             loadAll<Node>("/api/nodes"),
-            loadAll<Operation>("/api/operations"),
-            api<{ today: { uplink: number; downlink: number }; month: { uplink: number; downlink: number } }>(trafficSummaryURL()),
-            api<TrafficPoint[]>("/api/traffic/series?hours=24"),
-            api<{ nodes: Usage[]; subscriptions: Usage[] }>(trafficRankingURL()),
             loadAll<Subscription>("/api/subscriptions"),
+            loadDashboardTraffic((msg) => setError(msg)),
           ]);
           setServers(s);
           setNodes(n);
-          setOperations(o);
-          setSummary(summary);
-          setDashSeries(series);
-          setRanking(ranks);
           setSubs(u);
           break;
         }
         case "servers":
-          {
-            const [s, o] = await Promise.all([
-              loadAll<Server>("/api/servers"),
-              loadAll<Operation>("/api/operations"),
-            ]);
-            setServers(s);
-            setOperations(o);
-          }
+          setServers(await loadAll<Server>("/api/servers"));
           break;
         case "globe": {
           const [s, n, r] = await Promise.all([loadAll<Server>("/api/servers"), loadAll<Node>("/api/nodes"), loadAll<Route>("/api/routes")]);
@@ -257,9 +259,6 @@ export function useAppState() {
           setRoutes(r);
           break;
         }
-        case "operations":
-          setOperations(await loadAll<Operation>("/api/operations"));
-          break;
         case "certificates": {
           const [n, c] = await Promise.all([loadAll<Node>("/api/nodes"), loadAll<Certificate>("/api/certificates")]);
           setNodes(n);
@@ -275,7 +274,7 @@ export function useAppState() {
     // Tasks a live agent is working through. One queued for an offline server
     // can wait for days and must not keep the page polling at full speed.
     const stillWorking = async () => {
-      const recent = (await list<Operation>("/api/operations", { limit: 30 })).items;
+      const recent = (await list<Operation>("/api/operations", { limit: 50 })).items;
       setOperations((current) => {
         const known = new Set(recent.map((o) => o.id));
         return [...recent, ...current.filter((o) => !known.has(o.id))];
@@ -314,7 +313,7 @@ export function useAppState() {
       document.removeEventListener("visibilitychange", onVisible);
       window.removeEventListener("mui:watch", onWatch);
     };
-  }, [authed, tab]);
+  }, [authed, tab, loadAll, loadDashboardTraffic]);
 
   const activeNodes = useMemo(() => nodes.filter((n) => n.status === "active" && n.enabled), [nodes]);
   const onlineServers = useMemo(() => servers.filter((s) => s.status === "online"), [servers]);
@@ -326,32 +325,13 @@ export function useAppState() {
     .filter((o) => o.kind === "nodes.apply" && ["queued", "running"].includes(o.status))
     .map((o) => o.serverId)), [operations]);
   const forwardServerIDs = useMemo(() => new Set(forwards.map((f) => f.serverId)), [forwards]);
-  // Issues needing attention; ordinary traffic sampling states are not alerts.
-  const serverWarnings = useCallback((s: Server) => {
-    const out: string[] = [];
-    if (s.detectedIpv4 && s.ipv4 && s.detectedIpv4 !== s.ipv4)
-      out.push(`Agent 检测到 IPv4 ${s.detectedIpv4}，与填写的不同`);
-    if (s.detectedIpv6 && s.ipv6 && s.detectedIpv6 !== s.ipv6)
-      out.push(`Agent 检测到 IPv6 ${s.detectedIpv6}，与填写的不同`);
-    if (Math.abs(s.clockSkewSeconds || 0) > 60)
-      out.push(`系统时间与面板相差 ${s.clockSkewSeconds} 秒，请检查时间同步`);
-    if (s.firewallConflict && !manualFirewall(s))
-      out.push(`${s.firewallConflict} 正在管理防火墙，面板已停止写入 UFW`);
-    if (s.status === "online" && s.statsStatus === "unavailable")
-      out.push("节点流量采样不可用，请检查 Agent 和 sing-box");
-    return out;
-  }, []);
-  // What a node's port really admits: route-only nodes admit their routes'
-  // last hops, direct ones what the administrator chose (plus route hops).
-  const nodeAccessText = (n: Node) => {
-    if (manualFirewall(servers.find((s) => s.id === n.serverId))) return "外部管理（来源限制自行配置）";
-    const routeHops = (n.routeSources || "").split(",").filter(Boolean);
-    const agentSources = (n.agentProxySources || "").split(",").filter(Boolean);
-    if (!n.direct) return [routeHops.length ? "链路：" + routeHops.join("、") : "", agentSources.length ? "Agent：" + agentSources.join("、") : ""].filter(Boolean).join("；") || "不开放（无链路或 Agent 使用）";
-    if (n.firewallPolicy === "manual") return "手动管理";
-    if (n.firewallPolicy === "restricted") return [...new Set([...n.firewallSources.split(","), ...routeHops, ...agentSources])].filter(Boolean).join("、");
-    return "任意来源";
-  };
+  const liveSubs = useMemo(() => subs.filter((sub) => sub.enabled && (!sub.expiresAt || new Date(sub.expiresAt).getTime() > Date.now())), [subs]);
+  const failedNodes = useMemo(() => nodes.filter((n) => n.status === "error"), [nodes]);
+  const expiring = useMemo(() => certificates.filter(
+    (c) => c.expiringSoon === true || (c.daysUntilExpiry !== undefined && c.daysUntilExpiry <= 30),
+  ), [certificates]);
+
+  const nodeAccessText = useCallback((n: Node) => formatNodeAccess(servers, n), [servers]);
   const serverName = useCallback((id: string) =>
     servers.find((s) => s.id === id)?.name || id.slice(0, 8), [servers]);
   // Nodes and routes of a subscription whose configuration is not live yet.
@@ -369,28 +349,16 @@ export function useAppState() {
     ...(sub.nodeIds || []),
     ...(sub.routeIds || []).map((id) => routes.find((r) => r.id === id)?.nodeId || ""),
   ].filter(Boolean), [routes]);
-  const subMemberNodes = (sub: Partial<Subscription>) => {
+  const subMemberNodes = useCallback((sub: Partial<Subscription>) => {
     const ids = new Set(subNodeIds(sub));
     return nodes.filter((n) => ids.has(n.id));
-  };
-  const sharedSubNodes = (sub: Partial<Subscription>) => subMemberNodes(sub).filter(sharedSubscriptionPassword);
-  const onlySharedSubNodes = (sub: Partial<Subscription>) => {
+  }, [nodes, subNodeIds]);
+  const sharedSubNodes = useCallback((sub: Partial<Subscription>) => subMemberNodes(sub).filter(sharedSubscriptionPassword), [subMemberNodes]);
+  const onlySharedSubNodes = useCallback((sub: Partial<Subscription>) => {
     const members = subMemberNodes(sub);
     return members.length > 0 && members.every(sharedSubscriptionPassword);
-  };
-  const routePath = (r: Route) => {
-    const node = nodes.find((n) => n.id === r.nodeId);
-    return [
-      serverName(r.entryServerId),
-      ...r.hops.map((h) => {
-        const internal = h.serverIds.map((id) => h.addressModes?.[id] === "internal" || (h.addressModes?.[id] !== "public" && h.internal));
-        const allInternal = internal.length > 0 && internal.every(Boolean);
-        return h.serverIds.map((id, i) => serverName(id) + (!allInternal && internal[i] ? "（内网）" : ""))
-          .join(h.balance === "round-robin" ? " + " : " / ") + (allInternal ? "（内网）" : "");
-      }),
-      (node ? `${node.name}@${serverName(node.serverId)}` : "已删除节点") + (r.nodeInternal ? "（内网）" : ""),
-    ].join(" → ");
-  };
+  }, [subMemberNodes]);
+  const routePath = useCallback((r: Route) => formatRoutePath(nodes, serverName, r), [nodes, serverName]);
   // sing-box has to restart to add or remove a login, which drops the
   // connections of everyone on that server.
   const restartNotice = useCallback((nodeIds: string[]) => {
@@ -400,6 +368,7 @@ export function useAppState() {
       ? `\n\n以下服务器的 sing-box 会重启，其上所有连接将中断数秒：${names.join("、")}`
       : "";
   }, [nodes, serverName]);
+
   // Resolves as soon as the change is accepted. The lists refresh behind the
   // scenes, so a dialog closes at once instead of waiting for every list.
   const act = useCallback(async (
@@ -419,6 +388,7 @@ export function useAppState() {
       return false;
     }
   }, [refresh]);
+
   // Runs one action over many rows, a few at a time, and reports each failure
   // by name: one refused row must not hide what happened to the others.
   const runBatch = useCallback(async <T,>(title: string, rows: T[], label: (row: T) => string, task: (row: T) => Promise<unknown>) => {
@@ -473,19 +443,21 @@ export function useAppState() {
       setError("自动复制失败：浏览器未授予剪贴板权限，请手动选中复制。");
     }
   }, []);
+
   const goTo = useCallback((target: Tab, serverId?: string, filters?: Record<string, string>) => {
     const current = parseHash().params.get("server") || "";
     const selected = serverId ?? current;
     navigate(target, selected || (target === "firewall" ? serversRef.current[0]?.id || "" : ""), filters);
     clearFeedback();
   }, []);
+
   const openModal = useCallback((spec: ModalSpec) => {
     clearFeedback();
     setModal(spec);
   }, []);
   const closeModal = useCallback(() => setModal(null), []);
-  const openServer = (s?: Server) => openModal({ kind: "server", form: s ? { ...s } : { ...emptyServer } });
-  const openNode = (n?: Node) => {
+  const openServer = useCallback((s?: Server) => openModal({ kind: "server", form: s ? { ...s } : { ...emptyServer } }), [openModal]);
+  const openNode = useCallback((n?: Node) => {
     const newServerId = servers.find((s) => s.id === currentServerId && canHostNodes(s))?.id || servers.find((s) => canHostNodes(s))?.id || "";
     const sellerNode = servers.find((s) => s.id === newServerId)?.managementMode === "external";
     openModal({
@@ -494,19 +466,10 @@ export function useAppState() {
         ? { ...n, snellPort: n.snellPort || 20000 + n.port % 10000, password: "", shadowTlsPassword: "" }
         : { ...emptyNode, serverId: newServerId, singleUser: sellerNode, direct: sellerNode, firewallPolicy: sellerNode ? "manual" : "all" },
     });
-  };
-  const matchingCertificate = useCallback((tlsName: string) =>
-    certificates.find(
-      (c) =>
-        (c.dnsNames?.length ? c.dnsNames : [c.domain]).some((pattern) => {
-          const name = tlsName.toLowerCase().replace(/\.$/, "");
-          const domain = pattern.toLowerCase().replace(/\.$/, "");
-          return domain === name || domain.startsWith("*.") && name.endsWith(domain.slice(1)) && name.split(".").length === domain.split(".").length;
-        }) &&
-        new Date(c.expiresAt).getTime() > Date.now(),
-    )?.id || "", [certificates]);
+  }, [servers, currentServerId, openModal]);
+  const matchingCertificate = useCallback((tlsName: string) => matchValidCertificate(certificates, tlsName), [certificates]);
   // The form a template fills in, its stored passwords included.
-  const templateNodeForm = async (template: NodeTemplate, serverId: string): Promise<NodeForm> => {
+  const templateNodeForm = useCallback(async (template: NodeTemplate, serverId: string): Promise<NodeForm> => {
     const detail = await api<NodeTemplate & { password: string; shadowTlsPassword: string }>(`/api/node-templates/${template.id}`);
     return {
       ...emptyNode,
@@ -522,17 +485,12 @@ export function useAppState() {
       obfs: detail.obfs,
       shadowTlsHost: detail.shadowTlsHost,
       tlsName: detail.tlsName,
-      certificateId:
-        detail.protocol === "anytls"
-          ? matchingCertificate(detail.tlsName)
-          : "",
+      certificateId: detail.protocol === "anytls" ? matchingCertificate(detail.tlsName) : "",
       password: detail.password || generatePassword(detail.protocol, detail.method),
-      shadowTlsPassword: detail.protocol === "snell"
-        ? detail.shadowTlsPassword || generatePassword("snell")
-        : "",
+      shadowTlsPassword: detail.protocol === "snell" ? detail.shadowTlsPassword || generatePassword("snell") : "",
     };
-  };
-  const useTemplate = async (template: NodeTemplate) => {
+  }, [servers, matchingCertificate]);
+  const useTemplate = useCallback(async (template: NodeTemplate) => {
     try {
       const form = await templateNodeForm(template, currentServerId);
       goTo("nodes");
@@ -540,8 +498,8 @@ export function useAppState() {
     } catch (e) {
       setError((e as Error).message);
     }
-  };
-  const openTemplate = async (source?: NodeTemplate | Node) => {
+  }, [templateNodeForm, currentServerId, goTo, openModal]);
+  const openTemplate = useCallback(async (source?: NodeTemplate | Node) => {
     try {
       const secrets = source
         ? "serverId" in source
@@ -573,30 +531,30 @@ export function useAppState() {
     } catch (e) {
       setError((e as Error).message);
     }
-  };
-  const openForward = (f?: ForwardRule) => {
+  }, [openModal]);
+  const openForward = useCallback((f?: ForwardRule) => {
     const form = f ? { ...f } : { ...emptyForward, serverId: servers.find((s) => s.id === currentServerId && s.managementMode !== "external")?.id || servers.find((s) => s.managementMode !== "external")?.id || "" };
     openModal({ kind: "forward", form, targets: targetsText(form.targets) });
-  };
-  const openRoute = (r?: Route) => openModal({ kind: "route", form: r ? { ...r, hops: r.hops.map((h) => ({ ...h, serverIds: [...h.serverIds] })) } : { ...emptyRoute } });
-  const openSubscription = (s?: Subscription) => {
+  }, [servers, currentServerId, openModal]);
+  const openRoute = useCallback((r?: Route) => openModal({ kind: "route", form: r ? { ...r, hops: r.hops.map((h) => ({ ...h, serverIds: [...h.serverIds] })) } : { ...emptyRoute } }), [openModal]);
+  const openSubscription = useCallback((s?: Subscription) => {
     setIssued(null);
     openModal({ kind: "subscription", form: s ? { ...s } : { name: "", format: "sing-box", nodeIds: [], routeIds: [], enabled: true } });
-  };
-  const showInstall = (guide: InstallGuide, serverName: string, method: "online" | "offline", arch: string) => {
+  }, [openModal]);
+  const showInstall = useCallback((guide: InstallGuide, serverNameText: string, method: "online" | "offline", arch: string) => {
     setInstallMethod(method);
     setInstallArch(arch === "arm64" ? "arm64" : "amd64");
-    setInstallInfo({ ...guide, serverName });
-  };
-  const deleteItem = (path: string, label: string, feedback?: { message: string; success: string }) => {
+    setInstallInfo({ ...guide, serverName: serverNameText });
+  }, []);
+  const deleteItem = useCallback((path: string, label: string, feedback?: { message: string; success: string }) => {
     setConfirmation({
       title: `删除${label}`,
       message: feedback?.message || `确定删除${label}？此操作无法撤销。`,
       confirmLabel: "删除",
       onConfirm: () => { void act(() => mutation(path, "DELETE"), feedback?.success || `${label}已删除`); },
     });
-  };
-  const deleteServer = (s: Server) => {
+  }, [act]);
+  const deleteServer = useCallback((s: Server) => {
     const owned =
       nodes.some((n) => n.serverId === s.id) ||
       rules.some((r) => r.serverId === s.id) ||
@@ -614,7 +572,7 @@ export function useAppState() {
         );
       },
     });
-  };
+  }, [nodes, rules, forwards, deleteItem, act]);
   const matches = useCallback((query: string, ...fields: (string | undefined)[]) => {
     const q = query.trim().toLowerCase();
     return !q || fields.some((field) => (field || "").toLowerCase().includes(q));
@@ -623,81 +581,18 @@ export function useAppState() {
     servers.find((x) => x.id === id)?.name || nodes.find((x) => x.id === id)?.name ||
     subs.find((x) => x.id === id)?.name || customers.find((x) => x.id === id)?.name ||
     (id.length > 12 ? id.slice(0, 8) + "…" : id), [servers, nodes, subs, customers]);
-
-  const liveSubs = useMemo(() => subs.filter((sub) => sub.enabled && (!sub.expiresAt || new Date(sub.expiresAt).getTime() > Date.now())), [subs]);
-  const failedNodes = useMemo(() => nodes.filter((n) => n.status === "error"), [nodes]);
   const split = useCallback((v: { uplink: number; downlink: number }) => `↑ ${bytes(v.uplink)} · ↓ ${bytes(v.downlink)}`, []);
-  // Everything that wants the administrator's attention, worst first.
-  const attention: Notice[] = useMemo(() => {
-  const list: Notice[] = [];
-  // Alias so the pushes below keep their original shape.
-  const attention = list;
-  for (const sv of servers) {
-    if (sv.managementMode === "offline" && (!sv.offlineExportedAt || sv.offlineExportedRevision !== sv.revision))
-      attention.push({ key: `export:${sv.id}`, tone: "info", tab: "servers", q: sv.name, text: `服务器 ${sv.name} 的离线配置待导出并在目标机应用` });
-    else if (sv.status === "offline")
-      attention.push({ key: `offline:${sv.id}`, tone: "bad", tab: "servers", q: sv.name, text: `服务器 ${sv.name} 离线，最后上报于 ${sv.lastSeen ? new Date(sv.lastSeen).toLocaleString() : "未知时间"}` });
-    else if (sv.status === "pending")
-      attention.push({ key: `pending:${sv.id}`, tone: "info", tab: "servers", q: sv.name, text: `服务器 ${sv.name} 尚未接入 Agent` });
-    else {
-      if (!manualFirewall(sv) && sv.ufwStatus && sv.ufwStatus !== "active" && !sv.firewallConflict)
-        attention.push({ key: `ufw:${sv.id}`, tone: "warn", tab: "servers", q: sv.name, text: `服务器 ${sv.name} 的 UFW 未启用，请初始化 UFW 或选择手动管理防火墙` });
-      if (sv.statsStatus === "unavailable")
-        attention.push({ key: `stats:${sv.id}`, tone: "warn", tab: "servers", q: sv.name, text: `服务器 ${sv.name} 的流量统计不可用` });
-    }
-    for (const warning of serverWarnings(sv))
-      attention.push({ key: `warning:${sv.id}:${warning.replace(/[\d.:a-f-]+/gi, "")}`, tone: "warn", tab: "servers", q: sv.name, text: `${sv.name}：${warning}` });
-  }
-  for (const n of failedNodes)
-    attention.push({ key: `node:${n.id}`, tone: "bad", tab: "nodes", server: n.serverId, q: n.name, text: `节点 ${n.name}（${serverName(n.serverId)}）应用失败${n.error ? "：" + n.error : ""}` });
-  for (const sv of servers) {
-    const latest = operations.find((o) => o.serverId === sv.id);
-    if (latest?.status === "failed" && !failedNodes.some((n) => n.serverId === sv.id))
-      attention.push({ key: `task:${latest.id}`, tone: "bad", tab: "operations", server: sv.id, text: `${sv.name} 最近一次任务失败（${kindLabel(latest.kind)}）${latest.error ? "：" + latest.error : ""}` });
-  }
-  for (const c of certificates) {
-    // Expiry comes from the server (daysUntilExpiry / expiringSoon).
-    const days = c.daysUntilExpiry;
-    if (c.expiringSoon === true || (days !== undefined && days < 30)) {
-      const text = days === undefined
-        ? `证书 ${c.domain} 即将到期（30 天内）`
-        : days < 0 ? `证书 ${c.domain} 已过期` : `证书 ${c.domain} 将在 ${days} 天后到期`;
-      attention.push({ key: `certificate:${c.id}`, tone: days !== undefined && days < 7 ? "bad" : "warn", tab: "certificates", q: c.domain, text });
-    }
-  }
-  for (const sub of liveSubs) {
-    const waiting = pendingNodes(sub);
-    if (waiting.length)
-      attention.push({ key: `sub-pending:${sub.id}`, tone: "warn", tab: "subscriptions", q: sub.name, text: `订阅 ${sub.name} 有 ${waiting.length} 项尚未生效：${pendingSummary(sub)}` });
-    const days = sub.expiresAt ? Math.floor((new Date(sub.expiresAt).getTime() - Date.now()) / 86400000) : Infinity;
-    if (days < 7)
-      attention.push({ key: `sub-expiry:${sub.id}`, tone: "info", tab: "subscriptions", q: sub.name, text: `订阅 ${sub.name} 将在 ${days < 1 ? "今天" : days + " 天后"}到期` });
-  }
-  const upgradable = servers.filter((sv) => sv.status === "online" && (
-    (sv.agentSelfUpdate && agentReleases[sv.arch] && sv.agentBuild !== agentReleases[sv.arch]) ||
-    (sv.coreSelfUpdate && !!sv.coreBuild && coreReleases[sv.arch] && sv.coreBuild !== coreReleases[sv.arch])));
-  if (upgradable.length)
-    attention.push({ key: `upgrades:${upgradable.map((sv) => sv.id).join()}`, tone: "info", tab: "servers", text: `${upgradable.length} 台服务器有可用的 Agent 或 sing-box 升级：${upgradable.map((sv) => sv.name).join("、")}` });
-  const toneOrder = { bad: 0, warn: 1, info: 2 };
-  attention.sort((x, y) => toneOrder[x.tone] - toneOrder[y.tone]);
-  for (const item of list) item.key = `${item.tone}:${item.key}`;
-  return list;
-  }, [servers, failedNodes, operations, certificates, liveSubs, pendingNodes, pendingSummary, serverWarnings, serverName, agentReleases, coreReleases]);
-  const redactScreenshot = useMemo(() => {
-    const entries: [string, string][] = [];
-    const add = (value: string | undefined, label = "[已隐藏]") => { if (value) entries.push([value, label]); };
-    for (const [records, label] of [[servers, "服务器"], [nodes, "节点"], [subs, "订阅"], [customers, "客户"], [routes, "链路"], [forwards, "转发"], [certificates, "证书"], [templates, "模板"]] as const) {
-      [...records].sort((a, b) => a.id.localeCompare(b.id)).forEach((record, i) => { add(record.name, `${label} ${i + 1}`); add(record.id, "[标识已隐藏]"); add(record.id.slice(0, 8), "[标识已隐藏]"); });
-    }
-    for (const server of servers) for (const value of [server.ipv4, server.ipv6, server.detectedIpv4, server.detectedIpv6, server.domain, server.internalAddress, server.notes, server.tags]) add(value);
-    for (const node of nodes) for (const value of [node.publishAddress, node.shadowTlsHost, node.tlsName, node.firewallSources, node.routeSources, node.agentProxySources, node.error]) add(value);
-    for (const forward of forwards) { forward.targets?.forEach((target) => add(target.host)); add(forward.firewallSources); add(forward.error); }
-    customers.forEach((customer) => add(customer.notes));
-    routes.forEach((route) => add(route.notes));
-    certificates.forEach((cert) => add(cert.domain));
-    return screenshotText(entries);
-  }, [servers, nodes, subs, customers, routes, forwards, certificates, templates]);
-  const surgeImportHelp = (value: string) => {
+
+  const { serverWarnings, attention, unreadAttention, readItems, markRead, markUnread } = useAttention({
+    servers, failedNodes, operations, certificates, liveSubs,
+    pendingNodes, pendingSummary, serverName, agentReleases, coreReleases, refreshTick,
+  });
+
+  const redactScreenshot = useMemo(() => buildScreenshotRedactor({
+    servers, nodes, subs, customers, routes, forwards, certificates, templates,
+  }), [servers, nodes, subs, customers, routes, forwards, certificates, templates]);
+
+  const surgeImportHelp = useCallback((value: string) => {
     const line = `MUI = select, policy-path=${value}, update-interval=3600`;
     const profile = `${value}?profile=1`;
     return <div className="surgeImportHelp">
@@ -706,41 +601,15 @@ export function useAppState() {
       <p className="hint">已有自己的配置：编辑正在使用的配置，把下面这一行放进已有的 [Proxy Group] 段，保存并重新加载。然后把 MUI 加入现有规则所使用的代理组，即可从 MUI 组中选择节点，原有分流规则继续使用。</p>
       <MaskedValue value={line} pre><button className="ghost" type="button" onClick={() => void copy(line)}>复制 Surge 代理组配置</button></MaskedValue>
     </div>;
-  };
-  // Read marks live in this browser. Only problems still present keep theirs,
-  // so one that clears up and later returns is announced again.
-  const [readAttention, setReadAttention] = useState<string[]>(() => {
-    try {
-      const stored: unknown = JSON.parse(localStorage.getItem("mui-attention-read") || "[]");
-      return Array.isArray(stored) ? stored.filter((key): key is string => typeof key === "string") : [];
-    } catch {
-      return [];
-    }
-  });
-  const saveRead = useCallback((update: (keys: string[]) => string[]) => setReadAttention((current) => {
-    const next = update(current);
-    try { localStorage.setItem("mui-attention-read", JSON.stringify(next)); } catch { /* Marks then last until reload. */ }
-    return next;
-  }), []);
-  const markRead = useCallback((keys: string[]) => saveRead((current) => [...new Set([...current, ...keys])]), [saveRead]);
-  const markUnread = useCallback((key: string) => saveRead((current) => current.filter((item) => item !== key)), [saveRead]);
-  useEffect(() => {
-    // Lists are empty until the first full refresh; that says nothing yet.
-    if (!refreshTick) return;
-    const present = new Set(attention.map((item) => item.key));
-    if (readAttention.some((key) => !present.has(key))) saveRead((current) => current.filter((key) => present.has(key)));
-  }, [attention, refreshTick]);
-  const unreadAttention = useMemo(() => attention.filter((item) => !readAttention.includes(item.key)), [attention, readAttention]);
-  const readItems = useMemo(() => attention.filter((item) => readAttention.includes(item.key)), [attention, readAttention]);
+  }, [copy]);
+
   const protect = useCallback((tree: React.ReactNode) => screenshotMode
-    ? screenshotView(tree, redactScreenshot, new Set([SecretField, SecretTextarea, MaskedValue, CertificateFileField])) : tree, [screenshotMode, redactScreenshot]);
-  const expiring = useMemo(() => certificates.filter(
-    (c) => c.expiringSoon === true || (c.daysUntilExpiry !== undefined && c.daysUntilExpiry <= 30),
-  ), [certificates]);
-  return {
+    ? screenshotView(tree, redactScreenshot, secretComponents) : tree, [screenshotMode, redactScreenshot]);
+
+  return useMemo(() => ({
     refreshing, screenshotMode, setScreenshotMode, theme, setTheme, authed, setAuthed, totpEnabled, setTotpEnabled, tab, currentServerId,
     servers, nodes, templates, certificates, rules, forwards, routes, subs, customers, operations, agentReleases, coreReleases,
-    komariEndpoint, setKomariEndpoint, refreshTick, pollTick, modal, confirmation, setConfirmation, batch, setBatch,
+    refreshTick, pollTick, modal, confirmation, setConfirmation, batch, setBatch,
     installInfo, setInstallInfo, installMethod, setInstallMethod, installArch, setInstallArch, issued, setIssued, preview, setPreview,
     trafficNode, setTrafficNode, trafficSub, setTrafficSub, agentDownloads, setAgentDownloads, offlineServer, setOfflineServer,
     summary, dashSeries, ranking, refresh, act, runBatch, copy, goTo, openModal, closeModal, openServer, openNode, openForward, openRoute,
@@ -748,7 +617,18 @@ export function useAppState() {
     auditTarget, attention, unreadAttention, readItems, markRead, markUnread, liveSubs, failedNodes, split, activeNodes, onlineServers, agentServers, upgradingAgentIDs, updatingAgentIDs,
     forwardServerIDs, serverWarnings, nodeAccessText, serverName, pendingNodes, pendingSummary, subNodeIds, subMemberNodes, sharedSubNodes,
     onlySharedSubNodes, routePath, restartNotice, surgeImportHelp, protect, redactScreenshot, expiring,
-  };
+  }), [
+    refreshing, screenshotMode, theme, authed, totpEnabled, tab, currentServerId,
+    servers, nodes, templates, certificates, rules, forwards, routes, subs, customers, operations, agentReleases, coreReleases,
+    refreshTick, pollTick, modal, confirmation, batch,
+    installInfo, installMethod, installArch, issued, preview,
+    trafficNode, trafficSub, agentDownloads, offlineServer,
+    summary, dashSeries, ranking, refresh, act, runBatch, copy, goTo, openModal, closeModal, openServer, openNode, openForward, openRoute,
+    openSubscription, openTemplate, useTemplate, templateNodeForm, matchingCertificate, showInstall, deleteItem, deleteServer, matches,
+    auditTarget, attention, unreadAttention, readItems, markRead, markUnread, liveSubs, failedNodes, split, activeNodes, onlineServers, agentServers, upgradingAgentIDs, updatingAgentIDs,
+    forwardServerIDs, serverWarnings, nodeAccessText, serverName, pendingNodes, pendingSummary, subNodeIds, subMemberNodes, sharedSubNodes,
+    onlySharedSubNodes, routePath, restartNotice, surgeImportHelp, protect, redactScreenshot, expiring,
+  ]);
 }
 
 export type App = ReturnType<typeof useAppState>;
