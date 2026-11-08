@@ -142,8 +142,13 @@ pre {
   color: var(--text);
 }
 .sidebar nav button.child {
-  padding-left: 38px;
+  gap: 8px;
+  padding-left: 22px;
   font-size: 13px;
+}
+.sidebar nav button.child svg {
+  width: 15px;
+  height: 15px;
 }
 .navGroup {
   display: grid;
@@ -169,9 +174,6 @@ pre {
   font-weight: 600;
   line-height: 18px;
   text-align: center;
-}
-.menuButton {
-  display: none;
 }
 .sideBottom {
   margin-top: auto;
@@ -266,6 +268,9 @@ h2 {
 }
 .iconButton:hover {
   border-color: var(--text);
+}
+.menuButton {
+  display: none;
 }
 .inputWithAction {
   display: flex;

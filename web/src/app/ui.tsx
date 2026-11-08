@@ -3,8 +3,7 @@ import { createPortal } from "react-dom";
 import { api } from "../api";
 import type { Confirmation, Tab } from "./helpers";
 
-type SubPage = "accesses" | "connections" | "audit";
-export type IconName = "privacy" | "refresh" | "sun" | "moon" | "generate" | "dice" | "menu" | Exclude<Tab, SubPage> | "logout";
+export type IconName = "privacy" | "refresh" | "sun" | "moon" | "generate" | "dice" | "menu" | Tab | "customer" | "tasks" | "logout";
 
 export function Icon({ name }: { name: IconName }) {
   const paths = {
@@ -25,7 +24,12 @@ export function Icon({ name }: { name: IconName }) {
     routes: <><circle cx="4" cy="12" r="2" /><circle cx="12" cy="12" r="2" /><circle cx="20" cy="12" r="2" /><path d="M6 12h4m4 0h4" /></>,
     subscriptions: <><path d="M4 7a13 13 0 0 1 13 13M4 12a8 8 0 0 1 8 8" /><circle cx="5" cy="19" r="1" fill="currentColor" stroke="none" /></>,
     customers: <><circle cx="9" cy="8" r="3" /><path d="M3 20v-2a6 6 0 0 1 12 0v2H3Z" /><circle cx="18" cy="9" r="2" /><path d="M17 15a5 5 0 0 1 4 5" /></>,
+    customer: <><circle cx="12" cy="8" r="3.5" /><path d="M5 20v-1.5a7 7 0 0 1 14 0V20" /></>,
+    accesses: <><path d="M9 6h11M9 12h11M9 18h11" /><circle cx="4.5" cy="6" r="1" fill="currentColor" stroke="none" /><circle cx="4.5" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="4.5" cy="18" r="1" fill="currentColor" stroke="none" /></>,
+    connections: <><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" /><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" /></>,
     operations: <><path d="M4 4v6h6M4.8 10a8 8 0 1 1-.2 5M12 7v5l3 2" /></>,
+    tasks: <><path d="m4 7 2 2 4-4M4 17l2 2 4-4M13 6h7M13 12h7M13 18h7" /></>,
+    audit: <><path d="M9 3h6a1 1 0 0 1 1 1v2H8V4a1 1 0 0 1 1-1Z" /><path d="M8 5H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" /><path d="M9 12h6M9 16h4" /></>,
     settings: <><circle cx="12" cy="12" r="3" /><path d="M10 2h4l.6 2.2 2 .8 2-.9 2.8 2.8-.9 2 .8 2L23 11v4l-2.2.6-.8 2 .9 2-2.8 2.8-2-.9-2 .8L14 24h-4l-.6-2.2-2-.8-2 .9-2.8-2.8.9-2-.8-2L1 15v-4l2.2-.6.8-2-.9-2L6.9 3.6l2 .9 2-.8L10 2Z" transform="translate(0 -1) scale(1 .95)" /></>,
     help: <><path d="M3 4h7a4 4 0 0 1 4 4v13a4 4 0 0 0-4-2H3V4Zm18 0h-5a4 4 0 0 0-4 4v13a4 4 0 0 1 4-2h5V4Z" /></>,
     menu: <path d="M4 6h16M4 12h16M4 18h16" />,

@@ -10,7 +10,7 @@ import { useAppState, type App as AppState } from "./state";
 import { ConfirmDialog, Icon, type IconName } from "./ui";
 
 type SubPage = "accesses" | "connections" | "audit";
-type Entry = { id: Exclude<Tab, SubPage>; label: string; icon: IconName; children?: { id: Tab; label: string }[] };
+type Entry = { id: Exclude<Tab, SubPage>; label: string; icon: IconName; children?: { id: Tab; label: string; icon: IconName }[] };
 // An entry with children opens its first page, and its pages are listed
 // beneath it while one of them is showing.
 const groups: { title: string; entries: Entry[] }[] = [
@@ -30,15 +30,15 @@ const groups: { title: string; entries: Entry[] }[] = [
   { title: "用户", entries: [
     { id: "subscriptions", label: "订阅", icon: "subscriptions" },
     { id: "customers", label: "客户端管理", icon: "customers", children: [
-      { id: "customers", label: "客户" },
-      { id: "accesses", label: "订阅访问记录" },
-      { id: "connections", label: "节点连接 IP" },
+      { id: "customers", label: "客户", icon: "customer" },
+      { id: "accesses", label: "订阅访问记录", icon: "accesses" },
+      { id: "connections", label: "节点连接 IP", icon: "connections" },
     ] },
   ] },
   { title: "系统", entries: [
     { id: "operations", label: "操作记录", icon: "operations", children: [
-      { id: "operations", label: "任务记录" },
-      { id: "audit", label: "审计日志" },
+      { id: "operations", label: "任务记录", icon: "tasks" },
+      { id: "audit", label: "审计日志", icon: "audit" },
     ] },
     { id: "settings", label: "设置", icon: "settings" },
     { id: "help", label: "帮助", icon: "help" },
@@ -170,7 +170,10 @@ export default function App() {
                   {t.id === "dashboard" && urgent > 0 && <span className="navBadge" title={`${urgent} 项需要关注`}>{urgent}</span>}
                 </button>
                 {expanded && t.children!.map((child) => (
-                  <button key={child.id} className={"child" + (tab === child.id ? " active" : "")} onClick={() => open(child.id)}>{child.label}</button>
+                  <button key={child.id} className={"child" + (tab === child.id ? " active" : "")} onClick={() => open(child.id)}>
+                    <Icon name={child.icon} />
+                    {child.label}
+                  </button>
                 ))}
               </div>;
             })}
