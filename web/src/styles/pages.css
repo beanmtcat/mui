@@ -1,29 +1,69 @@
 /* Dashboard figures */
 .statGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
   margin-top: 20px;
   margin-bottom: 20px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface);
+}
+.statGrid:first-child {
+  margin-top: 0;
 }
 .statCard {
-  padding: 14px 16px;
-  border-right: 1px solid var(--line);
-}
-.statCard:last-child {
-  border-right: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 .statCard span {
   display: block;
   font-size: 12px;
+  font-weight: 600;
   color: var(--muted);
 }
 .statCard strong {
-  font-size: 20px;
-  font-weight: 600;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
   font-variant-numeric: tabular-nums;
+}
+.statBar {
+  display: flex;
+  height: 5px;
+  width: 100%;
+  margin: 4px 0 2px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--code-bg);
+}
+.statBarFill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+.statBarFill.good {
+  background: var(--good);
+}
+.statBarFill.warn {
+  background: var(--warn);
+}
+.statBarFill.bad {
+  background: var(--bad);
+}
+.statBarFill.accent,
+.statBarFill.up {
+  background: var(--traffic-up);
+}
+.statBarFill.down {
+  background: var(--traffic-down);
+}
+.statBar.split .statBarFill {
+  border-radius: 0;
 }
 .statCard small {
   display: block;
@@ -32,10 +72,21 @@
   color: var(--muted);
   font-variant-numeric: tabular-nums;
 }
+.attentionCompact {
+  margin-bottom: 20px;
+  background: var(--surface-subtle);
+}
+.attentionCompact .listRow.attention {
+  align-items: center;
+  padding: 8px 16px;
+}
+.attentionCompact .listRow.attention .status {
+  margin-top: 0;
+}
 .twoCol {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-  gap: 24px;
+  gap: 20px;
   margin-top: 20px;
 }
 .twoCol .panel + .panel {
@@ -60,8 +111,39 @@
 }
 td.rank {
   width: 1%;
+  vertical-align: middle;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+}
+.rankBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  background: var(--code-bg);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.rankBadge.top {
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-border);
+  color: var(--accent);
+}
+.rankBar {
+  height: 4px;
+  width: 100%;
+  margin-top: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--code-bg);
+}
+.rankBarFill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent) 0%, var(--accent-hover) 100%);
 }
 td.num,
 th.num {
@@ -452,9 +534,14 @@ form.totpBox {
   color: var(--muted);
 }
 
-@media (max-width: 760px) {
-  .statCard {
-    border-bottom: 1px solid var(--line);
+@media (max-width: 960px) {
+  .statGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 600px) {
+  .statGrid {
+    grid-template-columns: 1fr;
   }
 }
 @media (max-width: 500px) {

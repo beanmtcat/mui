@@ -148,33 +148,69 @@ export default function App() {
   const app = useAppState();
   const { tab, goTo, refresh, refreshing, screenshotMode, setScreenshotMode, theme, setTheme, expiring, unreadAttention, servers, confirmation, setConfirmation, offlineServer, setOfflineServer, agentDownloads, setAgentDownloads, agentReleases, copy, redactScreenshot, protect } = app;
   const [menuOpen, setMenuOpen] = useState(false);
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   if (app.authed === null) return <div className="loading">正在加载面板…</div>;
   if (!app.authed) return <Login app={app} />;
-  const pageTitle = entries.flatMap((t) => t.children || []).find((child) => child.id === tab)?.label || entries.find((t) => t.id === tab)?.label;
+  const activeGroup = groups.find((g) => g.entries.some((t) => t.id === tab || t.children?.some((c) => c.id === tab)));
+  const activeParent = entries.find((t) => t.children?.some((c) => c.id === tab));
+  const pageTitle = activeParent?.children?.find((child) => child.id === tab)?.label || entries.find((t) => t.id === tab)?.label;
   const urgent = unreadAttention.filter((item) => item.tone !== "info").length;
   const open = (target: Tab) => { goTo(target); setMenuOpen(false); };
   return <AppContext.Provider value={app}>
     {protect(<div className="app">
       <aside className={"sidebar" + (menuOpen ? " menuOpen" : "")}>
-        <div className="brand">MUI 节点管理面板</div>
+        <div className="brand">
+          <span className="brandMark" aria-hidden="true">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="6" cy="6" r="2.5" />
+              <circle cx="18" cy="6" r="2.5" />
+              <circle cx="12" cy="18" r="2.5" />
+              <path d="M8.5 6h7M7.2 8.2l3.6 7.6M16.8 8.2l-3.6 7.6" />
+            </svg>
+          </span>
+          <span>MUI 节点管理面板</span>
+        </div>
         <button type="button" className="iconButton menuButton" aria-label="打开菜单" aria-expanded={menuOpen} onClick={() => setMenuOpen(!menuOpen)}><Icon name="menu" /></button>
         <nav>
           {groups.map((group) => <div className="navGroup" key={group.title}>
             {group.title && <div className="navTitle">{group.title}</div>}
             {group.entries.map((t) => {
-              const expanded = !!t.children?.some((child) => child.id === tab);
+              const hasActiveChild = !!t.children?.some((child) => child.id === tab);
+              const expanded = !!t.children && (openGroups[t.id] ?? hasActiveChild);
               return <div key={t.id}>
-                <button className={t.children ? (expanded ? "open" : "") : tab === t.id ? "active" : ""} aria-expanded={t.children ? expanded : undefined} onClick={() => open(t.id)}>
+                <button
+                  className={t.children ? (expanded ? "open" : "") : tab === t.id ? "active" : ""}
+                  aria-expanded={t.children ? expanded : undefined}
+                  onClick={() => {
+                    if (t.children) {
+                      if (!hasActiveChild) {
+                        setOpenGroups((prev) => ({ ...prev, [t.id]: !expanded }));
+                        if (!expanded) open(t.id);
+                      } else {
+                        setOpenGroups((prev) => ({ ...prev, [t.id]: !expanded }));
+                      }
+                    } else {
+                      open(t.id);
+                    }
+                  }}
+                >
                   <Icon name={t.icon} />
-                  {t.label}
+                  <span>{t.label}</span>
                   {t.id === "dashboard" && urgent > 0 && <span className="navBadge" title={`${urgent} 项需要关注`}>{urgent}</span>}
+                  {t.children && (
+                    <svg className="navChevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="m9 18 6-6-6-6" />
+                    </svg>
+                  )}
                 </button>
-                {expanded && t.children!.map((child) => (
-                  <button key={child.id} className={"child" + (tab === child.id ? " active" : "")} onClick={() => open(child.id)}>
-                    <Icon name={child.icon} />
-                    {child.label}
-                  </button>
-                ))}
+                {expanded && <div className="navChildren">
+                  {t.children!.map((child) => (
+                    <button key={child.id} className={"child" + (tab === child.id ? " active" : "")} onClick={() => open(child.id)}>
+                      <Icon name={child.icon} />
+                      <span>{child.label}</span>
+                    </button>
+                  ))}
+                </div>}
               </div>;
             })}
           </div>)}
@@ -198,7 +234,16 @@ export default function App() {
       </aside>
       <main>
         <header>
-          <h1>{pageTitle}</h1>
+          <div className="headerTitleGroup">
+            {(activeGroup?.title || activeParent) && (
+              <div className="headerBreadcrumb" aria-label="面包屑导航">
+                {activeGroup?.title && <span>{activeGroup.title}</span>}
+                {activeGroup?.title && activeParent && <span className="sep">/</span>}
+                {activeParent && <span>{activeParent.label}</span>}
+              </div>
+            )}
+            <h1>{pageTitle}</h1>
+          </div>
           <div className="headerActions">
             <span className="headerRefreshStatus" role="status" aria-live="polite">{refreshing ? "刷新中…" : ""}</span>
             <button className={"iconButton" + (refreshing ? " refreshing" : "")} type="button" disabled={refreshing} aria-busy={refreshing} onClick={() => void refresh(true)} aria-label={refreshing ? "刷新中" : "刷新"} title={refreshing ? "刷新中…" : "刷新"}><Icon name="refresh" /></button>

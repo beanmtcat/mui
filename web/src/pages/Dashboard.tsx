@@ -41,69 +41,128 @@ export default function Dashboard() {
   const todayByServer = useCallback((id: string) =>
     ranking.nodes.filter((u) => nodes.find((n) => n.id === u.id)?.serverId === id).reduce((sum, u) => sum + total(u), 0), [ranking, nodes, total]);
   const [showRead, setShowRead] = useState(false);
-  const totalTraffic = useMemo(() => nodes.reduce((sum, n) => sum + n.uplink + n.downlink, 0), [nodes]);
+  const totalUplink = useMemo(() => nodes.reduce((sum, n) => sum + n.uplink, 0), [nodes]);
+  const totalDownlink = useMemo(() => nodes.reduce((sum, n) => sum + n.downlink, 0), [nodes]);
+  const totalTraffic = totalUplink + totalDownlink;
+  const ratio = (num: number, den: number) => (den > 0 ? Math.min(100, Math.round((num / den) * 100)) : 0);
   const statCards = useMemo(() => [
     {
       label: "在线服务器",
       value: `${onlineServers.length} / ${agentServers.length}`,
       note: agentServers.length === onlineServers.length ? "全部在线" : `${agentServers.length - onlineServers.length} 台离线或未接入`,
+      kind: "ratio" as const,
+      pct: ratio(onlineServers.length, agentServers.length),
+      tone: agentServers.length > 0 && onlineServers.length < agentServers.length ? "warn" : "good",
     },
     {
       label: "运行中节点",
       value: `${activeNodes.length} / ${nodes.length}`,
       note: failedNodes.length ? `${failedNodes.length} 个应用失败` : `${nodes.filter((n) => !n.enabled).length} 个已停用`,
+      kind: "ratio" as const,
+      pct: ratio(activeNodes.length, nodes.length),
+      tone: failedNodes.length > 0 ? "bad" : "good",
     },
     {
       label: "有效订阅",
       value: `${liveSubs.length} / ${subs.length}`,
       note: `${customers.length} 个客户`,
+      kind: "ratio" as const,
+      pct: ratio(liveSubs.length, subs.length),
+      tone: "accent",
     },
-    { label: "今日流量", value: bytes(summary.today.uplink + summary.today.downlink), note: split(summary.today) },
-    { label: "本月流量", value: bytes(summary.month.uplink + summary.month.downlink), note: split(summary.month) },
-    { label: "累计流量", value: bytes(totalTraffic), note: "全部节点" },
-  ], [onlineServers, agentServers, activeNodes, nodes, failedNodes, liveSubs, subs, customers, summary, split, totalTraffic]);
+    {
+      label: "今日流量",
+      value: bytes(summary.today.uplink + summary.today.downlink),
+      note: split(summary.today),
+      kind: "split" as const,
+      upPct: ratio(summary.today.uplink, summary.today.uplink + summary.today.downlink),
+      hasTraffic: summary.today.uplink + summary.today.downlink > 0,
+    },
+    {
+      label: "本月流量",
+      value: bytes(summary.month.uplink + summary.month.downlink),
+      note: split(summary.month),
+      kind: "split" as const,
+      upPct: ratio(summary.month.uplink, summary.month.uplink + summary.month.downlink),
+      hasTraffic: summary.month.uplink + summary.month.downlink > 0,
+    },
+    {
+      label: "累计流量",
+      value: bytes(totalTraffic),
+      note: totalTraffic > 0 ? split({ uplink: totalUplink, downlink: totalDownlink }) : "全部节点",
+      kind: "split" as const,
+      upPct: ratio(totalUplink, totalTraffic),
+      hasTraffic: totalTraffic > 0,
+    },
+  ], [onlineServers, agentServers, activeNodes, nodes, failedNodes, liveSubs, subs, customers, summary, split, totalTraffic, totalUplink, totalDownlink]);
+  const maxNodeTraffic = topNodes.length ? Math.max(total(topNodes[0]), 1) : 1;
+  const maxSubTraffic = topSubs.length ? Math.max(total(topSubs[0]), 1) : 1;
+  const attentionSection = (unreadAttention.length > 0 || showRead) ? (
+    <section className="panel">
+      <div className="panelHead">
+        <h2>需要关注</h2>
+        <div className="attentionTools">
+          {unreadAttention.length > 0 && <span className="hint">{unreadAttention.length} 项未读</span>}
+          {unreadAttention.length > 1 && <button className="textButton" onClick={() => markRead(unreadAttention.map((item) => item.key))}>全部已读</button>}
+          {readItems.length > 0 && <button className="textButton" aria-expanded={showRead} onClick={() => setShowRead(!showRead)}>{showRead ? "隐藏已读" : `已读 ${readItems.length} 项`}</button>}
+        </div>
+      </div>
+      {unreadAttention.length ? (
+        unreadAttention.slice(0, 12).map((item) => (
+          <div className="listRow attention" key={item.key}>
+            <span className={"status " + (item.tone === "info" ? "idle" : item.tone)} aria-label={item.tone === "bad" ? "严重" : item.tone === "warn" ? "警告" : "提示"} />
+            <div className="grow">{item.text}</div>
+            <button className="textButton" onClick={() => goTo(item.tab, item.server ?? "", item.q ? { q: item.q } : {})}>查看</button>
+            <button className="textButton" onClick={() => markRead([item.key])}>已读</button>
+          </div>
+        ))
+      ) : (
+        <div className="listRow attention"><span className="status good" /><div className="grow">{attention.length ? "没有未读事项。" : "一切正常，没有需要处理的事项。"}</div></div>
+      )}
+      {unreadAttention.length > 12 && <div className="listRow attention"><div className="grow hint">另有 {unreadAttention.length - 12} 项未显示</div></div>}
+      {showRead && readItems.map((item) => (
+        <div className="listRow attention attentionRead" key={item.key}>
+          <span className="status idle" aria-label="已读" />
+          <div className="grow">{item.text}</div>
+          <button className="textButton" onClick={() => goTo(item.tab, item.server ?? "", item.q ? { q: item.q } : {})}>查看</button>
+          <button className="textButton" onClick={() => markUnread(item.key)}>标为未读</button>
+        </div>
+      ))}
+    </section>
+  ) : (
+    <section className="panel attentionCompact">
+      <div className="listRow attention">
+        <span className="status good">正常</span>
+        <div className="grow">{attention.length ? "没有未读事项。" : "一切正常，没有需要处理的事项。"}</div>
+        {readItems.length > 0 && <button className="textButton" aria-expanded={showRead} onClick={() => setShowRead(true)}>已读 {readItems.length} 项</button>}
+      </div>
+    </section>
+  );
   return protect(<>
     <Onboarding />
-            <section className="panel">
-              <div className="panelHead">
-                <h2>需要关注</h2>
-                <div className="attentionTools">
-                  {unreadAttention.length > 0 && <span className="hint">{unreadAttention.length} 项未读</span>}
-                  {unreadAttention.length > 1 && <button className="textButton" onClick={() => markRead(unreadAttention.map((item) => item.key))}>全部已读</button>}
-                  {readItems.length > 0 && <button className="textButton" aria-expanded={showRead} onClick={() => setShowRead(!showRead)}>{showRead ? "隐藏已读" : `已读 ${readItems.length} 项`}</button>}
-                </div>
-              </div>
-              {unreadAttention.length ? (
-                unreadAttention.slice(0, 12).map((item) => (
-                  <div className="listRow attention" key={item.key}>
-                    <span className={"status " + (item.tone === "info" ? "idle" : item.tone)} aria-label={item.tone === "bad" ? "严重" : item.tone === "warn" ? "警告" : "提示"} />
-                    <div className="grow">{item.text}</div>
-                    <button className="textButton" onClick={() => goTo(item.tab, item.server ?? "", item.q ? { q: item.q } : {})}>查看</button>
-                    <button className="textButton" onClick={() => markRead([item.key])}>已读</button>
-                  </div>
-                ))
-              ) : (
-                <div className="listRow attention"><span className="status good" /><div className="grow">{attention.length ? "没有未读事项。" : "一切正常，没有需要处理的事项。"}</div></div>
-              )}
-              {unreadAttention.length > 12 && <div className="listRow attention"><div className="grow hint">另有 {unreadAttention.length - 12} 项未显示</div></div>}
-              {showRead && readItems.map((item) => (
-                <div className="listRow attention attentionRead" key={item.key}>
-                  <span className="status idle" aria-label="已读" />
-                  <div className="grow">{item.text}</div>
-                  <button className="textButton" onClick={() => goTo(item.tab, item.server ?? "", item.q ? { q: item.q } : {})}>查看</button>
-                  <button className="textButton" onClick={() => markUnread(item.key)}>标为未读</button>
-                </div>
-              ))}
-            </section>
+    {unreadAttention.length > 0 && attentionSection}
             <div className="statGrid">
               {statCards.map((c) => (
                 <div className="statCard" key={c.label}>
                   <span>{c.label}</span>
                   <strong>{c.value}</strong>
+                  {c.kind === "ratio" ? (
+                    <div className="statBar" aria-hidden="true">
+                      <div className={`statBarFill ${c.tone}`} style={{ width: `${c.pct}%` }} />
+                    </div>
+                  ) : (
+                    <div className="statBar split" aria-hidden="true">
+                      {c.hasTraffic && <>
+                        <div className="statBarFill up" style={{ width: `${c.upPct}%` }} />
+                        <div className="statBarFill down" style={{ width: `${100 - c.upPct}%` }} />
+                      </>}
+                    </div>
+                  )}
                   <small>{c.note}</small>
                 </div>
               ))}
             </div>
+            {unreadAttention.length === 0 && attentionSection}
             <section className="panel">
               <div className="panelHead"><h2>全部节点流量</h2></div>
               {dashSeries.length ? <Suspense fallback={<div className="trafficChart"><Empty text="正在加载图表…" /></div>}><TrafficChart points={dashSeries} /></Suspense> : <div className="trafficChart"><Empty text="暂无流量样本" /></div>}
@@ -118,10 +177,15 @@ export default function Dashboard() {
                   <table><tbody>
                     {topNodes.map((u, index) => {
                       const node = nodes.find((n) => n.id === u.id);
+                      const pct = Math.max(4, Math.round((total(u) / maxNodeTraffic) * 100));
                       return (
                         <tr key={u.id}>
-                          <td className="rank">{index + 1}</td>
-                          <td><strong>{node?.name || "已删除的节点"}</strong><small>{node ? serverName(node.serverId) : "—"}</small></td>
+                          <td className="rank"><span className={"rankBadge" + (index < 3 ? " top" : "")}>{index + 1}</span></td>
+                          <td>
+                            <strong>{node?.name || "已删除的节点"}</strong>
+                            <small>{node ? serverName(node.serverId) : "—"}</small>
+                            <div className="rankBar" aria-hidden="true"><div className="rankBarFill" style={{ width: `${pct}%` }} /></div>
+                          </td>
                           <td className="num">{bytes(total(u))}<small>{split(u)}</small></td>
                         </tr>
                       );
@@ -138,10 +202,15 @@ export default function Dashboard() {
                   <table><tbody>
                     {topSubs.map((u, index) => {
                       const sub = subs.find((item) => item.id === u.id);
+                      const pct = Math.max(4, Math.round((total(u) / maxSubTraffic) * 100));
                       return (
                         <tr key={u.id}>
-                          <td className="rank">{index + 1}</td>
-                          <td><strong>{sub?.name || (u.id === "direct" ? "节点直连链接" : "已删除的订阅")}</strong><small>{customers.find((c) => c.id === sub?.customerId)?.name || "未关联客户"}</small></td>
+                          <td className="rank"><span className={"rankBadge" + (index < 3 ? " top" : "")}>{index + 1}</span></td>
+                          <td>
+                            <strong>{sub?.name || (u.id === "direct" ? "节点直连链接" : "已删除的订阅")}</strong>
+                            <small>{customers.find((c) => c.id === sub?.customerId)?.name || "未关联客户"}</small>
+                            <div className="rankBar" aria-hidden="true"><div className="rankBarFill" style={{ width: `${pct}%` }} /></div>
+                          </td>
                           <td className="num">{bytes(total(u))}<small>{split(u)}</small></td>
                         </tr>
                       );

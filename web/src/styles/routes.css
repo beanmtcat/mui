@@ -34,11 +34,16 @@
   margin: 0;
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
+  background: var(--surface-subtle);
+}
+.routeFilters input,
+.routeFilters select {
+  max-width: 100%;
+  min-width: 0;
 }
 .routeFilters select {
   width: auto;
-  min-width: 150px;
-  max-width: 100%;
+  min-width: 140px;
 }
 .routeTally {
   display: flex;
@@ -204,6 +209,9 @@
   padding: 12px 16px;
   border-bottom: 1px solid var(--line);
   transition: background-color 0.12s;
+}
+.routeRow:hover {
+  background: var(--surface-hover);
 }
 .routeRow:last-child {
   border-bottom: 0;

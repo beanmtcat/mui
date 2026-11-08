@@ -122,6 +122,7 @@ export default function Routes() {
       </div>
     </div>
     <div className="filters routeFilters">
+      <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索链路名称、端口、服务器或备注" aria-label="搜索链路" />
       <select aria-label="按入口服务器筛选链路" value={entry} onChange={(e) => setEntry(e.target.value)}>
         <option value="">全部入口服务器</option>
         {entryOptions.map((id) => <option key={id} value={id}>{serverName(id)}</option>)}

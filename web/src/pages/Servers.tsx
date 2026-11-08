@@ -55,6 +55,7 @@ export default function Servers() {
               </div>
             </div>
             <div className="filters serverFilters">
+              <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索名称、地址、服务商或备注" aria-label="搜索服务器" />
               {filters.map(([label, field, value, set]) => (
                 <select key={field} aria-label={`按${label}筛选服务器`} value={value} onChange={(e) => set(e.target.value)}>
                   <option value="">全部{label}</option>

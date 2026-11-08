@@ -54,7 +54,8 @@ export default function Nodes() {
                 新建节点
               </button>
             </div>
-            <div className="filters">
+            <div className="filters serverFilters">
+              <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索节点名称、服务器、端口或域名" aria-label="搜索节点" />
               <select aria-label="按服务器筛选节点" value={serverFilter} onChange={(e) => setServerFilter(e.target.value)}>
                 <option value="">全部服务器</option>
                 {servers.map((s) => (

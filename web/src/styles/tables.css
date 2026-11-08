@@ -1,8 +1,9 @@
 /* Sections and tables */
 .panel {
   border: 1px solid var(--line);
-  border-radius: 6px;
+  border-radius: 8px;
   background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 .panel + .panel {
   margin-top: 20px;
@@ -12,7 +13,7 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px 16px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--line);
 }
 .panelHead p,
@@ -94,16 +95,21 @@ table {
 }
 th,
 td {
-  padding: 9px 16px;
+  padding: 10px 16px;
   text-align: left;
   vertical-align: top;
   border-bottom: 1px solid var(--line);
+  transition: background-color 0.12s ease;
 }
 th {
+  background: var(--surface-subtle);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 600;
   color: var(--muted);
   white-space: nowrap;
+}
+tbody tr:hover td {
+  background: var(--surface-hover);
 }
 tbody tr:last-child td {
   border-bottom: 0;
@@ -156,6 +162,7 @@ td small.dangerText {
   gap: 10px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
+  background: var(--surface-subtle);
 }
 .serverFilters {
   flex-wrap: wrap;
@@ -164,24 +171,28 @@ td small.dangerText {
   flex-wrap: wrap;
 }
 .forwardFilters input,
-.forwardFilters select {
+.forwardFilters select,
+.serverFilters input,
+.serverFilters select {
   max-width: 100%;
   min-width: 0;
 }
-.forwardFilters .hint {
+.forwardFilters .hint,
+.serverFilters .hint {
   margin: 0;
   white-space: nowrap;
 }
 main > .filters {
   padding: 0 0 14px;
   border: 0;
+  background: none;
 }
 .filters select {
   width: auto;
-  min-width: 150px;
+  min-width: 140px;
 }
 .filters input {
-  width: 260px;
+  width: 240px;
 }
 .panel > pre {
   max-height: 320px;
@@ -197,34 +208,63 @@ main > .filters {
   align-items: center;
   gap: 6px;
   white-space: nowrap;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.4;
+}
+.status:not(:empty) {
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
 }
 .status::before {
   content: "";
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
   background: currentColor;
 }
 .status.good {
   color: var(--good);
 }
+.status.good:not(:empty) {
+  background: var(--good-bg);
+  border-color: var(--good-border);
+}
 .status.bad {
   color: var(--bad);
+}
+.status.bad:not(:empty) {
+  background: var(--bad-bg);
+  border-color: var(--bad-border);
 }
 .status.warn {
   color: var(--warn);
 }
+.status.warn:not(:empty) {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+}
 .status.idle {
   color: var(--idle);
 }
+.status.idle:not(:empty) {
+  background: var(--idle-bg);
+  border-color: var(--idle-border);
+}
 .chip {
-  padding: 1px 6px;
-  border: 1px solid var(--line-strong);
-  border-radius: 3px;
-  font-size: 12px;
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid var(--accent-border);
+  border-radius: 5px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-size: 11.5px;
+  font-weight: 600;
 }
 .chip.red {
-  border-color: var(--bad);
+  border-color: var(--bad-border);
+  background: var(--bad-bg);
   color: var(--bad);
 }
 
@@ -383,6 +423,12 @@ td .menuList button {
     right: 0;
     background: var(--surface);
     box-shadow: -1px 0 0 var(--line);
+  }
+  .cardTable th:last-child {
+    background: var(--surface-subtle);
+  }
+  .cardTable tbody tr:hover td:last-child {
+    background: var(--surface-hover);
   }
   /* Sticky cells stack by row, so an open menu must lift its own cell. */
   .cardTable td:last-child:has(.menuList) {

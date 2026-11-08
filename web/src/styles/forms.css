@@ -45,10 +45,18 @@ input,
 select,
 textarea {
   width: 100%;
-  padding: 6px 9px;
+  padding: 6px 10px;
   border: 1px solid var(--line-strong);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--surface);
+  transition:
+    border-color 0.14s ease,
+    box-shadow 0.14s ease;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
 }
 textarea {
   resize: vertical;
@@ -276,13 +284,15 @@ input[type="checkbox"] {
   place-items: start center;
   padding: 8vh 16px 16px;
   overflow: auto;
-  background: rgb(0 0 0 / 40%);
+  background: rgb(15 23 42 / 0.45);
+  backdrop-filter: blur(2px);
 }
 .modal {
   width: min(640px, 100%);
-  border: 1px solid var(--line-strong);
-  border-radius: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
   background: var(--surface);
+  box-shadow: var(--shadow-md);
 }
 .modalHead {
   display: flex;
