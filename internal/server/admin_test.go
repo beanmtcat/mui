@@ -361,7 +361,7 @@ func TestNodeTemplateLifecycle(t *testing.T) {
 		t.Fatalf("update template: %d", code)
 	}
 	stored, err := p.store.NodeTemplate(id)
-	if err != nil || stored.Protocol != "snell" || stored.SnellVersion != 6 || stored.Obfs != "" || stored.Method != "" {
+	if err != nil || stored.Protocol != "snell" || stored.SnellVersion != 5 || stored.Obfs != "http" || stored.Method != "" {
 		t.Fatalf("updated template: %+v %v", stored, err)
 	}
 	if code, _, _ = p.do("DELETE", "/api/node-templates/"+id, nil, nil); code != 200 {

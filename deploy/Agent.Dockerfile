@@ -1,7 +1,7 @@
 # Build-only recipe: build-agent.sh exports Linux binaries with --output.
 # Agents are installed on target hosts as systemd services, not containers.
 FROM golang:1.26.10-bookworm AS agent-builder
-ARG AGENT_VERSION=0.6.28
+ARG AGENT_VERSION=0.6.29
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -21,10 +21,30 @@ RUN git clone --depth 1 --branch "${SING_BOX_VERSION}" https://github.com/SagerN
     if [ -n "${SING_BOX_COMMIT}" ]; then git -C /src/sing-box fetch --depth 1 origin "${SING_BOX_COMMIT}" && git -C /src/sing-box checkout "${SING_BOX_COMMIT}"; fi && \
     git -C /src/sing-box rev-parse HEAD
 WORKDIR /src/sing-box
+# sing-shadowtls a9c0127d starts vectorised writes after 512 KiB. That path
+# advances the v3 MAC twice and can encode over 64 KiB as a single TLS record,
+# truncating its 16-bit length. Keep the dependency version check so a future
+# sing-box upgrade cannot silently apply this patch to different upstream code.
+COPY deploy/patches/sing-shadowtls-v3-record-framing.patch /tmp/sing-shadowtls-v3-record-framing.patch
+RUN set -eu; \
+    if [ "$SING_BOX_VERSION" = 'v1.14.4' ]; then \
+      dep_version="$(go list -m -f '{{.Version}}' github.com/sagernet/sing-shadowtls)"; \
+      test "$dep_version" = 'v0.2.2-0.20260928201441-a9c0127d5c99'; \
+      go mod download github.com/sagernet/sing-shadowtls; \
+      dep_dir="$(go list -m -f '{{.Dir}}' github.com/sagernet/sing-shadowtls)"; \
+      cp -R "$dep_dir" /src/sing-shadowtls; \
+      chmod -R u+w /src/sing-shadowtls; \
+      git -C /src/sing-shadowtls apply --check /tmp/sing-shadowtls-v3-record-framing.patch; \
+      git -C /src/sing-shadowtls apply /tmp/sing-shadowtls-v3-record-framing.patch; \
+      go mod edit -replace github.com/sagernet/sing-shadowtls=/src/sing-shadowtls; \
+    fi
 # The default tag list is comma separated. with_naive_outbound needs cgo, which a static build does not have.
 # Without constant.Version the binary reports "version unknown" and the agent rejects it.
 RUN TAGS="$(tr ',' '\n' < release/DEFAULT_BUILD_TAGS | grep -Ev '^(with_naive_outbound|with_clash_api|with_v2ray_api)$' | paste -sd, -),with_v2ray_api,with_clash_api" && \
     GOFLAGS=-trimpath CGO_ENABLED=0 go build -tags "$TAGS" -ldflags "$(cat release/LDFLAGS) -X github.com/sagernet/sing-box/constant.Version=${SING_BOX_VERSION#v}" -o /out/sing-box ./cmd/sing-box
+
+FROM scratch AS core-only
+COPY --from=core-builder /out/sing-box /sing-box
 
 FROM scratch
 COPY --from=agent-builder /out/mui-agent /mui-agent

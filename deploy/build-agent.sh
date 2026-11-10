@@ -5,9 +5,9 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 arch="${1:-amd64}"
 core_version="${2:-v1.14.4}"
-agent_version="${3:-0.6.28}"
+agent_version="${3:-0.6.29}"
 release_key=${MUI_RELEASE_KEY:-"$(pwd)/deploy/.secrets/release.key"}
-case "$arch" in amd64|arm64) ;; *) echo "usage: $0 [amd64|arm64] [sing-box version, for example v1.14.4] [agent version, for example 0.6.28]" >&2; exit 2;; esac
+case "$arch" in amd64|arm64) ;; *) echo "usage: $0 [amd64|arm64] [sing-box version, for example v1.14.4] [agent version, for example 0.6.29]" >&2; exit 2;; esac
 if [[ ! "$core_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "sing-box version must be a vX.Y.Z release tag" >&2
   exit 2

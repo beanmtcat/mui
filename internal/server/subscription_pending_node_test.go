@@ -13,7 +13,7 @@ func TestSubscriptionEditAcceptsPendingDirectSnellNode(t *testing.T) {
 	if code != 201 {
 		t.Fatal(code, sub)
 	}
-	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": hostID, "name": "Snell", "protocol": "snell", "port": 12306, "snellPort": 8443, "snellVersion": 6, "shadowTlsHost": "example.com", "password": "a-valid-v6-psk", "enabled": true, "direct": false}, nil)
+	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": hostID, "name": "Snell", "protocol": "snell", "port": 12306, "snellPort": 8443, "shadowTlsHost": "example.com", "password": "a-valid-v5-psk", "enabled": true, "direct": false}, nil)
 	if code != 201 {
 		t.Fatal(code, node)
 	}
@@ -42,7 +42,7 @@ func TestSubscriptionEditAcceptsPendingDirectSnellNode(t *testing.T) {
 		t.Fatalf("incompatible client accepted: %d %v", code, out)
 	}
 	p.applyAll(auth)
-	if code, body := p.fetch(path); code != 200 || !strings.Contains(body, "version=6") || !strings.Contains(body, "shadow-tls-version=3") {
+	if code, body := p.fetch(path); code != 200 || !strings.Contains(body, "version=5") || !strings.Contains(body, "shadow-tls-version=3") {
 		t.Fatalf("applied node missing from subscription: %d %s", code, body)
 	}
 }

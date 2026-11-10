@@ -4,19 +4,29 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"mui/internal/agent"
 	"mui/internal/shared"
 )
 
-func TestSnellV6NodeTemplateAndAgentGate(t *testing.T) {
+func TestSnellV6NewConfigurationDisabledAndExistingNodePreserved(t *testing.T) {
 	p := newTestMui(t)
 	serverID, auth := p.enroll("snell-v6")
 	input := map[string]any{"serverId": serverID, "name": "v6", "protocol": "snell", "port": 54321,
-		"shadowTlsHost": "example.com", "password": "a-valid-v6-psk", "enabled": true, "direct": true}
-	code, node, _ := p.do("POST", "/api/nodes", input, nil)
-	if code != 201 || node["snellVersion"] != float64(6) {
-		t.Fatalf("default v6: %d %v", code, node)
+		"snellVersion": 6, "shadowTlsHost": "example.com", "password": "a-valid-v6-psk", "enabled": true, "direct": true}
+	if code, out, _ := p.do("POST", "/api/nodes", input, nil); code != 400 {
+		t.Fatalf("new v6 node accepted: %d %v", code, out)
+	}
+	delete(input, "snellVersion")
+	legacy := shared.Node{ID: ID(), ServerID: serverID, Name: "legacy-v6", Protocol: "snell", Port: 54322,
+		SnellPort: 23456, SnellVersion: 6, Listen: "0.0.0.0", ShadowTLSHost: "example.com", Enabled: true,
+		Direct: true, Status: "pending", CreatedAt: time.Now()}
+	if err := p.store.PutNodeWithShadowTLS(legacy, "a-valid-v6-psk", "outer-password"); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.app.queueApply(serverID, "nodes.apply"); err != nil {
+		t.Fatal(err)
 	}
 	state, err := p.app.desired(serverID)
 	if err != nil {
@@ -31,8 +41,8 @@ func TestSnellV6NodeTemplateAndAgentGate(t *testing.T) {
 	if code, job, _ := p.do("GET", "/agent/job", nil, auth); code != 204 {
 		t.Fatalf("v6 apply sent to old Agent: %d %v", code, job)
 	}
-	input["enabled"] = false
-	if code, out, _ := p.do("PATCH", "/api/nodes/"+node["id"].(string), input, nil); code != 200 {
+	input["port"], input["enabled"] = legacy.Port, false
+	if code, out, _ := p.do("PATCH", "/api/nodes/"+legacy.ID, input, nil); code != 200 || out["snellVersion"] != float64(6) {
 		t.Fatalf("disable: %d %v", code, out)
 	}
 	if code, job, _ := p.do("GET", "/agent/job", nil, auth); code != 204 {
@@ -42,24 +52,70 @@ func TestSnellV6NodeTemplateAndAgentGate(t *testing.T) {
 	if code, job, _ := p.do("GET", "/agent/job", nil, auth); code != 200 {
 		t.Fatalf("v6 apply did not resume: %d %v", code, job)
 	}
-	stored, _ := p.store.Node(node["id"].(string))
+	stored, _ := p.store.Node(legacy.ID)
 	server, _ := p.store.Server(serverID)
 	before := p.app.nodeFingerprint(server, stored, "a-valid-v6-psk", "outer-password")
 	stored.SnellVersion = 5
 	if before == p.app.nodeFingerprint(server, stored, "a-valid-v6-psk", "outer-password") {
 		t.Fatal("v6 protocol change did not invalidate client deployment")
 	}
-	input["port"], input["password"] = 54322, "eight123"
+	input["snellVersion"] = 5
+	if code, out, _ := p.do("PATCH", "/api/nodes/"+legacy.ID, input, nil); code != 200 || out["snellVersion"] != float64(5) {
+		t.Fatalf("legacy v6 node cannot switch to v5: %d %v", code, out)
+	}
+	input["snellVersion"] = 6
+	if code, out, _ := p.do("PATCH", "/api/nodes/"+legacy.ID, input, nil); code != 400 {
+		t.Fatalf("switching a v5 node back to v6 was accepted: %d %v", code, out)
+	}
+	input["port"], input["password"], input["snellVersion"] = 54323, "eight123", 6
 	if code, out, _ := p.do("POST", "/api/nodes", input, nil); code != 400 {
-		t.Fatalf("short v6 PSK accepted: %d %v", code, out)
+		t.Fatalf("new v6 node accepted: %d %v", code, out)
 	}
-	template := map[string]any{"name": "v6 template", "protocol": "snell", "port": 54323, "shadowTlsHost": "example.com", "password": "eight123"}
+	template := map[string]any{"name": "v6 template", "protocol": "snell", "snellVersion": 6, "port": 54324, "shadowTlsHost": "example.com", "password": "eight123"}
 	if code, out, _ := p.do("POST", "/api/node-templates", template, nil); code != 400 {
-		t.Fatalf("short template PSK accepted: %d %v", code, out)
+		t.Fatalf("new v6 template accepted: %d %v", code, out)
 	}
+	delete(template, "snellVersion")
 	template["password"] = "a-valid-template-psk"
-	if code, out, _ := p.do("POST", "/api/node-templates", template, nil); code != 201 || out["snellVersion"] != float64(6) {
-		t.Fatalf("v6 template: %d %v", code, out)
+	if code, out, _ := p.do("POST", "/api/node-templates", template, nil); code != 201 || out["snellVersion"] != float64(5) {
+		t.Fatalf("default Snell template version is not v5: %d %v", code, out)
+	}
+}
+
+func TestNewSnellNodeDefaultsToV5(t *testing.T) {
+	p := newTestMui(t)
+	serverID, _ := p.enroll("snell-v5-default")
+	input := map[string]any{"serverId": serverID, "name": "v5", "protocol": "snell", "port": 54321,
+		"shadowTlsHost": "example.com", "password": "a-valid-v5-psk", "enabled": true, "direct": true}
+	code, node, _ := p.do("POST", "/api/nodes", input, nil)
+	if code != 201 || node["snellVersion"] != float64(5) {
+		t.Fatalf("default Snell version is not v5: %d %v", code, node)
+	}
+	input["snellVersion"] = 6
+	if code, out, _ := p.do("PATCH", "/api/nodes/"+node["id"].(string), input, nil); code != 400 {
+		t.Fatalf("switching a v5 node to v6 was accepted: %d %v", code, out)
+	}
+}
+
+func TestExistingSnellV6TemplateCanBeEditedButNotCreated(t *testing.T) {
+	p := newTestMui(t)
+	template := shared.NodeTemplate{ID: ID(), Name: "legacy-v6", Protocol: "snell", Port: 54321,
+		SnellPort: 23456, SnellVersion: 6, Listen: "0.0.0.0", ShadowTLSHost: "example.com"}
+	if err := p.store.PutNodeTemplate(template, "a-valid-v6-psk", "outer-password"); err != nil {
+		t.Fatal(err)
+	}
+	input := map[string]any{"name": "renamed-v6", "protocol": "snell", "port": template.Port,
+		"snellPort": template.SnellPort, "shadowTlsHost": template.ShadowTLSHost}
+	if code, out, _ := p.do("PATCH", "/api/node-templates/"+template.ID, input, nil); code != 200 || out["snellVersion"] != float64(6) {
+		t.Fatalf("legacy v6 template was not preserved: %d %v", code, out)
+	}
+	input["snellVersion"] = 5
+	if code, out, _ := p.do("PATCH", "/api/node-templates/"+template.ID, input, nil); code != 200 || out["snellVersion"] != float64(5) {
+		t.Fatalf("legacy v6 template cannot switch to v5: %d %v", code, out)
+	}
+	input["snellVersion"] = 6
+	if code, out, _ := p.do("PATCH", "/api/node-templates/"+template.ID, input, nil); code != 400 {
+		t.Fatalf("switching a v5 template to v6 was accepted: %d %v", code, out)
 	}
 }
 

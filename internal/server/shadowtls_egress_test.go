@@ -31,7 +31,7 @@ func TestShadowTLSSystemHandshakeUpgradeReappliesBoundNodes(t *testing.T) {
 			if err := p.store.PutServer(srv); err != nil {
 				t.Fatal(err)
 			}
-			code, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": id, "name": "Snell", "protocol": "snell", "port": 12306, "snellPort": 8443, "snellVersion": 6, "shadowTlsHost": "example.com", "password": "a-valid-v6-psk", "enabled": true, "direct": true, "outboundMode": tc.nodeMode, "outboundInterface": tc.nodeIF}, nil)
+			code, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": id, "name": "Snell", "protocol": "snell", "port": 12306, "snellPort": 8443, "shadowTlsHost": "example.com", "password": "a-valid-v5-psk", "enabled": true, "direct": true, "outboundMode": tc.nodeMode, "outboundInterface": tc.nodeIF}, nil)
 			if code != 201 {
 				t.Fatal(code, node)
 			}

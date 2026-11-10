@@ -1850,7 +1850,7 @@ func normalizeNodeTemplate(t *shared.NodeTemplate) {
 		t.SnellVersion, t.Obfs, t.ShadowTLSHost, t.TLSName = 0, "", "", ""
 	case "snell":
 		if t.SnellVersion == 0 {
-			t.SnellVersion = 6
+			t.SnellVersion = 5
 		}
 		if t.SnellPort == 0 {
 			t.SnellPort = shared.SnellListenPort(shared.Node{Port: t.Port})
@@ -1893,6 +1893,10 @@ func (a *App) nodeTemplates(w http.ResponseWriter, r *http.Request) {
 	t := in.NodeTemplate
 	t.ID = ID()
 	normalizeNodeTemplate(&t)
+	if t.Protocol == "snell" && t.SnellVersion == 6 {
+		errorJSON(w, 400, "Snell v6 已暂停新建，请使用 v5")
+		return
+	}
 	if t.Protocol == "snell" && t.ShadowTLSHost == "" {
 		errorJSON(w, 400, "Snell 模板需要 ShadowTLS SNI / 握手域名")
 		return
@@ -1966,7 +1970,14 @@ func (a *App) nodeTemplateByID(w http.ResponseWriter, r *http.Request) {
 	}
 	t := in.NodeTemplate
 	t.ID = id
+	if t.Protocol == "snell" && t.SnellVersion == 0 && old.Protocol == "snell" {
+		t.SnellVersion = old.SnellVersion
+	}
 	normalizeNodeTemplate(&t)
+	if t.Protocol == "snell" && t.SnellVersion == 6 && !(old.Protocol == "snell" && old.SnellVersion == 6) {
+		errorJSON(w, 400, "Snell v6 已暂停新建，请使用 v5")
+		return
+	}
 	if t.Protocol == "snell" && t.ShadowTLSHost == "" {
 		errorJSON(w, 400, "Snell 模板需要 ShadowTLS SNI / 握手域名")
 		return
@@ -2069,10 +2080,11 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 	n.FirewallPolicy, n.FirewallSources = policy, sources
 	if n.Protocol == "snell" {
 		if n.SnellVersion == 0 {
-			n.SnellVersion = 6
+			n.SnellVersion = 5
 		}
-		if shared.SnellVersion(n) == 6 {
-			n.Obfs = ""
+		if n.SnellVersion == 6 {
+			errorJSON(w, 400, "Snell v6 已暂停新建，请使用 v5")
+			return
 		}
 		if n.SnellPort == 0 {
 			n.SnellPort = shared.SnellListenPort(n)
@@ -2371,7 +2383,15 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		n.Method = old.Method
 	}
 	if n.SnellVersion == 0 && n.Protocol == "snell" {
-		n.SnellVersion = 6
+		if old.Protocol == "snell" {
+			n.SnellVersion = shared.SnellVersion(old)
+		} else {
+			n.SnellVersion = 5
+		}
+	}
+	if n.Protocol == "snell" && n.SnellVersion == 6 && !(old.Protocol == "snell" && shared.SnellVersion(old) == 6) {
+		errorJSON(w, 400, "Snell v6 已暂停新建，请使用 v5")
+		return
 	}
 	if n.Protocol == "snell" && shared.SnellVersion(n) == 6 {
 		n.Obfs = ""

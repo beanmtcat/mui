@@ -121,8 +121,8 @@ func ValidateNode(n Node, cert *Certificate, allowExpired bool) error {
 	return nil
 }
 
-// Zero is the original persisted v5 setting. New nodes/templates explicitly
-// default to v6; reading an existing node must not change its wire protocol.
+// Zero is the original persisted v5 setting. New nodes/templates default to v5;
+// reading an existing node must not change its wire protocol.
 func SnellVersion(n Node) int {
 	if n.SnellVersion == 0 {
 		return 5

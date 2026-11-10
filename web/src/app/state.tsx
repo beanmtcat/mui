@@ -518,7 +518,7 @@ export function useAppState() {
             port: source.port,
             listen: source.listen,
             method: source.method,
-            snellVersion: source.snellVersion,
+            snellVersion: "serverId" in source && source.protocol === "snell" && source.snellVersion === 6 ? 5 : source.snellVersion,
             snellPort: source.snellPort || 20000 + source.port % 10000,
             obfs: source.obfs,
             shadowTlsHost: source.shadowTlsHost,
