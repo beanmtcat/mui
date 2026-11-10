@@ -1,4 +1,4 @@
-import type { Certificate, Customer, ForwardRule, Node, NodeTemplate, Route, Server, Subscription } from "../api";
+import type { Certificate, Customer, ForwardRule, Node, NodeTemplate, Route, Server, Subscription, SurgeTemplate } from "../api";
 import { screenshotText } from "../components/screenshot";
 import { manualFirewall } from "./helpers";
 
@@ -49,6 +49,7 @@ export function buildScreenshotRedactor({
   forwards,
   certificates,
   templates,
+  surgeTemplates,
 }: {
   servers: Server[];
   nodes: Node[];
@@ -58,12 +59,18 @@ export function buildScreenshotRedactor({
   forwards: ForwardRule[];
   certificates: Certificate[];
   templates: NodeTemplate[];
+  surgeTemplates: SurgeTemplate[];
 }) {
   const entries: [string, string][] = [];
   const add = (value: string | undefined, label = "[已隐藏]") => { if (value) entries.push([value, label]); };
   for (const [records, label] of [[servers, "服务器"], [nodes, "节点"], [subs, "订阅"], [customers, "客户"], [routes, "链路"], [forwards, "转发"], [certificates, "证书"], [templates, "模板"]] as const) {
     [...records].sort((a, b) => a.id.localeCompare(b.id)).forEach((record, i) => { add(record.name, `${label} ${i + 1}`); add(record.id, "[标识已隐藏]"); add(record.id.slice(0, 8), "[标识已隐藏]"); });
   }
+  surgeTemplates.filter((item) => item.id !== "default").forEach((item, i) => {
+    add(item.name, `Surge 模板 ${i + 1}`);
+    add(item.id, "[标识已隐藏]");
+    add(item.id.slice(0, 8), "[标识已隐藏]");
+  });
   for (const server of servers) for (const value of [server.ipv4, server.ipv6, server.detectedIpv4, server.detectedIpv6, server.domain, server.internalAddress, server.notes, server.tags]) add(value);
   for (const node of nodes) for (const value of [node.publishAddress, node.shadowTlsHost, node.tlsName, node.firewallSources, node.routeSources, node.agentProxySources, node.error]) add(value);
   for (const forward of forwards) { forward.targets?.forEach((target) => add(target.host)); add(forward.firewallSources); add(forward.error); }

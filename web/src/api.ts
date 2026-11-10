@@ -186,6 +186,7 @@ export type Subscription = {
   name: string;
   customerId?: string;
   format: string;
+  surgeTemplateId?: string;
   nodeIds: string[];
   routeIds: string[];
   enabled: boolean;
@@ -197,6 +198,7 @@ export type Subscription = {
   pendingRouteIds?: string[];
   linkAvailable?: boolean;
 };
+export type SurgeTemplate = { id: string; name: string; template: string; custom?: boolean };
 export type RouteSourceMode = "auto" | "public" | "internal";
 export type RouteSourceFamily = "ipv4" | "ipv6" | "both";
 export type RouteHop = { serverIds: string[]; balance: "failover" | "round-robin"; internal: boolean; addressModes?: Record<string, "public" | "internal">; sourceMode?: RouteSourceMode; sourceFamily?: RouteSourceFamily };

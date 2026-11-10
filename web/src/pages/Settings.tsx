@@ -6,28 +6,16 @@ import { MemoMaskedValue as MaskedValue } from "../components/secrets";
 
 const QRCode = lazy(() => import("../components/QRCode"));
 
-type SurgeProfile = { template: string; custom: boolean; defaultTemplate: string };
-
 export default function Settings() {
   const { totpEnabled, setTotpEnabled, refreshTick, expiring, act, copy, protect } = useApp();
   const [komariEndpoint, setKomariEndpoint] = useState(""),
     [passwordForm, setPasswordForm] = useState({ current: "", next: "" }),
     [totpOff, setTotpOff] = useState({ password: "", code: "" }),
     [code, setCode] = useState(""),
-    [totpSetup, setTotpSetup] = useState<{ secret: string; uri: string } | null>(null),
-    [surge, setSurge] = useState<SurgeProfile | null>(null),
-    [surgeText, setSurgeText] = useState("");
+    [totpSetup, setTotpSetup] = useState<{ secret: string; uri: string } | null>(null);
   useEffect(() => {
     api<{ endpoint: string }>("/api/settings/komari").then((v) => setKomariEndpoint(v.endpoint)).catch((e) => setError((e as Error).message));
   }, [refreshTick]);
-  useEffect(() => {
-    api<SurgeProfile>("/api/settings/surge-profile").then((v) => { setSurge(v); setSurgeText(v.template); }, () => undefined);
-  }, []);
-  const saveSurge = (template: string, done: string) => act(async () => {
-    const saved = await mutation<SurgeProfile>("/api/settings/surge-profile", "PUT", { template });
-    setSurge(saved);
-    setSurgeText(saved.template);
-  }, done);
   return protect(
           <section className="panel settings">
             <h2>Komari 监控</h2>
@@ -44,17 +32,6 @@ export default function Settings() {
               <small>留空会停用 Komari 上报；有地址但服务器未填写 token 时，该服务器也不会启动 Komari 监控。配置变更会自动下发。</small>
               <button className="primary">保存 Komari 地址</button>
             </form>
-            <h2>Surge 完整配置模板</h2>
-            <p>Surge 订阅的完整配置链接（以 ?profile=1 结尾）按这份模板生成，所有 Surge 订阅共用。{"{{PROXIES}}"} 替换为订阅节点行，{"{{PROXY_NAMES}}"} 替换为逗号分隔的节点名；#!MANAGED-CONFIG 行由面板自动添加。</p>
-            {surge && <form className="surgeProfileForm" onSubmit={(e) => { e.preventDefault(); void saveSurge(surgeText, "Surge 配置模板已保存"); }}>
-              <label htmlFor="surge-profile">{surge.custom ? "自定义模板" : "默认模板"}</label>
-              <textarea id="surge-profile" spellCheck={false} rows={18} value={surgeText} onChange={(e) => setSurgeText(e.target.value)} />
-              <small>[Rule] 段必须以 FINAL 结尾。名称与模板中代理组或内置策略相同的节点不会放入配置。默认模板的分流规则引用 GitHub 上的 blackmatrix7 规则集，Surge 首次下载需要能访问 GitHub。保存后，客户端在下次自动更新（每 12 小时）或手动更新时生效。</small>
-              <div className="surgeProfileActions">
-                <button className="primary" disabled={surgeText === surge.template}>保存模板</button>
-                {surge.custom && <button type="button" className="ghost" onClick={() => void saveSurge("", "已恢复默认 Surge 配置模板")}>恢复默认</button>}
-              </div>
-            </form>}
             <h2>账户安全</h2>
             <p>建议启用动态验证码以保护管理面板。</p>
             {expiring.length > 0 && (

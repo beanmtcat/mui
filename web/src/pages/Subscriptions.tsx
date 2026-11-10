@@ -6,7 +6,7 @@ import { useUrlParam } from "../app/url";
 import { MemoMaskedValue as MaskedValue } from "../components/secrets";
 
 export default function Subscriptions() {
-  const { subs, customers, issued, setIssued, preview, setPreview, act, copy, goTo, setConfirmation, setTrafficSub, openSubscription, pendingNodes, pendingSummary, sharedSubNodes, onlySharedSubNodes, restartNotice, subNodeIds, surgeImportHelp, matches, protect } = useApp();
+  const { subs, surgeTemplates, surgeTemplatesStatus, customers, issued, setIssued, preview, setPreview, act, copy, goTo, setConfirmation, setTrafficSub, openSubscription, pendingNodes, pendingSummary, sharedSubNodes, onlySharedSubNodes, restartNotice, subNodeIds, surgeImportHelp, matches, protect } = useApp();
   const [subQuery, setSubQuery] = useUrlParam("q"), [sortValue, setSort] = useUrlParam("sort");
   const sort = parseSort(sortValue, setSort);
   const customerName = (id?: string) => customers.find((c) => c.id === id)?.name || "";
@@ -55,6 +55,7 @@ export default function Subscriptions() {
                       <td>{s.customerId && customers.some((c) => c.id === s.customerId) ? <button type="button" className="textButton rowLink" onClick={() => goTo("customers", "", { q: customers.find((c) => c.id === s.customerId)?.name || "" })}>{customers.find((c) => c.id === s.customerId)?.name}</button> : "未关联"}</td>
                       <td>
                         <span className="chip">{s.format === "v2rayn" ? "v2rayN" : s.format}</span>
+                        {s.format === "surge" && <small>{surgeTemplates.find((item) => item.id === (s.surgeTemplateId || "default"))?.name || (surgeTemplatesStatus === "loading" ? "模板加载中…" : surgeTemplatesStatus === "error" ? "模板加载失败" : "模板已删除")}</small>}
                       </td>
                       <td>{s.routeIds?.length || 0} 条链路<small>{s.nodeIds?.length || 0} 个直连节点</small></td>
                       <td>

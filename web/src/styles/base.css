@@ -132,7 +132,7 @@ pre {
   height: 100vh;
   display: flex;
   flex-direction: column;
-  padding: 12px 12px 0;
+  padding: 8px 12px 0;
   border-right: 1px solid var(--line);
   background: var(--surface);
   overflow-y: auto;
@@ -163,7 +163,7 @@ pre {
 }
 .sidebar nav {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 .sidebar nav button,
 .sideBottom button {

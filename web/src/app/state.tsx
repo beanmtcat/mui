@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   api, list, mutation, bytes, canHostNodes,
   type Certificate, type ConnectionIP, type Customer, type FirewallRule, type ForwardRule, type InstallGuide,
-  type Node, type NodeTemplate, type Operation, type Route, type Server, type Subscription,
+  type Node, type NodeTemplate, type Operation, type Route, type Server, type Subscription, type SurgeTemplate,
 } from "../api";
 import { MemoSecretField as SecretField, MemoSecretTextarea as SecretTextarea, MemoMaskedValue as MaskedValue } from "../components/secrets";
 import CertificateFileField from "../components/CertificateFileField";
@@ -63,6 +63,8 @@ export function useAppState() {
     [forwards, setForwards] = useState<ForwardRule[]>([]),
     [routes, setRoutes] = useState<Route[]>([]),
     [subs, setSubs] = useState<Subscription[]>([]),
+    [surgeTemplates, setSurgeTemplates] = useState<SurgeTemplate[]>([]),
+    [surgeTemplatesStatus, setSurgeTemplatesStatus] = useState<"loading" | "ready" | "error">("loading"),
     [customers, setCustomers] = useState<Customer[]>([]),
     [operations, setOperations] = useState<Operation[]>([]),
     [agentReleases, setAgentReleases] = useState<Record<string, string>>({}),
@@ -121,6 +123,7 @@ export function useAppState() {
     }
     refreshInFlight.current = true;
     setRefreshing(true);
+    setSurgeTemplatesStatus("loading");
     if (manual) { setError(""); setNotice("正在刷新…"); }
     try {
       // Each list loads on its own: one failing endpoint must not leave every
@@ -145,6 +148,9 @@ export function useAppState() {
           setSubs(u);
           setTrafficSub((current) => current ? u.find((item) => item.id === current.id) || null : null);
         }),
+        api<SurgeTemplate[]>("/api/surge-templates")
+          .then((items) => { setSurgeTemplates(items); setSurgeTemplatesStatus("ready"); })
+          .catch((e) => { setSurgeTemplatesStatus("error"); recordFailure((e as Error).message); }),
         list<Operation>("/api/operations", { limit: 200 }).then((res) => setOperations(res.items)).catch((e) => recordFailure((e as Error).message)),
         load<Customer>("/api/customers", setCustomers),
         api<Record<string, string>>("/api/agent/release").then(setAgentReleases).catch(() => setAgentReleases({})),
@@ -580,7 +586,8 @@ export function useAppState() {
   const auditTarget = useCallback((id: string) =>
     servers.find((x) => x.id === id)?.name || nodes.find((x) => x.id === id)?.name ||
     subs.find((x) => x.id === id)?.name || customers.find((x) => x.id === id)?.name ||
-    (id.length > 12 ? id.slice(0, 8) + "…" : id), [servers, nodes, subs, customers]);
+    surgeTemplates.find((x) => x.id === id)?.name || (id === "default" ? "默认模板" : "") ||
+    (id.length > 12 ? id.slice(0, 8) + "…" : id), [servers, nodes, subs, customers, surgeTemplates]);
   const split = useCallback((v: { uplink: number; downlink: number }) => `↑ ${bytes(v.uplink)} · ↓ ${bytes(v.downlink)}`, []);
 
   const { serverWarnings, attention, unreadAttention, readItems, markRead, markUnread } = useAttention({
@@ -589,14 +596,14 @@ export function useAppState() {
   });
 
   const redactScreenshot = useMemo(() => buildScreenshotRedactor({
-    servers, nodes, subs, customers, routes, forwards, certificates, templates,
-  }), [servers, nodes, subs, customers, routes, forwards, certificates, templates]);
+    servers, nodes, subs, customers, routes, forwards, certificates, templates, surgeTemplates,
+  }), [servers, nodes, subs, customers, routes, forwards, certificates, templates, surgeTemplates]);
 
   const surgeImportHelp = useCallback((value: string) => {
     const line = `MUI = select, policy-path=${value}, update-interval=3600`;
     const profile = `${value}?profile=1`;
     return <div className="surgeImportHelp">
-      <p className="hint">没有现成配置：在 Surge 中选“从 URL 安装配置”，粘贴下面的完整配置链接。它按“设置 → Surge 完整配置模板”生成，默认包含节点选择、自动测速、故障转移和常用分流（AI、Telegram、流媒体、Google、Apple、广告拦截、国内直连），Surge 每 12 小时自动更新；在 Surge 里手动修改会在更新时被覆盖。</p>
+      <p className="hint">没有现成配置：在 Surge 中选“从 URL 安装配置”，粘贴下面的完整配置链接。它按该订阅选择的“Surge 模板”生成；默认模板包含节点选择、自动测速、故障转移和常用分流。Surge 每 12 小时自动更新；在 Surge 里手动修改会在更新时被覆盖。</p>
       <MaskedValue value={profile}><button className="ghost" type="button" onClick={() => void copy(profile)}>复制完整配置链接</button></MaskedValue>
       <p className="hint">已有自己的配置：编辑正在使用的配置，把下面这一行放进已有的 [Proxy Group] 段，保存并重新加载。然后把 MUI 加入现有规则所使用的代理组，即可从 MUI 组中选择节点，原有分流规则继续使用。</p>
       <MaskedValue value={line} pre><button className="ghost" type="button" onClick={() => void copy(line)}>复制 Surge 代理组配置</button></MaskedValue>
@@ -608,7 +615,7 @@ export function useAppState() {
 
   return useMemo(() => ({
     refreshing, screenshotMode, setScreenshotMode, theme, setTheme, authed, setAuthed, totpEnabled, setTotpEnabled, tab, currentServerId,
-    servers, nodes, templates, certificates, rules, forwards, routes, subs, customers, operations, agentReleases, coreReleases,
+    servers, nodes, templates, certificates, rules, forwards, routes, subs, surgeTemplates, surgeTemplatesStatus, customers, operations, agentReleases, coreReleases,
     refreshTick, pollTick, modal, confirmation, setConfirmation, batch, setBatch,
     installInfo, setInstallInfo, installMethod, setInstallMethod, installArch, setInstallArch, issued, setIssued, preview, setPreview,
     trafficNode, setTrafficNode, trafficSub, setTrafficSub, agentDownloads, setAgentDownloads, offlineServer, setOfflineServer,
@@ -619,7 +626,7 @@ export function useAppState() {
     onlySharedSubNodes, routePath, restartNotice, surgeImportHelp, protect, redactScreenshot, expiring,
   }), [
     refreshing, screenshotMode, theme, authed, totpEnabled, tab, currentServerId,
-    servers, nodes, templates, certificates, rules, forwards, routes, subs, customers, operations, agentReleases, coreReleases,
+    servers, nodes, templates, certificates, rules, forwards, routes, subs, surgeTemplates, surgeTemplatesStatus, customers, operations, agentReleases, coreReleases,
     refreshTick, pollTick, modal, confirmation, batch,
     installInfo, installMethod, installArch, issued, preview,
     trafficNode, trafficSub, agentDownloads, offlineServer,

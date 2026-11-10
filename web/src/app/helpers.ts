@@ -5,7 +5,7 @@ import {
 
 export type Tab =
   | "dashboard" | "servers" | "globe" | "nodes" | "templates" | "certificates" | "firewall" | "forwards" | "routes"
-  | "subscriptions" | "customers" | "accesses" | "connections" | "operations" | "audit" | "help" | "settings";
+  | "subscriptions" | "surge-templates" | "customers" | "accesses" | "connections" | "operations" | "audit" | "help" | "settings";
 export type TemplateForm = Partial<NodeTemplate> & { password?: string; shadowTlsPassword?: string };
 export type ServerForm = Partial<Server> & { komariToken?: string };
 export type NodeForm = Partial<Node> & { password?: string; shadowTlsPassword?: string };

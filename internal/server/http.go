@@ -417,6 +417,10 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("PUT /api/settings/komari", a.require(a.komariSetting))
 	mux.HandleFunc("GET /api/settings/surge-profile", a.require(a.surgeProfileSetting))
 	mux.HandleFunc("PUT /api/settings/surge-profile", a.require(a.surgeProfileSetting))
+	mux.HandleFunc("GET /api/surge-templates", a.require(a.surgeTemplates))
+	mux.HandleFunc("POST /api/surge-templates", a.require(a.surgeTemplates))
+	mux.HandleFunc("PATCH /api/surge-templates/{id}", a.require(a.surgeTemplateByID))
+	mux.HandleFunc("DELETE /api/surge-templates/{id}", a.require(a.surgeTemplateByID))
 	mux.HandleFunc("GET /api/help", a.require(a.helpArticles))
 	mux.HandleFunc("POST /api/help", a.require(a.helpArticles))
 	mux.HandleFunc("PATCH /api/help/{id}", a.require(a.helpArticleByID))
@@ -3135,12 +3139,19 @@ func (a *App) subscriptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in := raw.Subscription
+	if in.SurgeTemplateID == "default" {
+		in.SurgeTemplateID = ""
+	}
 	if in.Name == "" || (in.Format != "sing-box" && in.Format != "surge" && in.Format != "v2rayn") {
 		errorJSON(w, 400, "名称或格式无效")
 		return
 	}
 	if !a.validCustomer(in.CustomerID) {
 		errorJSON(w, 400, "客户不存在")
+		return
+	}
+	if err := a.checkSurgeTemplate(in); err != nil {
+		errorJSON(w, 400, err.Error())
 		return
 	}
 	if err := a.checkSubscriptionMembers(in); err != nil {
@@ -3256,12 +3267,19 @@ func (a *App) subscriptionByID(w http.ResponseWriter, r *http.Request) {
 	if !readJSON(w, r, &in) {
 		return
 	}
+	if in.SurgeTemplateID == "default" {
+		in.SurgeTemplateID = ""
+	}
 	if strings.TrimSpace(in.Name) == "" || (in.Format != "sing-box" && in.Format != "surge" && in.Format != "v2rayn") {
 		errorJSON(w, 400, "名称或格式无效")
 		return
 	}
 	if !a.validCustomer(in.CustomerID) {
 		errorJSON(w, 400, "客户不存在")
+		return
+	}
+	if err := a.checkSurgeTemplate(in); err != nil {
+		errorJSON(w, 400, err.Error())
 		return
 	}
 	if err := a.checkSubscriptionMembers(in); err != nil {
@@ -3272,6 +3290,7 @@ func (a *App) subscriptionByID(w http.ResponseWriter, r *http.Request) {
 	old.Name = in.Name
 	old.CustomerID = in.CustomerID
 	old.Format = in.Format
+	old.SurgeTemplateID = in.SurgeTemplateID
 	old.NodeIDs = in.NodeIDs
 	old.RouteIDs = in.RouteIDs
 	old.Enabled = in.Enabled
@@ -3281,10 +3300,16 @@ func (a *App) subscriptionByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	_, _ = a.Store.DB.Exec(`DELETE FROM mui_subscription_expiry_applied WHERE subscription_id=$1`, id)
-	if err = a.queueSubscriptionsApply(previous, *old); err != nil {
-		errorJSON(w, 500, err.Error())
-		return
+	// A profile template only affects the downloaded Surge text. Changing it
+	// must not restart sing-box or reapply node credentials on exit servers.
+	withoutTemplate := previous
+	withoutTemplate.SurgeTemplateID = old.SurgeTemplateID
+	if Marshal(withoutTemplate) != Marshal(old) {
+		_, _ = a.Store.DB.Exec(`DELETE FROM mui_subscription_expiry_applied WHERE subscription_id=$1`, id)
+		if err = a.queueSubscriptionsApply(previous, *old); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
 	}
 	a.auditRequest(r, "subscription.update", id, old.Name)
 	writeJSON(w, 200, old)
@@ -3494,7 +3519,7 @@ func (a *App) subscriptionDownload(w http.ResponseWriter, r *http.Request) {
 	var body []byte
 	if profile {
 		var template string
-		if template, err = a.Store.SurgeProfileTemplate(); err != nil {
+		if template, err = a.Store.SurgeTemplateContent(sub.SurgeTemplateID); err != nil {
 			errorJSON(w, 500, err.Error())
 			return
 		}

@@ -409,7 +409,9 @@ form.totpBox {
 .surgeProfileForm {
   display: grid;
   gap: 8px;
-  margin: 12px 0 24px;
+  margin: 0;
+  padding: 16px 18px 20px;
+  border-top: 1px solid var(--line);
 }
 .surgeProfileForm textarea {
   width: 100%;

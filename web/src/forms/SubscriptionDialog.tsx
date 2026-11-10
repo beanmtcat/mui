@@ -8,7 +8,7 @@ import { Dialog } from "./Dialog";
 import { ItemPicker } from "./ItemPicker";
 
 export default function SubscriptionDialog({ initial }: { initial: Partial<Subscription> }) {
-  const { nodes, routes, customers, serverName, routePath, sharedSubNodes, subMemberNodes, surgeImportHelp, act, copy, closeModal } = useApp();
+  const { nodes, routes, customers, surgeTemplates, surgeTemplatesStatus, serverName, routePath, sharedSubNodes, subMemberNodes, surgeImportHelp, act, copy, closeModal } = useApp();
   const [subForm, setSubForm] = useState(initial);
   // Once created, the dialog only hands over the link: saving again would
   // create a second subscription.
@@ -16,7 +16,7 @@ export default function SubscriptionDialog({ initial }: { initial: Partial<Subsc
   const { busy, run } = useBusy();
   const submitSub = (e: React.FormEvent) => {
     e.preventDefault();
-    if (created) return;
+    if (created || (subForm.format === "surge" && !surgeTemplates.length)) return;
     void run(async () => {
       if (subForm.id) {
         if (await act(() => mutation("/api/subscriptions/" + subForm.id, "PATCH", subForm), "订阅已保存")) closeModal();
@@ -53,6 +53,7 @@ export default function SubscriptionDialog({ initial }: { initial: Partial<Subsc
                         setSubForm({
                           ...subForm,
                           format: e.target.value,
+                          surgeTemplateId: e.target.value === "surge" ? subForm.surgeTemplateId : "",
                           nodeIds: (subForm.nodeIds || []).filter((id) => {
                             const node = nodes.find((item) => item.id === id);
                             return !!node && subscriptionNodeEligible(e.target.value, node);
@@ -69,6 +70,13 @@ export default function SubscriptionDialog({ initial }: { initial: Partial<Subsc
                       <option value="v2rayn">v2rayN 订阅</option>
                     </select>
                   </Field>
+                  {subForm.format === "surge" && <Field label="Surge 完整配置模板">
+                    <select value={subForm.surgeTemplateId || "default"} disabled={!surgeTemplates.length} onChange={(e) => setSubForm({ ...subForm, surgeTemplateId: e.target.value === "default" ? "" : e.target.value })}>
+                      {!surgeTemplates.length && <option value="default">{surgeTemplatesStatus === "error" ? "模板加载失败，请刷新页面" : "正在加载模板…"}</option>}
+                      {surgeTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+                    </select>
+                    <small>只影响“完整配置链接”；节点列表链接不受模板影响。模板在左侧“Surge 模板”管理。</small>
+                  </Field>}
                   <Field label="到期日（留空不过期）">
                     <input
                       type="date"
@@ -137,7 +145,7 @@ export default function SubscriptionDialog({ initial }: { initial: Partial<Subsc
                 {subForm.format === "v2rayn" && <p className="hint">v2rayN 格式支持 SS 和 AnyTLS 节点及其链路。复制订阅链接，在 v2rayN 中添加订阅分组并更新订阅；AnyTLS 请使用支持该协议的新版 v2rayN，并选择 sing-box 内核。v2rayN 不支持 Snell / ShadowTLS。</p>}
                 {sharedSubNodes(subForm).length > 0 && <p className="hint">以下节点沿用节点凭据：{sharedSubNodes(subForm).map((n) => n.name).join("、")}。流量只能按节点统计，无法单独撤销某条订阅的节点访问；禁用、到期或轮换订阅链接仅影响订阅下载，撤销已导入客户端的访问需更换节点密码。</p>}
                 <p className="hint">链路的订阅地址是首跳服务器的地址和链路端口，协议与登录凭据来自落地节点。</p>
-                {subMemberNodes(subForm).some((n) => !sharedSubscriptionPassword(n)) && <p className="hint">保存后，使用独立凭据的节点（含链路的落地节点）所在服务器的 sing-box 会重启以更新登录凭据，其上所有连接将中断数秒。订阅到期时也会自动执行一次。</p>}
+                {subMemberNodes(subForm).some((n) => !sharedSubscriptionPassword(n)) && <p className="hint">调整节点、链路或订阅状态后，使用独立凭据的节点所在服务器可能重启 sing-box 更新登录凭据，连接将短暂中断；只更换 Surge 模板不会重启。订阅到期时也会自动更新凭据。</p>}
                 {created ? <div className="commandBox">
                     <strong>请保存订阅链接：</strong>
                     <span>新凭据需等待 Agent 应用配置后才能下载使用。</span>

@@ -6,7 +6,7 @@ import type { Tab } from "./helpers";
 // Example: #nodes?server=abc&q=tokyo&sort=name
 export const tabIds = new Set<string>([
   "dashboard", "servers", "globe", "nodes", "templates", "certificates", "firewall", "forwards", "routes",
-  "subscriptions", "customers", "accesses", "connections", "operations", "audit", "help", "settings",
+  "subscriptions", "surge-templates", "customers", "accesses", "connections", "operations", "audit", "help", "settings",
 ]);
 
 const listeners = new Set<() => void>();

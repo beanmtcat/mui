@@ -227,17 +227,18 @@ type ForwardRule struct {
 }
 
 type Subscription struct {
-	ID         string     `json:"id"`
-	Name       string     `json:"name"`
-	CustomerID string     `json:"customerId"`
-	Format     string     `json:"format"`
-	NodeIDs    []string   `json:"nodeIds"`
-	RouteIDs   []string   `json:"routeIds"`
-	Enabled    bool       `json:"enabled"`
-	ExpiresAt  *time.Time `json:"expiresAt"`
-	URL        string     `json:"url,omitempty"`
-	Uplink     int64      `json:"uplink"`
-	Downlink   int64      `json:"downlink"`
+	ID              string     `json:"id"`
+	Name            string     `json:"name"`
+	CustomerID      string     `json:"customerId"`
+	Format          string     `json:"format"`
+	SurgeTemplateID string     `json:"surgeTemplateId,omitempty"`
+	NodeIDs         []string   `json:"nodeIds"`
+	RouteIDs        []string   `json:"routeIds"`
+	Enabled         bool       `json:"enabled"`
+	ExpiresAt       *time.Time `json:"expiresAt"`
+	URL             string     `json:"url,omitempty"`
+	Uplink          int64      `json:"uplink"`
+	Downlink        int64      `json:"downlink"`
 	// Filled in for the list view only: nodes this subscription names whose
 	// configuration is not live on their server yet, and whether the link can
 	// be shown again.

@@ -29,6 +29,7 @@ const groups: { title: string; entries: Entry[] }[] = [
   ] },
   { title: "用户", entries: [
     { id: "subscriptions", label: "订阅", icon: "subscriptions" },
+    { id: "surge-templates", label: "Surge 模板", icon: "surge-templates" },
     { id: "customers", label: "客户端管理", icon: "customers", children: [
       { id: "customers", label: "客户", icon: "customer" },
       { id: "accesses", label: "订阅访问记录", icon: "accesses" },
@@ -56,6 +57,7 @@ const Firewall = lazy(() => import("../pages/Firewall"));
 const Routes = lazy(() => import("../pages/Routes"));
 const Forwards = lazy(() => import("../pages/Forwards"));
 const Subscriptions = lazy(() => import("../pages/Subscriptions"));
+const SurgeTemplates = lazy(() => import("../pages/SurgeTemplates"));
 const Customers = lazy(() => import("../pages/Customers"));
 const Settings = lazy(() => import("../pages/Settings"));
 const Accesses = lazy(() => import("../pages/Logs").then((m) => ({ default: m.Accesses })));
@@ -76,6 +78,7 @@ function Page({ tab, onCopy }: { tab: Tab; onCopy: (value: string) => void }) {
     case "routes": return <Routes />;
     case "forwards": return <Forwards />;
     case "subscriptions": return <Subscriptions />;
+    case "surge-templates": return <SurgeTemplates />;
     case "customers": return <Customers />;
     case "accesses": return <Accesses />;
     case "connections": return <Connections />;

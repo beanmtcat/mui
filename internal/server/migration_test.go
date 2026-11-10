@@ -19,6 +19,44 @@ func TestFreshDatabaseUsesMuiTables(t *testing.T) {
 	}
 }
 
+func TestSurgeTemplateMigrationKeepsExistingProfile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mui.db")
+	secret := "Test-Secret-With-32-Bytes-1234!Aa"
+	store, err := NewStore(path, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := "[Proxy]\n{{PROXIES}}\n[Rule]\nFINAL,DIRECT\n"
+	if _, err := store.DB.Exec(`INSERT INTO mui_settings(key,value) VALUES('surge_profile_template',$1)`, profile); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`DROP TABLE mui_surge_templates`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`DELETE FROM mui_schema_migrations WHERE version=$1`, len(migrations)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewStore(path, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.DB.Close()
+	got, err := store.SurgeTemplateContent("")
+	if err != nil || got != profile {
+		t.Fatalf("migrated profile: %q, %v", got, err)
+	}
+	if _, err := store.DB.Exec(`INSERT INTO mui_subscriptions(id,data,token_hash) VALUES('old',$1,'old-token')`, `{"id":"old","name":"Old Surge","format":"surge"}`); err != nil {
+		t.Fatal(err)
+	}
+	subs, err := store.Subscriptions()
+	if err != nil || len(subs) != 1 || subs[0].SurgeTemplateID != "" {
+		t.Fatalf("legacy subscription changed: %#v, %v", subs, err)
+	}
+}
+
 func TestLegacySQLiteFileAndTablesMoveTogether(t *testing.T) {
 	dir := t.TempDir()
 	oldPath := filepath.Join(dir, "panel.db")

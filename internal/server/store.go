@@ -379,6 +379,12 @@ ARM64 服务器将 amd64 换成 arm64。已是当前构建、Agent 不支持自�
 		// The software that fetched the subscription, as it named itself.
 		`ALTER TABLE mui_subscription_access ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''`,
 	},
+	{
+		// Keep the former global Surge profile as the default template. Old
+		// subscriptions have no template ID and continue to use this row.
+		`CREATE TABLE IF NOT EXISTS mui_surge_templates (id TEXT PRIMARY KEY, name TEXT NOT NULL, template TEXT NOT NULL)`,
+		`INSERT INTO mui_surge_templates(id,name,template) VALUES('default','默认模板',COALESCE((SELECT value FROM mui_settings WHERE key='surge_profile_template'),'')) ON CONFLICT(id) DO NOTHING`,
+	},
 }
 
 func ID() string {

@@ -18,6 +18,7 @@ export function Icon({ name }: { name: IconName }) {
     globe: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c-3 2.5-4.5 5.5-4.5 9s1.5 6.5 4.5 9M12 3c3 2.5 4.5 5.5 4.5 9s-1.5 6.5-4.5 9" /></>,
     nodes: <><circle cx="5" cy="12" r="2" /><circle cx="19" cy="5" r="2" /><circle cx="19" cy="19" r="2" /><path d="m7 11 10-5M7 13l10 5" /></>,
     templates: <><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M9 8h6M9 12h6M9 16h4" /></>,
+    "surge-templates": <><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M9 8h6M9 12h6M9 16h4" /></>,
     certificates: <><path d="M12 2 4 5v7c0 5 3.5 8 8 10 4.5-2 8-5 8-10V5l-8-3Z" /><path d="m9 12 2 2 4-4" /></>,
     firewall: <><path d="M4 3h16v18H4V3ZM4 9h16M4 15h16M9 3v6m6 0v6m-6 0v6" /></>,
     forwards: <><path d="M3 7h12m0 0-3-3m3 3-3 3M21 17H9m0 0 3-3m-3 3 3 3" /></>,
