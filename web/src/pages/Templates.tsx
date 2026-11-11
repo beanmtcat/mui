@@ -36,7 +36,7 @@ export default function Templates() {
                       </td>
                       <td>
                         <div className="actions">
-                          <button onClick={() => void useTemplate(t)} disabled={!servers.length || t.protocol === "snell" && t.snellVersion === 6} title={t.protocol === "snell" && t.snellVersion === 6 ? "Snell v6 已暂停新建，请先将模板改为 v5" : undefined}>使用模板</button>
+                          <button onClick={() => void useTemplate(t)} disabled={!servers.length}>使用模板</button>
                           <button onClick={() => openTemplate(t)}>编辑</button>
                           <button className="dangerText" onClick={() => deleteItem("/api/node-templates/" + t.id, "节点模板")}>删除</button>
                         </div>

@@ -19,17 +19,21 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"mui/internal/shared"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type Store struct {
-	DB  *sql.DB
-	key []byte
+	DB              *sql.DB
+	key             []byte
+	driver          string
+	surgeTemplateMu sync.Mutex
 }
 
 // checkSecretStrength requires length plus character-class diversity. The key
@@ -96,7 +100,7 @@ func NewStore(dsn, secret string) (*Store, error) {
 		_ = db.Close()
 		return nil, err
 	}
-	s := &Store{DB: db, key: key[:]}
+	s := &Store{DB: db, key: key[:], driver: driver}
 	if err = s.migrate(driver); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -162,6 +166,12 @@ func (s *Store) migrate(driver string) error {
 		}
 		for _, stmt := range statements {
 			if _, err = tx.Exec(stmt); err != nil {
+				_ = tx.Rollback()
+				return fmt.Errorf("migration %d: %w", version, err)
+			}
+		}
+		if fn := dataMigrations[version]; fn != nil {
+			if err = fn(tx, driver); err != nil {
 				_ = tx.Rollback()
 				return fmt.Errorf("migration %d: %w", version, err)
 			}
@@ -384,6 +394,11 @@ ARM64 服务器将 amd64 换成 arm64。已是当前构建、Agent 不支持自�
 		// subscriptions have no template ID and continue to use this row.
 		`CREATE TABLE IF NOT EXISTS mui_surge_templates (id TEXT PRIMARY KEY, name TEXT NOT NULL, template TEXT NOT NULL)`,
 		`INSERT INTO mui_surge_templates(id,name,template) VALUES('default','默认模板',COALESCE((SELECT value FROM mui_settings WHERE key='surge_profile_template'),'')) ON CONFLICT(id) DO NOTHING`,
+	},
+	{
+		// Adds mui_surge_templates.name_key, backfills Go-normalised keys
+		// (deduplicating any colliding names), and creates a unique index;
+		// executed via dataMigrations[23] because SQLite lower() is ASCII-only.
 	},
 }
 
@@ -1369,4 +1384,89 @@ func (s *Store) SaveServerTraffic(serverID string, points []shared.ServerTraffic
 		}
 	}
 	return tx.Commit()
+}
+
+func columnExists(tx *sql.Tx, driver, table, column string) (bool, error) {
+	query := `SELECT COUNT(*) FROM pragma_table_info($1) WHERE name=$2`
+	if driver == "pgx" {
+		query = `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=current_schema() AND table_name=$1 AND column_name=$2`
+	}
+	var count int
+	if err := tx.QueryRow(query, table, column).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func isUniqueViolation(err error) bool {
+	if err == nil {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	return strings.Contains(err.Error(), "UNIQUE constraint failed")
+}
+
+func migrateSurgeTemplateNameKeys(tx *sql.Tx, driver string) error {
+	exists, err := columnExists(tx, driver, "mui_surge_templates", "name_key")
+	if err != nil {
+		return err
+	}
+	if !exists {
+		if _, err := tx.Exec(`ALTER TABLE mui_surge_templates ADD COLUMN name_key TEXT NOT NULL DEFAULT ''`); err != nil {
+			return err
+		}
+	}
+	rows, err := tx.Query(`SELECT id,name FROM mui_surge_templates ORDER BY CASE WHEN id='default' THEN 0 ELSE 1 END,id`)
+	if err != nil {
+		return err
+	}
+	type item struct{ id, name string }
+	var list []item
+	for rows.Next() {
+		var row item
+		if err = rows.Scan(&row.id, &row.name); err != nil {
+			break
+		}
+		list = append(list, row)
+	}
+	if err == nil {
+		err = rows.Err()
+	}
+	rows.Close()
+	if err != nil {
+		return err
+	}
+	used := map[string]bool{}
+	for _, row := range list {
+		base := strings.TrimSpace(row.name)
+		if row.id == "default" {
+			base = "默认模板"
+		} else if base == "" {
+			base = row.id
+		}
+		candidate := base
+		key := surgeTemplateNameKey(candidate)
+		for suffix := 2; used[key]; suffix++ {
+			tag := fmt.Sprintf(" (%d)", suffix)
+			runes := []rune(base)
+			if maxBase := 80 - len([]rune(tag)); len(runes) > maxBase {
+				runes = runes[:maxBase]
+			}
+			candidate = strings.TrimSpace(string(runes)) + tag
+			key = surgeTemplateNameKey(candidate)
+		}
+		used[key] = true
+		if _, err := tx.Exec(`UPDATE mui_surge_templates SET name=$1,name_key=$2 WHERE id=$3`, candidate, key, row.id); err != nil {
+			return err
+		}
+	}
+	_, err = tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS mui_idx_surge_templates_name_key ON mui_surge_templates(name_key)`)
+	return err
+}
+
+var dataMigrations = map[int64]func(*sql.Tx, string) error{
+	23: migrateSurgeTemplateNameKeys,
 }

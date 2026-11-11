@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useId, useState } from "react";
 import { mutation, type Subscription } from "../api";
 import { useApp } from "../app/context";
 import { sharedSubscriptionPassword, subscriptionDirectNodeIssue, subscriptionNodeEligible, subscriptionNodeIssue } from "../app/helpers";
@@ -8,15 +8,18 @@ import { Dialog } from "./Dialog";
 import { ItemPicker } from "./ItemPicker";
 
 export default function SubscriptionDialog({ initial }: { initial: Partial<Subscription> }) {
-  const { nodes, routes, customers, surgeTemplates, surgeTemplatesStatus, serverName, routePath, sharedSubNodes, subMemberNodes, surgeImportHelp, act, copy, closeModal } = useApp();
+  const { nodes, routes, customers, surgeTemplates, surgeTemplatesStatus, refreshing, refresh, serverName, routePath, sharedSubNodes, subMemberNodes, surgeImportHelp, act, copy, closeModal } = useApp();
   const [subForm, setSubForm] = useState(initial);
+  const surgeTemplateSelectId = useId();
   // Once created, the dialog only hands over the link: saving again would
   // create a second subscription.
   const [created, setCreated] = useState<{ url: string; format: string } | null>(null);
   const { busy, run } = useBusy();
+  const hasCustomSurgeTemplate = Boolean(subForm.surgeTemplateId && subForm.surgeTemplateId !== "default");
+  const selectedSurgeTemplateValue = hasCustomSurgeTemplate ? subForm.surgeTemplateId! : "default";
   const submitSub = (e: React.FormEvent) => {
     e.preventDefault();
-    if (created || (subForm.format === "surge" && !surgeTemplates.length)) return;
+    if (created) return;
     void run(async () => {
       if (subForm.id) {
         if (await act(() => mutation("/api/subscriptions/" + subForm.id, "PATCH", subForm), "订阅已保存")) closeModal();
@@ -70,13 +73,16 @@ export default function SubscriptionDialog({ initial }: { initial: Partial<Subsc
                       <option value="v2rayn">v2rayN 订阅</option>
                     </select>
                   </Field>
-                  {subForm.format === "surge" && <Field label="Surge 完整配置模板">
-                    <select value={subForm.surgeTemplateId || "default"} disabled={!surgeTemplates.length} onChange={(e) => setSubForm({ ...subForm, surgeTemplateId: e.target.value === "default" ? "" : e.target.value })}>
-                      {!surgeTemplates.length && <option value="default">{surgeTemplatesStatus === "error" ? "模板加载失败，请刷新页面" : "正在加载模板…"}</option>}
+                  {subForm.format === "surge" && <div className="field">
+                    <label htmlFor={surgeTemplateSelectId}>Surge 完整配置模板</label>
+                    <select id={surgeTemplateSelectId} value={selectedSurgeTemplateValue} disabled={!surgeTemplates.length} onChange={(e) => setSubForm({ ...subForm, surgeTemplateId: e.target.value === "default" ? "" : e.target.value })}>
+                      {!surgeTemplates.length && <option value={selectedSurgeTemplateValue}>{hasCustomSurgeTemplate ? (surgeTemplatesStatus === "error" ? "保留当前模板（模板列表加载失败）" : "保留当前模板（正在加载模板…）") : (surgeTemplatesStatus === "error" ? "默认模板（模板列表加载失败）" : "正在加载模板…")}</option>}
+                      {surgeTemplates.length > 0 && hasCustomSurgeTemplate && !surgeTemplates.some((item) => item.id === selectedSurgeTemplateValue) && <option value={selectedSurgeTemplateValue}>当前已选模板（已不存在，请重新选择）</option>}
                       {surgeTemplates.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
                     </select>
+                    {surgeTemplatesStatus === "error" && !surgeTemplates.length && <small className="dangerText">Surge 模板列表加载失败；直接保存将保留当前模板设置，或 <button type="button" className="textButton" disabled={refreshing} onClick={() => void refresh(true)}>{refreshing ? "正在重试…" : "重新加载模板"}</button>。</small>}
                     <small>只影响“完整配置链接”；节点列表链接不受模板影响。模板在左侧“Surge 模板”管理。</small>
-                  </Field>}
+                  </div>}
                   <Field label="到期日（留空不过期）">
                     <input
                       type="date"

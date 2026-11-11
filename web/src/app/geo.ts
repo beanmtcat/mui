@@ -1,63 +1,122 @@
 import type { Node, Route, Server } from "../api";
 import countryCenters from "../globe-data/country-centers.json";
+import { cityTable, regionTable, type PlaceEntry } from "./geo-places";
 
 export type Point = [longitude: number, latitude: number];
 export type ServerPlace = { point: Point; precision: "city" | "country" };
 export type RouteSegment = { from: string; to: string; routeIds: string[]; routeNames: string[]; active: boolean };
 
-// Common datacenter cities. Other cities fall back to the country marker;
-// a geocoder would require sending server locations to an external service.
-const cityPoints: Record<string, Point> = {
-  "CN:上海": [121.47, 31.23], "CN:shanghai": [121.47, 31.23],
-  "CN:北京": [116.4, 39.9], "CN:beijing": [116.4, 39.9],
-  "CN:广州": [113.26, 23.13], "CN:guangzhou": [113.26, 23.13],
-  "CN:深圳": [114.06, 22.54], "CN:shenzhen": [114.06, 22.54],
-  "CN:成都": [104.07, 30.67], "CN:chengdu": [104.07, 30.67],
-  "HK:香港": [114.17, 22.31], "HK:hongkong": [114.17, 22.31],
-  "TW:台北": [121.57, 25.03], "TW:臺北": [121.57, 25.03], "TW:taipei": [121.57, 25.03],
-  "TW:台中": [120.67, 24.15], "TW:taichung": [120.67, 24.15],
-  "JP:东京": [139.69, 35.68], "JP:東京": [139.69, 35.68], "JP:tokyo": [139.69, 35.68],
-  "JP:大阪": [135.5, 34.69], "JP:osaka": [135.5, 34.69],
-  "SG:新加坡": [103.82, 1.35], "SG:singapore": [103.82, 1.35],
-  "KR:首尔": [126.98, 37.57], "KR:seoul": [126.98, 37.57],
-  "KR:釜山": [129.07, 35.18], "KR:busan": [129.07, 35.18],
-  "MY:吉隆坡": [101.69, 3.14], "MY:kualalumpur": [101.69, 3.14],
-  "MY:柔佛": [103.76, 1.49], "MY:johorbahru": [103.76, 1.49],
-  "US:纽约": [-74.01, 40.71], "US:newyork": [-74.01, 40.71],
-  "US:洛杉矶": [-118.24, 34.05], "US:losangeles": [-118.24, 34.05],
-  "US:圣何塞": [-121.89, 37.34], "US:sanjose": [-121.89, 37.34],
-  "US:西雅图": [-122.33, 47.61], "US:seattle": [-122.33, 47.61],
-  "US:达拉斯": [-96.8, 32.78], "US:dallas": [-96.8, 32.78],
-  "US:芝加哥": [-87.63, 41.88], "US:chicago": [-87.63, 41.88],
-  "US:迈阿密": [-80.19, 25.76], "US:miami": [-80.19, 25.76],
-  "DE:法兰克福": [8.68, 50.11], "DE:frankfurt": [8.68, 50.11],
-  "CA:多伦多": [-79.38, 43.65], "CA:toronto": [-79.38, 43.65],
-  "CA:温哥华": [-123.12, 49.28], "CA:vancouver": [-123.12, 49.28],
-  "GB:伦敦": [-0.13, 51.51], "GB:london": [-0.13, 51.51],
-  "NL:阿姆斯特丹": [4.9, 52.37], "NL:amsterdam": [4.9, 52.37],
-  "FR:巴黎": [2.35, 48.86], "FR:paris": [2.35, 48.86],
-  "AU:悉尼": [151.21, -33.87], "AU:sydney": [151.21, -33.87],
-  "AU:墨尔本": [144.96, -37.81], "AU:melbourne": [144.96, -37.81],
-  "UY:蒙得维的亚": [-56.16, -34.9], "UY:montevideo": [-56.16, -34.9],
-  "RU:莫斯科": [37.62, 55.75], "RU:moscow": [37.62, 55.75],
-  "IN:孟买": [72.88, 19.08], "IN:mumbai": [72.88, 19.08],
-  "AE:迪拜": [55.27, 25.2], "AE:dubai": [55.27, 25.2],
-  "TH:曼谷": [100.5, 13.76], "TH:bangkok": [100.5, 13.76],
-  "VN:胡志明市": [106.7, 10.82], "VN:hochiminhcity": [106.7, 10.82],
-  "PH:马尼拉": [120.98, 14.6], "PH:manila": [120.98, 14.6],
-  "ID:雅加达": [106.85, -6.21], "ID:jakarta": [106.85, -6.21],
+const normalize = (value: string) =>
+  value.normalize("NFKC").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[\s._\-,/()（）·'"’]+/g, "");
+
+const stripSuffix = (value: string) => {
+  const cjk = value.replace(/(特别行政区|维吾尔自治区|壮族自治区|回族自治区|自治区|自治州|特别自治道|特别市|广域市|联邦直辖区|省|市|县|州|府)$/, "");
+  if (cjk !== value && cjk.length >= 2) return cjk;
+  const en = value.replace(/(metropolitancity|specialcity|prefecture|province|state|county|city)$/, "");
+  return en !== value && en.length >= 4 ? en : value;
 };
 
-const normalize = (value: string) => value.normalize("NFKC").toLowerCase().replace(/[\s._-]/g, "");
+type PlaceIndex = {
+  exact: Map<string, Point>;
+  byCountry: Map<string, [name: string, point: Point, ascii: boolean][]>;
+};
+
+function buildIndex(table: PlaceEntry[]): PlaceIndex {
+  const exact = new Map<string, Point>();
+  const byCountry = new Map<string, [name: string, point: Point, ascii: boolean][]>();
+  for (const [country, point, ...names] of table) {
+    const list = byCountry.get(country) || [];
+    for (const raw of names) {
+      const key = normalize(raw);
+      if (!key) continue;
+      exact.set(`${country}:${key}`, point);
+      const ascii = /^[a-z0-9]+$/.test(key);
+      if ((ascii ? key.length >= 4 : key.length >= 2) && !list.some((item) => item[0] === key)) {
+        list.push([key, point, ascii]);
+      }
+    }
+    byCountry.set(country, list);
+  }
+  for (const list of byCountry.values()) {
+    list.sort((a, b) => b[0].length - a[0].length);
+  }
+  return { exact, byCountry };
+}
+
+const cityIndex = buildIndex(cityTable);
+const regionIndex = buildIndex(regionTable);
+
+function resolveExact(raw: string | undefined, country: string, index: PlaceIndex): Point | null {
+  if (!raw?.trim() || !country) return null;
+  for (const part of [raw, ...raw.split(/[,/|·]+/)]) {
+    const norm = normalize(part);
+    if (!norm) continue;
+    for (const candidate of [norm, stripSuffix(norm)]) {
+      const hit = index.exact.get(`${country}:${candidate}`);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+function resolveSubstring(raw: string | undefined, country: string, index: PlaceIndex, guardDistrict = false): Point | null {
+  if (!raw?.trim() || !country) return null;
+  const norm = normalize(raw);
+  const lower = raw.normalize("NFKC").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const words = lower.match(/[a-z]+/g) || [];
+  const phrases = new Set<string>();
+  for (let i = 0; i < words.length; i++) {
+    let joined = "";
+    for (let j = i; j < Math.min(words.length, i + 4); j++) {
+      joined += words[j];
+      phrases.add(joined);
+      phrases.add(stripSuffix(joined));
+    }
+  }
+  let best: { point: Point; len: number; pos: number } | null = null;
+  for (const [name, point, ascii] of index.byCountry.get(country) || []) {
+    if (best && name.length < best.len) break;
+    if (ascii) {
+      if (phrases.has(name)) return point;
+      continue;
+    }
+    const pos = norm.indexOf(name);
+    if (pos < 0) continue;
+    if (guardDistrict && country === "CN" && /^[区區路街巷]/.test(norm.slice(pos + name.length))) continue;
+    if (!best || pos < best.pos) best = { point, len: name.length, pos };
+  }
+  return best?.point || null;
+}
+
+const placeCache = new Map<string, ServerPlace | null>();
+
+function computeServerPlace(rawCountry: string, region: string, city: string): ServerPlace | null {
+  const country = rawCountry === "UK" ? "GB" : rawCountry;
+  if (country === "US" && city && normalize(city).replace(/city$/, "") === "washington") {
+    return { point: [-77.04, 38.91], precision: "city" };
+  }
+  for (const value of [city, region]) {
+    if (!value.trim()) continue;
+    const hit =
+      resolveExact(value, country, cityIndex) ||
+      resolveExact(value, country, regionIndex) ||
+      resolveSubstring(value, country, cityIndex, true) ||
+      resolveSubstring(value, country, regionIndex);
+    if (hit) return { point: hit, precision: "city" };
+  }
+  const point = (countryCenters as unknown as Record<string, Point>)[rawCountry] || (countryCenters as unknown as Record<string, Point>)[country];
+  return point ? { point, precision: "country" } : null;
+}
 
 export function serverPlace(server: Server): ServerPlace | null {
-  const country = server.country?.toUpperCase();
-  for (const value of [server.city, server.region]) {
-    const key = `${country}:${normalize(value || "")}`;
-    if (cityPoints[key]) return { point: cityPoints[key], precision: "city" };
-  }
-  const point = (countryCenters as unknown as Record<string, Point>)[country];
-  return point ? { point, precision: "country" } : null;
+  const country = server.country?.toUpperCase() || "";
+  const region = server.region || "";
+  const city = server.city || "";
+  const key = `${country}|${region}|${city}`;
+  if (placeCache.has(key)) return placeCache.get(key) ?? null;
+  const result = computeServerPlace(country, region, city);
+  placeCache.set(key, result);
+  return result;
 }
 
 export function routeSegments(routes: Route[], nodes: Node[], includeDisabled: boolean, routeId: string): RouteSegment[] {

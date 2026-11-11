@@ -83,9 +83,8 @@ export default function TemplateDialog({ initial }: { initial: TemplateForm }) {
                       <Field label="Snell 版本">
                         <select value={templateForm.snellVersion || 5} onChange={(e) => setTemplateForm({ ...templateForm, snellVersion: Number(e.target.value), obfs: "none" })}>
                           <option value={5}>v5</option>
-                          {templateForm.id && templateForm.snellVersion === 6 && <option value={6}>v6（已有模板）</option>}
+                          <option value={6}>v6</option>
                         </select>
-                        {(templateForm.snellVersion || 5) === 6 && <small className="dangerText">v6 已暂停新建；此模板可继续编辑，建议切换至 v5。</small>}
                       </Field>
                       <Field label="Snell 内层端口 *">
                         <input required type="number" min={1} max={65535} value={templateForm.snellPort || ""} onChange={(e) => setTemplateForm({ ...templateForm, snellPort: Number(e.target.value) })} />

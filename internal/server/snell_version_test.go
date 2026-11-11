@@ -10,13 +10,13 @@ import (
 	"mui/internal/shared"
 )
 
-func TestSnellV6NewConfigurationDisabledAndExistingNodePreserved(t *testing.T) {
+func TestSnellV6NewConfigurationAndExistingNodePreserved(t *testing.T) {
 	p := newTestMui(t)
 	serverID, auth := p.enroll("snell-v6")
 	input := map[string]any{"serverId": serverID, "name": "v6", "protocol": "snell", "port": 54321,
 		"snellVersion": 6, "shadowTlsHost": "example.com", "password": "a-valid-v6-psk", "enabled": true, "direct": true}
-	if code, out, _ := p.do("POST", "/api/nodes", input, nil); code != 400 {
-		t.Fatalf("new v6 node accepted: %d %v", code, out)
+	if code, out, _ := p.do("POST", "/api/nodes", input, nil); code != 201 || out["snellVersion"] != float64(6) {
+		t.Fatalf("new v6 node rejected: %d %v", code, out)
 	}
 	delete(input, "snellVersion")
 	legacy := shared.Node{ID: ID(), ServerID: serverID, Name: "legacy-v6", Protocol: "snell", Port: 54322,
@@ -64,19 +64,23 @@ func TestSnellV6NewConfigurationDisabledAndExistingNodePreserved(t *testing.T) {
 		t.Fatalf("legacy v6 node cannot switch to v5: %d %v", code, out)
 	}
 	input["snellVersion"] = 6
-	if code, out, _ := p.do("PATCH", "/api/nodes/"+legacy.ID, input, nil); code != 400 {
-		t.Fatalf("switching a v5 node back to v6 was accepted: %d %v", code, out)
+	if code, out, _ := p.do("PATCH", "/api/nodes/"+legacy.ID, input, nil); code != 200 || out["snellVersion"] != float64(6) {
+		t.Fatalf("switching a v5 node back to v6 failed: %d %v", code, out)
 	}
 	input["port"], input["password"], input["snellVersion"] = 54323, "eight123", 6
 	if code, out, _ := p.do("POST", "/api/nodes", input, nil); code != 400 {
-		t.Fatalf("new v6 node accepted: %d %v", code, out)
+		t.Fatalf("short v6 PSK accepted: %d %v", code, out)
 	}
 	template := map[string]any{"name": "v6 template", "protocol": "snell", "snellVersion": 6, "port": 54324, "shadowTlsHost": "example.com", "password": "eight123"}
 	if code, out, _ := p.do("POST", "/api/node-templates", template, nil); code != 400 {
-		t.Fatalf("new v6 template accepted: %d %v", code, out)
+		t.Fatalf("short v6 template PSK accepted: %d %v", code, out)
+	}
+	template["password"] = "a-valid-template-psk"
+	if code, out, _ := p.do("POST", "/api/node-templates", template, nil); code != 201 || out["snellVersion"] != float64(6) {
+		t.Fatalf("new v6 template rejected: %d %v", code, out)
 	}
 	delete(template, "snellVersion")
-	template["password"] = "a-valid-template-psk"
+	template["name"], template["port"] = "default v5 template", 54325
 	if code, out, _ := p.do("POST", "/api/node-templates", template, nil); code != 201 || out["snellVersion"] != float64(5) {
 		t.Fatalf("default Snell template version is not v5: %d %v", code, out)
 	}
@@ -92,12 +96,12 @@ func TestNewSnellNodeDefaultsToV5(t *testing.T) {
 		t.Fatalf("default Snell version is not v5: %d %v", code, node)
 	}
 	input["snellVersion"] = 6
-	if code, out, _ := p.do("PATCH", "/api/nodes/"+node["id"].(string), input, nil); code != 400 {
-		t.Fatalf("switching a v5 node to v6 was accepted: %d %v", code, out)
+	if code, out, _ := p.do("PATCH", "/api/nodes/"+node["id"].(string), input, nil); code != 200 || out["snellVersion"] != float64(6) {
+		t.Fatalf("switching a v5 node to v6 failed: %d %v", code, out)
 	}
 }
 
-func TestExistingSnellV6TemplateCanBeEditedButNotCreated(t *testing.T) {
+func TestExistingSnellV6TemplateCanBeEditedAndReenabled(t *testing.T) {
 	p := newTestMui(t)
 	template := shared.NodeTemplate{ID: ID(), Name: "legacy-v6", Protocol: "snell", Port: 54321,
 		SnellPort: 23456, SnellVersion: 6, Listen: "0.0.0.0", ShadowTLSHost: "example.com"}
@@ -114,8 +118,8 @@ func TestExistingSnellV6TemplateCanBeEditedButNotCreated(t *testing.T) {
 		t.Fatalf("legacy v6 template cannot switch to v5: %d %v", code, out)
 	}
 	input["snellVersion"] = 6
-	if code, out, _ := p.do("PATCH", "/api/node-templates/"+template.ID, input, nil); code != 400 {
-		t.Fatalf("switching a v5 template to v6 was accepted: %d %v", code, out)
+	if code, out, _ := p.do("PATCH", "/api/node-templates/"+template.ID, input, nil); code != 200 || out["snellVersion"] != float64(6) {
+		t.Fatalf("switching a v5 template to v6 failed: %d %v", code, out)
 	}
 }
 

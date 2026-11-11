@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -199,5 +200,162 @@ func TestSurgeAnyTLSDirectAndRouteSubscriptions(t *testing.T) {
 	body["surgeTemplateId"] = "default"
 	if code, out, _ := p.do("PATCH", "/api/subscriptions/"+sub["id"].(string), body, nil); code != 200 || (out["surgeTemplateId"] != nil && out["surgeTemplateId"] != "") {
 		t.Fatal("default template ID was not normalised on update", code, out)
+	}
+}
+
+func TestSurgeMissingTemplateFallsBackToDefault(t *testing.T) {
+	l := newRouteLab(t)
+	p := l.p
+	certPEM, keyPEM := makeTestCertificate(t, false, nil, 30)
+	cert := shared.Certificate{ID: ID(), Domain: "example.com", PEM: certPEM, Key: keyPEM, ExpiresAt: time.Now().Add(24 * time.Hour)}
+	if err := p.store.PutCertificate(cert); err != nil {
+		t.Fatal(err)
+	}
+	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": l.exit, "name": "直连 AnyTLS", "protocol": "anytls", "port": 50443, "tlsName": "example.com", "certificateId": cert.ID, "password": "original-node-password", "enabled": true, "direct": true}, nil)
+	if code != 201 {
+		t.Fatal(code, node)
+	}
+	nodeID := node["id"].(string)
+	code, sub, _ := p.do("POST", "/api/subscriptions", map[string]any{"name": "Surge Missing Template", "format": "surge", "nodeIds": []string{nodeID}, "enabled": true}, nil)
+	if code != 201 {
+		t.Fatal(code, sub)
+	}
+	l.applyAll()
+	subID := sub["id"].(string)
+	path := strings.TrimPrefix(sub["url"].(string), "https://mui.example.test")
+
+	// Point the stored subscription at a template ID that no longer exists.
+	subs, err := p.store.Subscriptions()
+	if err != nil || len(subs) != 1 {
+		t.Fatal(subs, err)
+	}
+	broken := subs[0]
+	broken.SurgeTemplateID = "deleted-template-id"
+	if _, err := p.store.DB.Exec(`UPDATE mui_subscriptions SET data=$1 WHERE id=$2`, Marshal(broken), subID); err != nil {
+		t.Fatal(err)
+	}
+
+	code, profile := p.fetch(path + "?profile=1")
+	if code != 200 {
+		t.Fatalf("missing template returned %d: %s", code, profile)
+	}
+	for _, want := range []string{
+		"节点选择 = select, 自动选择, 故障转移, 直连 AnyTLS, DIRECT",
+		"FINAL,漏网之鱼,dns-failed",
+	} {
+		if !strings.Contains(profile, want) {
+			t.Fatalf("fallback profile lacks %q: %s", want, profile)
+		}
+	}
+
+	customDefault := "[Proxy]\n{{PROXIES}}\n[Proxy Group]\n默认回退组 = select, {{PROXY_NAMES}}\n[Rule]\nFINAL,默认回退组\n"
+	if code, out, _ := p.do("PATCH", "/api/surge-templates/default", map[string]any{"name": "默认模板", "template": customDefault}, nil); code != 200 {
+		t.Fatal(code, out)
+	}
+	code, profile = p.fetch(path + "?profile=1")
+	if code != 200 || !strings.Contains(profile, "默认回退组 = select, 直连 AnyTLS\n") {
+		t.Fatalf("missing template did not fall back to customised default (%d): %s", code, profile)
+	}
+
+	// Database errors must return a fixed message rather than leaking SQL errors.
+	if _, err := p.store.DB.Exec(`DROP TABLE mui_surge_templates`); err != nil {
+		t.Fatal(err)
+	}
+	code, errBody := p.fetch(path + "?profile=1")
+	if code != 500 || strings.Contains(errBody, "mui_surge_templates") || strings.Contains(errBody, "no such table") {
+		t.Fatalf("unexpected DB error response (%d): %s", code, errBody)
+	}
+}
+
+func TestSurgeTemplateUniquenessAndAtomicDelete(t *testing.T) {
+	l := newRouteLab(t)
+	p := l.p
+	certPEM, keyPEM := makeTestCertificate(t, false, nil, 30)
+	cert := shared.Certificate{ID: ID(), Domain: "example.com", PEM: certPEM, Key: keyPEM, ExpiresAt: time.Now().Add(24 * time.Hour)}
+	if err := p.store.PutCertificate(cert); err != nil {
+		t.Fatal(err)
+	}
+	code, node, _ := p.do("POST", "/api/nodes", map[string]any{"serverId": l.exit, "name": "直连 AnyTLS", "protocol": "anytls", "port": 50443, "tlsName": "example.com", "certificateId": cert.ID, "password": "original-node-password", "enabled": true, "direct": true}, nil)
+	if code != 201 {
+		t.Fatal(code, node)
+	}
+	nodeID := node["id"].(string)
+	tplBody := "[Proxy]\n{{PROXIES}}\n[Proxy Group]\n出口 = select, {{PROXY_NAMES}}\n[Rule]\nFINAL,出口\n"
+
+	code, cyr, _ := p.do("POST", "/api/surge-templates", map[string]any{"name": "Берлин", "template": tplBody}, nil)
+	if code != 201 {
+		t.Fatal(code, cyr)
+	}
+	for _, dup := range []string{"берлин", "  БЕРЛИН  ", "  默认模板 "} {
+		code, out, _ := p.do("POST", "/api/surge-templates", map[string]any{"name": dup, "template": tplBody}, nil)
+		if code != 400 || out["error"] != "模板名称已存在" {
+			t.Fatalf("duplicate %q returned %d %v", dup, code, out)
+		}
+	}
+	code, other, _ := p.do("POST", "/api/surge-templates", map[string]any{"name": "Tokyo", "template": tplBody}, nil)
+	if code != 201 {
+		t.Fatal(code, other)
+	}
+	if code, out, _ := p.do("PATCH", "/api/surge-templates/"+other["id"].(string), map[string]any{"name": " берлин ", "template": tplBody}, nil); code != 400 || out["error"] != "模板名称已存在" {
+		t.Fatalf("Unicode case-insensitive rename returned %d %v", code, out)
+	}
+
+	// Concurrent creations of the same name must produce one 201 and 400s, never 500.
+	var wg sync.WaitGroup
+	codes := make([]int, 8)
+	for i := range codes {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			c, out, _ := p.do("POST", "/api/surge-templates", map[string]any{"name": "并发同名", "template": tplBody}, nil)
+			if c != 201 && (c != 400 || out["error"] != "模板名称已存在") {
+				t.Errorf("unexpected concurrent create response: %d %v", c, out)
+			}
+			codes[idx] = c
+		}(i)
+	}
+	wg.Wait()
+	created := 0
+	for _, c := range codes {
+		if c == 201 {
+			created++
+		}
+	}
+	if created != 1 {
+		t.Fatalf("expected exactly 1 created template, got %d (%v)", created, codes)
+	}
+
+	// Concurrent subscription assignment and template deletion must be mutually exclusive.
+	code, sub, _ := p.do("POST", "/api/subscriptions", map[string]any{"name": "Race Sub", "format": "surge", "nodeIds": []string{nodeID}, "enabled": true}, nil)
+	if code != 201 {
+		t.Fatal(code, sub)
+	}
+	subID := sub["id"].(string)
+	for round := range 20 {
+		code, tpl, _ := p.do("POST", "/api/surge-templates", map[string]any{"name": fmt.Sprintf("Race-%d", round), "template": tplBody}, nil)
+		if code != 201 {
+			t.Fatal(code, tpl)
+		}
+		tplID := tpl["id"].(string)
+		var patchCode, deleteCode int
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			patchCode, _, _ = p.do("PATCH", "/api/subscriptions/"+subID, map[string]any{"name": "Race Sub", "format": "surge", "surgeTemplateId": tplID, "nodeIds": []string{nodeID}, "enabled": true}, nil)
+		}()
+		go func() {
+			defer wg.Done()
+			deleteCode, _, _ = p.do("DELETE", "/api/surge-templates/"+tplID, nil, nil)
+		}()
+		wg.Wait()
+		switch {
+		case patchCode == 200 && deleteCode == 409:
+			if c, out, _ := p.do("PATCH", "/api/subscriptions/"+subID, map[string]any{"name": "Race Sub", "format": "surge", "surgeTemplateId": "", "nodeIds": []string{nodeID}, "enabled": true}, nil); c != 200 {
+				t.Fatal(c, out)
+			}
+		case patchCode == 400 && deleteCode == 200:
+		default:
+			t.Fatalf("round %d violated mutual exclusion: patch=%d delete=%d", round, patchCode, deleteCode)
+		}
 	}
 }

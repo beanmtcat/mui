@@ -1897,10 +1897,6 @@ func (a *App) nodeTemplates(w http.ResponseWriter, r *http.Request) {
 	t := in.NodeTemplate
 	t.ID = ID()
 	normalizeNodeTemplate(&t)
-	if t.Protocol == "snell" && t.SnellVersion == 6 {
-		errorJSON(w, 400, "Snell v6 已暂停新建，请使用 v5")
-		return
-	}
 	if t.Protocol == "snell" && t.ShadowTLSHost == "" {
 		errorJSON(w, 400, "Snell 模板需要 ShadowTLS SNI / 握手域名")
 		return
@@ -1978,10 +1974,6 @@ func (a *App) nodeTemplateByID(w http.ResponseWriter, r *http.Request) {
 		t.SnellVersion = old.SnellVersion
 	}
 	normalizeNodeTemplate(&t)
-	if t.Protocol == "snell" && t.SnellVersion == 6 && !(old.Protocol == "snell" && old.SnellVersion == 6) {
-		errorJSON(w, 400, "Snell v6 已暂停新建，请使用 v5")
-		return
-	}
 	if t.Protocol == "snell" && t.ShadowTLSHost == "" {
 		errorJSON(w, 400, "Snell 模板需要 ShadowTLS SNI / 握手域名")
 		return
@@ -2085,10 +2077,6 @@ func (a *App) nodes(w http.ResponseWriter, r *http.Request) {
 	if n.Protocol == "snell" {
 		if n.SnellVersion == 0 {
 			n.SnellVersion = 5
-		}
-		if n.SnellVersion == 6 {
-			errorJSON(w, 400, "Snell v6 已暂停新建，请使用 v5")
-			return
 		}
 		if n.SnellPort == 0 {
 			n.SnellPort = shared.SnellListenPort(n)
@@ -2392,10 +2380,6 @@ func (a *App) nodeByID(w http.ResponseWriter, r *http.Request) {
 		} else {
 			n.SnellVersion = 5
 		}
-	}
-	if n.Protocol == "snell" && n.SnellVersion == 6 && !(old.Protocol == "snell" && shared.SnellVersion(old) == 6) {
-		errorJSON(w, 400, "Snell v6 已暂停新建，请使用 v5")
-		return
 	}
 	if n.Protocol == "snell" && shared.SnellVersion(n) == 6 {
 		n.Obfs = ""
@@ -3150,8 +3134,8 @@ func (a *App) subscriptions(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "客户不存在")
 		return
 	}
-	if err := a.checkSurgeTemplate(in); err != nil {
-		errorJSON(w, 400, err.Error())
+	if in.Format != "surge" && in.SurgeTemplateID != "" {
+		errorJSON(w, 400, "只有 Surge 订阅可以选择完整配置模板")
 		return
 	}
 	if err := a.checkSubscriptionMembers(in); err != nil {
@@ -3170,8 +3154,12 @@ func (a *App) subscriptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	in.Uplink, in.Downlink, in.URL, in.PendingNodeIDs, in.PendingRouteIDs, in.LinkAvailable = 0, 0, "", nil, nil, false
-	_, err = a.Store.DB.Exec(`INSERT INTO mui_subscriptions(id,data,token_hash,token_enc) VALUES($1,$2,$3,$4)`, in.ID, Marshal(in), Hash(token), sealed)
-	if err != nil {
+	if err = a.Store.CreateSubscription(in, Hash(token), sealed); err != nil {
+		var badTemplate surgeTemplateValidationError
+		if errors.As(err, &badTemplate) {
+			errorJSON(w, 400, badTemplate.Error())
+			return
+		}
 		errorJSON(w, 500, err.Error())
 		return
 	}
@@ -3278,41 +3266,48 @@ func (a *App) subscriptionByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "客户不存在")
 		return
 	}
-	if err := a.checkSurgeTemplate(in); err != nil {
-		errorJSON(w, 400, err.Error())
+	if in.Format != "surge" && in.SurgeTemplateID != "" {
+		errorJSON(w, 400, "只有 Surge 订阅可以选择完整配置模板")
 		return
 	}
 	if err := a.checkSubscriptionMembers(in); err != nil {
 		errorJSON(w, 400, err.Error())
 		return
 	}
-	previous := *old
-	old.Name = in.Name
-	old.CustomerID = in.CustomerID
-	old.Format = in.Format
-	old.SurgeTemplateID = in.SurgeTemplateID
-	old.NodeIDs = in.NodeIDs
-	old.RouteIDs = in.RouteIDs
-	old.Enabled = in.Enabled
-	old.ExpiresAt = in.ExpiresAt
-	_, err := a.Store.DB.Exec(`UPDATE mui_subscriptions SET data=$1 WHERE id=$2`, Marshal(old), id)
+	previous, updated, err := a.Store.UpdateSubscription(id, in)
 	if err != nil {
+		var badTemplate surgeTemplateValidationError
+		if errors.As(err, &badTemplate) {
+			errorJSON(w, 400, badTemplate.Error())
+			return
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			errorJSON(w, 404, "订阅不存在")
+			return
+		}
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	// A profile template only affects the downloaded Surge text. Changing it
-	// must not restart sing-box or reapply node credentials on exit servers.
+	// A profile template only affects the downloaded Surge text. Neither
+	// template-only edits nor unmodified saves should restart sing-box or
+	// reapply node credentials on exit servers.
 	withoutTemplate := previous
-	withoutTemplate.SurgeTemplateID = old.SurgeTemplateID
-	if Marshal(withoutTemplate) != Marshal(old) {
+	withoutTemplate.SurgeTemplateID = updated.SurgeTemplateID
+	if len(withoutTemplate.NodeIDs) == 0 && len(updated.NodeIDs) == 0 {
+		withoutTemplate.NodeIDs = updated.NodeIDs
+	}
+	if len(withoutTemplate.RouteIDs) == 0 && len(updated.RouteIDs) == 0 {
+		withoutTemplate.RouteIDs = updated.RouteIDs
+	}
+	if Marshal(withoutTemplate) != Marshal(updated) {
 		_, _ = a.Store.DB.Exec(`DELETE FROM mui_subscription_expiry_applied WHERE subscription_id=$1`, id)
-		if err = a.queueSubscriptionsApply(previous, *old); err != nil {
+		if err = a.queueSubscriptionsApply(previous, updated); err != nil {
 			errorJSON(w, 500, err.Error())
 			return
 		}
 	}
-	a.auditRequest(r, "subscription.update", id, old.Name)
-	writeJSON(w, 200, old)
+	a.auditRequest(r, "subscription.update", id, updated.Name)
+	writeJSON(w, 200, &updated)
 }
 
 // checkSubscriptionMembers validates a subscription's direct nodes and routes.
@@ -3519,8 +3514,15 @@ func (a *App) subscriptionDownload(w http.ResponseWriter, r *http.Request) {
 	var body []byte
 	if profile {
 		var template string
-		if template, err = a.Store.SurgeTemplateContent(sub.SurgeTemplateID); err != nil {
-			errorJSON(w, 500, err.Error())
+		template, err = a.Store.SurgeTemplateContent(sub.SurgeTemplateID)
+		if errors.Is(err, sql.ErrNoRows) && sub.SurgeTemplateID != "" {
+			template, err = a.Store.SurgeTemplateContent("")
+		}
+		if errors.Is(err, sql.ErrNoRows) {
+			template, err = "", nil
+		}
+		if err != nil {
+			errorJSON(w, 500, "无法读取 Surge 模板")
 			return
 		}
 		body, skipped, err = shared.RenderSurgeProfile(items, a.publicURLForRequest(r)+"/s/"+r.PathValue("token")+"?profile=1", template)

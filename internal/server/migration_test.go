@@ -33,7 +33,7 @@ func TestSurgeTemplateMigrationKeepsExistingProfile(t *testing.T) {
 	if _, err := store.DB.Exec(`DROP TABLE mui_surge_templates`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.DB.Exec(`DELETE FROM mui_schema_migrations WHERE version=$1`, len(migrations)); err != nil {
+	if _, err := store.DB.Exec(`DELETE FROM mui_schema_migrations WHERE version>=22`); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.DB.Close(); err != nil {
@@ -54,6 +54,78 @@ func TestSurgeTemplateMigrationKeepsExistingProfile(t *testing.T) {
 	subs, err := store.Subscriptions()
 	if err != nil || len(subs) != 1 || subs[0].SurgeTemplateID != "" {
 		t.Fatalf("legacy subscription changed: %#v, %v", subs, err)
+	}
+}
+
+func TestSurgeTemplateNameKeyMigrationDeduplicates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mui.db")
+	secret := "Test-Secret-With-32-Bytes-1234!Aa"
+	store, err := NewStore(path, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`DROP TABLE mui_surge_templates`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.DB.Exec(`CREATE TABLE mui_surge_templates (id TEXT PRIMARY KEY, name TEXT NOT NULL, template TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	body := "[Proxy]\n{{PROXIES}}\n[Rule]\nFINAL,DIRECT\n"
+	for _, row := range [][3]string{
+		{"default", "默认模板", ""},
+		{"dup-default", "  默认模板  ", body},
+		{"work-1", "Work", body},
+		{"work-2", " work ", body},
+		{"work-3", "Work (2)", body},
+		{"cyr-1", "Берлин", body},
+		{"cyr-2", "берлин", body},
+	} {
+		if _, err := store.DB.Exec(`INSERT INTO mui_surge_templates(id,name,template) VALUES($1,$2,$3)`, row[0], row[1], row[2]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := store.DB.Exec(`DELETE FROM mui_schema_migrations WHERE version>=23`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.DB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store, err = NewStore(path, secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.DB.Close()
+	rows, err := store.DB.Query(`SELECT id,name,name_key FROM mui_surge_templates ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	got := map[string][2]string{}
+	for rows.Next() {
+		var id, name, key string
+		if err := rows.Scan(&id, &name, &key); err != nil {
+			t.Fatal(err)
+		}
+		got[id] = [2]string{name, key}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	for id, want := range map[string][2]string{
+		"default":     {"默认模板", "默认模板"},
+		"dup-default": {"默认模板 (2)", "默认模板 (2)"},
+		"work-1":      {"Work", "work"},
+		"work-2":      {"work (2)", "work (2)"},
+		"work-3":      {"Work (2) (2)", "work (2) (2)"},
+		"cyr-1":       {"Берлин", "берлин"},
+		"cyr-2":       {"берлин (2)", "берлин (2)"},
+	} {
+		if got[id] != want {
+			t.Fatalf("migrated template %s = %#v, want %#v", id, got[id], want)
+		}
+	}
+	if _, err := store.DB.Exec(`INSERT INTO mui_surge_templates(id,name,name_key,template) VALUES('collide','WORK','work',$1)`, body); !isUniqueViolation(err) {
+		t.Fatalf("expected unique violation on name_key, got %v", err)
 	}
 }
 

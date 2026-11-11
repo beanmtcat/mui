@@ -120,7 +120,7 @@ export default function NodeDialog({ initial, templateId }: { initial: NodeForm;
                         }}
                       >
                         <option value="">手动填写</option>
-                        {templates.filter((t) => t.protocol !== "snell" || t.snellVersion !== 6).map((t) => (
+                        {templates.map((t) => (
                           <option key={t.id} value={t.id}>
                             {t.name} · {t.protocol.toUpperCase()} :{t.port}
                           </option>
@@ -201,9 +201,8 @@ export default function NodeDialog({ initial, templateId }: { initial: NodeForm;
                       <Field label="Snell 版本">
                         <select value={nodeForm.snellVersion || 5} onChange={(e) => setNodeForm({ ...nodeForm, snellVersion: Number(e.target.value), obfs: "none" })}>
                           <option value={5}>v5</option>
-                          {nodeForm.id && nodeForm.snellVersion === 6 && <option value={6}>v6（已有节点）</option>}
+                          <option value={6}>v6</option>
                         </select>
-                        {(nodeForm.snellVersion || 5) === 6 && <small className="dangerText">v6 已暂停新建；此节点可继续编辑，建议切换至 v5。</small>}
                         {(nodeForm.snellVersion || 5) === 6 && nodeForm.serverId && !externalNode && !servers.find((s) => s.id === nodeForm.serverId)?.snellV6 && <small className="dangerText">需升级 Agent 至 0.6.11 后应用 v6 配置。</small>}
                       </Field>
                       {!externalNode && <Field label="Snell 内层端口 *">
