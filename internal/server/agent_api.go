@@ -12,6 +12,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"slices"
 	"strconv"
 	"strings"
@@ -212,6 +213,10 @@ func (a *App) agentObservedIPv4(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) revokeAgent(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !validServerID(id) || !a.serverExists(id) {
+		errorJSON(w, 404, "服务器不存在")
+		return
+	}
 	unlock := a.lockServer(id)
 	defer unlock()
 	server, err := a.Store.Server(id)
@@ -304,11 +309,19 @@ func (a *App) enrollment(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) agentEnroll(w http.ResponseWriter, r *http.Request) {
+	if a.rateCount(r, "enroll", 1) > 30 {
+		errorJSON(w, 429, "请求过于频繁")
+		return
+	}
 	var in struct {
 		ServerID string `json:"serverId"`
 		Token    string `json:"token"`
 	}
 	if !readJSON(w, r, &in) {
+		return
+	}
+	if !validServerID(in.ServerID) || !a.serverExists(in.ServerID) {
+		errorJSON(w, 401, "接入令牌无效或已过期")
 		return
 	}
 	unlock := a.lockServer(in.ServerID)
@@ -364,7 +377,12 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 404, "服务器不存在")
 		return
 	}
-	if err = a.syncExpiredSubscriptions(); err != nil {
+	if err = a.syncExpiredSubscriptionsThrottled(); err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
+	nodes, err := a.Store.Nodes(id)
+	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
 	}
@@ -374,11 +392,6 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 	allowApply := server.NodeFirewallPolicies
 	if !allowApply {
 		allowApply = true
-		nodes, err := a.Store.Nodes(id)
-		if err != nil {
-			errorJSON(w, 500, err.Error())
-			return
-		}
 		for _, node := range nodes {
 			if !node.Deleting && node.FirewallPolicy != "" && node.FirewallPolicy != "all" {
 				allowApply = false
@@ -389,11 +402,6 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 	// An older Agent ignores the SOCKS5 egress and would send the traffic out
 	// of this server's own address instead.
 	if allowApply && !server.NodeSOCKSOutbound {
-		nodes, err := a.Store.Nodes(id)
-		if err != nil {
-			errorJSON(w, 500, err.Error())
-			return
-		}
 		for _, node := range nodes {
 			if node.Enabled && !node.Deleting && node.OutboundMode == "socks5" {
 				allowApply = false
@@ -402,11 +410,6 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if allowApply && !server.NodeDomainBlock {
-		nodes, err := a.Store.Nodes(id)
-		if err != nil {
-			errorJSON(w, 500, err.Error())
-			return
-		}
 		for _, node := range nodes {
 			if node.Enabled && !node.Deleting && len(node.BlockedDomains) > 0 {
 				allowApply = false
@@ -418,11 +421,6 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 		if server.AgentProxyNodeID != "" {
 			allowApply = false
 		}
-		nodes, err := a.Store.Nodes(id)
-		if err != nil {
-			errorJSON(w, 500, err.Error())
-			return
-		}
 		for _, n := range nodes {
 			if !n.Deleting && n.Protocol == "socks5" {
 				allowApply = false
@@ -430,21 +428,11 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if allowApply && (!server.OutboundBindingSupport || !shared.VersionAtLeast(server.AgentVersion, "0.6.12")) {
-		nodes, err := a.Store.Nodes(id)
-		if err != nil {
-			errorJSON(w, 500, err.Error())
-			return
-		}
 		if outboundBindingRequired(server, nodes) {
 			allowApply = false
 		}
 	}
 	if allowApply && !server.SnellFixedPort {
-		nodes, err := a.Store.Nodes(id)
-		if err != nil {
-			errorJSON(w, 500, err.Error())
-			return
-		}
 		for _, node := range nodes {
 			if node.Enabled && !node.Deleting && node.Protocol == "snell" && node.ShadowTLSHost != "" && node.SnellPort != 0 {
 				// An older helper silently ignores this field. Keep the apply
@@ -455,11 +443,6 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if allowApply && (!server.SnellV6 || !shared.VersionAtLeast(server.AgentVersion, "0.6.11")) {
-		nodes, err := a.Store.Nodes(id)
-		if err != nil {
-			errorJSON(w, 500, err.Error())
-			return
-		}
 		for _, node := range nodes {
 			// Older helpers validate disabled nodes too, so even an inactive
 			// v6 node must not be included in a state they cannot understand.
@@ -732,28 +715,61 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
+	minTrafficAt, maxTrafficAt := trafficTimeWindow(now, server.ClockSkewSeconds)
 	if len(in.Traffic) > 0 {
-		if err = a.Store.SaveTraffic(id, in.Traffic); err != nil {
-			errorJSON(w, 500, err.Error())
-			return
+		filtered := in.Traffic[:0]
+		for _, p := range in.Traffic {
+			if len(p.InstanceID) <= 128 && !p.At.IsZero() && !p.At.Before(minTrafficAt) && !p.At.After(maxTrafficAt) {
+				filtered = append(filtered, p)
+			}
+		}
+		if len(filtered) > 0 {
+			if err = a.Store.SaveTraffic(id, filtered); err != nil {
+				errorJSON(w, 500, err.Error())
+				return
+			}
 		}
 	}
 	if len(in.UserTraffic) > 0 {
-		if err = a.Store.SaveUserTraffic(id, in.UserTraffic); err != nil {
-			errorJSON(w, 500, err.Error())
-			return
+		filtered := in.UserTraffic[:0]
+		for _, p := range in.UserTraffic {
+			if len(p.InstanceID) <= 128 && !p.At.IsZero() && !p.At.Before(minTrafficAt) && !p.At.After(maxTrafficAt) {
+				filtered = append(filtered, p)
+			}
+		}
+		if len(filtered) > 0 {
+			if err = a.Store.SaveUserTraffic(id, filtered); err != nil {
+				errorJSON(w, 500, err.Error())
+				return
+			}
 		}
 	}
 	if len(in.ForwardTraffic) > 0 {
-		if err = a.Store.SaveForwardTraffic(id, in.ForwardTraffic); err != nil {
-			errorJSON(w, 500, err.Error())
-			return
+		filtered := in.ForwardTraffic[:0]
+		for _, p := range in.ForwardTraffic {
+			if len(p.InstanceID) <= 128 {
+				filtered = append(filtered, p)
+			}
+		}
+		if len(filtered) > 0 {
+			if err = a.Store.SaveForwardTraffic(id, filtered); err != nil {
+				errorJSON(w, 500, err.Error())
+				return
+			}
 		}
 	}
 	if len(in.ServerTraffic) > 0 {
-		if err = a.Store.SaveServerTraffic(id, in.ServerTraffic); err != nil {
-			errorJSON(w, 500, err.Error())
-			return
+		filtered := in.ServerTraffic[:0]
+		for _, p := range in.ServerTraffic {
+			if len(p.BootID) <= 128 && len(p.Interface) <= 128 && !p.At.IsZero() && !p.At.Before(minTrafficAt) && !p.At.After(maxTrafficAt) {
+				filtered = append(filtered, p)
+			}
+		}
+		if len(filtered) > 0 {
+			if err = a.Store.SaveServerTraffic(id, filtered); err != nil {
+				errorJSON(w, 500, err.Error())
+				return
+			}
 		}
 	}
 	if len(in.ForwardConnections) > 0 {
@@ -1007,4 +1023,43 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true, "autoSyncPublicIp": server.AutoSyncPublicIP})
+}
+
+func trafficRetentionDays() int {
+	days := 90
+	if v := strings.TrimSpace(os.Getenv("MUI_TRAFFIC_RETENTION_DAYS")); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			days = n
+		}
+	}
+	if days == 0 {
+		return 365
+	}
+	if days < 32 {
+		return 32
+	}
+	return days
+}
+
+// trafficTimeWindow returns the acceptable [minAt, maxAt] range for reported
+// traffic samples. Signed agents are already within 5 minutes of panel time,
+// while unsigned legacy agents or hosts with drifted clocks/timezones report
+// ClockSkewSeconds; clamping that skew to ±24h avoids dropping legitimate
+// samples while still bounding future rows so PruneTraffic will remove them.
+func trafficTimeWindow(now time.Time, clockSkewSeconds int64) (time.Time, time.Time) {
+	const maxSkew = int64(24 * 3600)
+	skew := clockSkewSeconds
+	if skew > maxSkew {
+		skew = maxSkew
+	} else if skew < -maxSkew {
+		skew = -maxSkew
+	}
+	minAt := now.AddDate(0, 0, -trafficRetentionDays())
+	maxAt := now.Add(10 * time.Minute)
+	if skew < 0 {
+		minAt = minAt.Add(time.Duration(skew) * time.Second)
+	} else if skew > 0 {
+		maxAt = maxAt.Add(time.Duration(skew) * time.Second)
+	}
+	return minAt, maxAt
 }

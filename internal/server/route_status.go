@@ -64,28 +64,33 @@ func (a *App) routeExitAccessLive(rt shared.Route, world routeWorld) (bool, erro
 	if err != nil || !known {
 		return false, err
 	}
+	return routeExitAccessLiveWithApplied(rt, world, applied), nil
+}
+
+func routeExitAccessLiveWithApplied(rt shared.Route, world routeWorld, applied map[string]shared.NodeDeployment) bool {
+	node := world.nodes[rt.NodeID]
 	access, ok := applied[node.ID]
 	if !ok {
-		return false, nil
+		return false
 	}
 	switch access.FirewallPolicy {
 	case "all", "manual":
-		return true, nil
+		return true
 	case "restricted":
 	default:
-		return false, nil
+		return false
 	}
 	last := []string{rt.EntryServerID}
 	if len(rt.Hops) > 0 {
 		last = rt.Hops[len(rt.Hops)-1].ServerIDs
 	}
 	if err := world.checkSources(last, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), rt.NodeSourceFamily, hopAddress(world.servers[node.ServerID], rt.NodeInternal)); err != nil {
-		return false, nil
+		return false
 	}
 	for _, source := range world.groupSources(last, routeSourceInternal(rt.NodeInternal, rt.NodeSourceMode), rt.NodeSourceFamily, hopAddress(world.servers[node.ServerID], rt.NodeInternal)) {
 		addr, err := netip.ParseAddr(source)
 		if err != nil {
-			return false, nil
+			return false
 		}
 		allowed := false
 		for _, cidr := range strings.Split(access.FirewallSources, ",") {
@@ -99,10 +104,10 @@ func (a *App) routeExitAccessLive(rt shared.Route, world routeWorld) (bool, erro
 			}
 		}
 		if !allowed {
-			return false, nil
+			return false
 		}
 	}
-	return true, nil
+	return true
 }
 
 // Offline hops are eligible after exporting the desired config. This does
@@ -113,6 +118,46 @@ func offlineRouteReady(rt shared.Route, servers map[string]shared.Server) bool {
 	for _, id := range routeServers(rt) {
 		s := servers[id]
 		if shared.OfflineManaged(s) && (s.OfflineExportedAt == nil || s.OfflineExportedRevision != s.Revision) {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *livenessCache) routeLive(rt shared.Route, subscriptionID string) (bool, error) {
+	w := c.world
+	if !rt.Enabled || w.checkRouteShape(rt) != nil || !offlineRouteReady(rt, w.servers) {
+		return false, nil
+	}
+	if c.routeErrors[rt.ID] != "" {
+		return false, nil
+	}
+	node := w.nodes[rt.NodeID]
+	live, err := c.nodeLive(node, w.servers[node.ServerID], subscriptionID)
+	if err != nil || !live {
+		return false, err
+	}
+	if !shared.ExternalManaged(w.servers[node.ServerID]) {
+		applied, known, err := c.appliedDeployment(node.ServerID)
+		if err != nil || !known || !routeExitAccessLiveWithApplied(rt, w, applied) {
+			return false, err
+		}
+	}
+	return routeForwardsActive(rt, w), nil
+}
+
+func routeForwardsActive(rt shared.Route, w routeWorld) bool {
+	active := map[string]bool{}
+	for _, f := range w.forwards {
+		if forwardBelongsToRoute(f, rt.ID) && shared.ForwardNetworkIncludes(f.Network, "tcp") && (f.Status == "active" || (shared.OfflineManaged(w.servers[f.ServerID]) && f.Status == "exported")) && !f.Deleting {
+			active[f.ServerID] = true
+		}
+	}
+	if !active[rt.EntryServerID] {
+		return false
+	}
+	for _, hop := range rt.Hops {
+		if !slices.ContainsFunc(hop.ServerIDs, func(id string) bool { return active[id] }) {
 			return false
 		}
 	}
@@ -135,19 +180,5 @@ func (a *App) routeLive(rt shared.Route, w routeWorld, subscriptionID string) (b
 	if allowed, err := a.routeExitAccessLive(rt, w); err != nil || !allowed {
 		return false, err
 	}
-	active := map[string]bool{}
-	for _, f := range w.forwards {
-		if forwardBelongsToRoute(f, rt.ID) && shared.ForwardNetworkIncludes(f.Network, "tcp") && (f.Status == "active" || (shared.OfflineManaged(w.servers[f.ServerID]) && f.Status == "exported")) && !f.Deleting {
-			active[f.ServerID] = true
-		}
-	}
-	if !active[rt.EntryServerID] {
-		return false, nil
-	}
-	for _, hop := range rt.Hops {
-		if !slices.ContainsFunc(hop.ServerIDs, func(id string) bool { return active[id] }) {
-			return false, nil
-		}
-	}
-	return true, nil
+	return routeForwardsActive(rt, w), nil
 }

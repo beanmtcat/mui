@@ -141,7 +141,9 @@ func (a *App) require(next http.HandlerFunc) http.HandlerFunc {
 			errorJSON(w, 401, "会话已过期")
 			return
 		}
-		_, _ = a.Store.DB.Exec(`UPDATE mui_sessions SET last_seen_at=$1 WHERE token_hash=$2`, now, Hash(c.Value))
+		if lastSeen == 0 || now-lastSeen >= 60 {
+			_, _ = a.Store.DB.Exec(`UPDATE mui_sessions SET last_seen_at=$1 WHERE token_hash=$2`, now, Hash(c.Value))
+		}
 		if r.Method != "GET" && r.Method != "HEAD" {
 			a.mu.Lock()
 			defer a.mu.Unlock()

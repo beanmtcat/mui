@@ -592,6 +592,7 @@ func TestReservedAndSSHPortsAreRefused(t *testing.T) {
 }
 
 func TestResentTrafficIsCountedOnceAndTotalsSurvivePruning(t *testing.T) {
+	t.Setenv("MUI_TRAFFIC_RETENTION_DAYS", "120")
 	p := newTestMui(t)
 	id, agent := p.enroll("s")
 	_, node, _ := p.do("POST", "/api/nodes", map[string]any{"direct": true, "serverId": id, "name": "n", "protocol": "snell", "port": 8443, "shadowTlsHost": "www.example.com"}, nil)

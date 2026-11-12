@@ -50,19 +50,26 @@ func main() {
 	if retention > 0 && retention < 32 {
 		retention = 32
 	}
-	if retention > 0 {
-		go func() {
-			for {
-				if err := store.PruneTraffic(time.Now().AddDate(0, 0, -retention)); err != nil {
+	go func() {
+		for {
+			if retention > 0 {
+				cutoff := time.Now().AddDate(0, 0, -retention)
+				if err := store.PruneTraffic(cutoff); err != nil {
 					log.Println("traffic pruning:", err)
 				}
-				if err := store.PruneAudit(time.Now().AddDate(0, 0, -retention)); err != nil {
+				if err := store.PruneAudit(cutoff); err != nil {
 					log.Println("audit pruning:", err)
 				}
-				time.Sleep(6 * time.Hour)
+				if err := store.PruneOperations(cutoff); err != nil {
+					log.Println("operations pruning:", err)
+				}
 			}
-		}()
-	}
+			if err := store.PruneSessions(time.Now()); err != nil {
+				log.Println("session pruning:", err)
+			}
+			time.Sleep(6 * time.Hour)
+		}
+	}()
 	// Unconfirmed upgrades must not wait for an administrator to open the
 	// operations page: expire them in the background.
 	go func() {

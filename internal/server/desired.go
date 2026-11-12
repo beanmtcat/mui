@@ -261,6 +261,99 @@ func (a *App) deployment(server shared.Server, state shared.DesiredState) map[st
 	return out
 }
 
+type appliedServerState struct {
+	nodes map[string]shared.NodeDeployment
+	known bool
+}
+
+type livenessCache struct {
+	app          *App
+	world        routeWorld
+	routeErrors  map[string]string
+	applied      map[string]appliedServerState
+	fingerprints map[string]string
+}
+
+func (a *App) newLivenessCache(world routeWorld) *livenessCache {
+	_, _, routeErrors := world.desiredRouteForwards()
+	return &livenessCache{
+		app:          a,
+		world:        world,
+		routeErrors:  routeErrors,
+		applied:      map[string]appliedServerState{},
+		fingerprints: map[string]string{},
+	}
+}
+
+func (c *livenessCache) appliedDeployment(serverID string) (map[string]shared.NodeDeployment, bool, error) {
+	if state, ok := c.applied[serverID]; ok {
+		return state.nodes, state.known, nil
+	}
+	nodes, known, err := c.app.Store.AppliedDeployment(serverID)
+	if err != nil {
+		return nil, false, err
+	}
+	c.applied[serverID] = appliedServerState{nodes: nodes, known: known}
+	return nodes, known, nil
+}
+
+func (c *livenessCache) nodeLive(n shared.Node, server shared.Server, subscriptionID string) (bool, error) {
+	if !n.Enabled || n.Deleting {
+		return false, nil
+	}
+	if shared.ExternalManaged(server) {
+		return true, nil
+	}
+	sharedPassword := shared.SharedSubscriptionPassword(n)
+	if sharedPassword {
+		subscriptionID = ""
+	}
+	if subscriptionID != "" && !server.MultiUserStats {
+		return false, nil
+	}
+	applied, known, err := c.appliedDeployment(server.ID)
+	if err != nil {
+		return false, err
+	}
+	if !known {
+		return n.Status == "active" && (server.MultiUserStats || sharedPassword) && server.AppliedRevision >= server.Revision, nil
+	}
+	deployed, ok := applied[n.ID]
+	if !ok {
+		return false, nil
+	}
+	// An active node has not been edited since its server last confirmed an
+	// apply; only a pending Snell scheme transition can change its fingerprint
+	// while status remains active.
+	if n.Status != "active" || (n.Protocol == "snell" && n.ShadowTLSHost != "" && server.AppliedRevision < server.Revision) {
+		fp, cached := c.fingerprints[n.ID]
+		if !cached {
+			password, err := c.app.Store.NodeSecret(n.ID)
+			if err != nil {
+				return false, err
+			}
+			shadowPassword, err := c.app.Store.NodeShadowTLSSecret(n.ID)
+			if err != nil {
+				return false, err
+			}
+			fp = c.app.nodeFingerprint(server, n, password, shadowPassword)
+			c.fingerprints[n.ID] = fp
+		}
+		if deployed.Fingerprint != fp {
+			return false, nil
+		}
+	}
+	if subscriptionID == "" {
+		return true, nil
+	}
+	for _, id := range deployed.Subscriptions {
+		if id == subscriptionID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 // nodeLive reports whether a node, as the panel currently describes it, is what
 // its server is running, with a login for the given subscription ("" for none).
 // It looks at this node only: an unapplied change elsewhere on the server, or a

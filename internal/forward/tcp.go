@@ -17,6 +17,7 @@ import (
 type tcpPair struct {
 	client, upstream *net.TCPConn
 	last             atomic.Int64
+	transferred      atomic.Bool
 }
 
 func (p *tcpPair) close() {
@@ -107,9 +108,9 @@ func (r *rule) proxyTCP(client *net.TCPConn) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		relay(upstream, client, &r.stats.up, &pair.last)
+		relay(upstream, client, &r.stats.up, &pair.last, &pair.transferred)
 	}()
-	relay(client, upstream, &r.stats.down, &pair.last)
+	relay(client, upstream, &r.stats.down, &pair.last, &pair.transferred)
 	<-done
 }
 
@@ -149,11 +150,12 @@ func (r *rule) dialUpstream() *net.TCPConn {
 // little it sends. Only the read side has a deadline: it can expire only while
 // waiting for input, when nothing is in flight, so an interruption never loses
 // data.
-func relay(dst, src *net.TCPConn, count, last *atomic.Int64) {
+func relay(dst, src *net.TCPConn, count, last *atomic.Int64, transferred *atomic.Bool) {
 	for {
 		_ = src.SetReadDeadline(time.Now().Add(relayTick))
 		n, err := io.CopyN(dst, src, copyChunk)
 		if n > 0 {
+			transferred.Store(true)
 			count.Add(n)
 			last.Store(time.Now().UnixNano())
 		}

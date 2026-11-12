@@ -378,6 +378,46 @@ func ownedIDs(ctx context.Context, tx *sql.Tx, table, serverID string, ids []str
 	return out, rows.Err()
 }
 
+func existingIDs(ctx context.Context, tx *sql.Tx, table string, ids []string) (map[string]bool, error) {
+	seen := map[string]bool{}
+	unique := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if id != "" && !seen[id] {
+			seen[id] = true
+			unique = append(unique, id)
+		}
+	}
+	out := map[string]bool{}
+	const batch = 500
+	for start := 0; start < len(unique); start += batch {
+		chunk := unique[start:min(start+batch, len(unique))]
+		args := make([]any, 0, len(chunk))
+		placeholders := make([]string, 0, len(chunk))
+		for i, id := range chunk {
+			args = append(args, id)
+			placeholders = append(placeholders, "$"+strconv.Itoa(i+1))
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM `+table+` WHERE id IN (`+strings.Join(placeholders, ",")+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var id string
+			if err := rows.Scan(&id); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			out[id] = true
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		rows.Close()
+	}
+	return out, nil
+}
+
 func (s *Store) Subscriptions() ([]shared.Subscription, error) {
 	return queryJSON[shared.Subscription](s.DB, `SELECT data FROM mui_subscriptions ORDER BY id`)
 }

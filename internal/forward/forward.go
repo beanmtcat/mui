@@ -44,8 +44,9 @@ var (
 	// A TCP connection that moved no data in either direction for this long is
 	// closed; without it, connections that are opened and left alone would hold
 	// their slots forever.
-	tcpIdleTimeout = time.Hour
-	udpIdleTimeout = 2 * time.Minute
+	tcpIdleTimeout    = time.Hour
+	tcpInitialTimeout = 2 * time.Minute
+	udpIdleTimeout    = 2 * time.Minute
 	sweepInterval  = 30 * time.Second
 	// How often a quiet TCP relay stops waiting to publish what it has moved.
 	relayTick = 10 * time.Second
@@ -379,11 +380,14 @@ func (s *Service) sweep() {
 			running = append(running, r)
 		}
 		s.mu.Unlock()
-		oldest := time.Now().Add(-tcpIdleTimeout).UnixNano()
+		now := time.Now()
+		oldest := now.Add(-tcpIdleTimeout).UnixNano()
+		oldestInitial := now.Add(-tcpInitialTimeout).UnixNano()
 		for _, r := range running {
 			r.mu.Lock()
 			for pair := range r.pairs {
-				if pair.last.Load() < oldest {
+				last := pair.last.Load()
+				if last < oldest || (!pair.transferred.Load() && last < oldestInitial) {
 					pair.close()
 				}
 			}

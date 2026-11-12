@@ -14,9 +14,30 @@ import (
 	"mui/internal/shared"
 )
 
+func validServerID(id string) bool {
+	if len(id) == 0 || len(id) > 64 {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
+}
+
+func (a *App) serverExists(id string) bool {
+	var one int
+	return a.Store.DB.QueryRow(`SELECT 1 FROM mui_servers WHERE id=$1`, id).Scan(&one) == nil
+}
+
 // lockServer returns the unlock function for one server's mutex, creating the
 // mutex on first use. Callers must not hold two server locks at once.
 func (a *App) lockServer(id string) func() {
+	if !validServerID(id) {
+		return func() {}
+	}
 	a.serverLocksMu.Lock()
 	mu, ok := a.serverLocks[id]
 	if !ok {
@@ -298,6 +319,10 @@ func (a *App) dropFromSubscriptions(nodeIDs []string) error {
 
 func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !validServerID(id) || !a.serverExists(id) {
+		errorJSON(w, 404, "服务器不存在")
+		return
+	}
 	// PATCH writes the whole server document, including fields supplied by
 	// heartbeats. Share their lock so neither writer restores an older snapshot.
 	unlock := a.lockServer(id)

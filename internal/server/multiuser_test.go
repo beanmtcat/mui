@@ -249,6 +249,7 @@ func TestSubscriptionExpiryRemovesNodeUser(t *testing.T) {
 	if _, err = p.store.DB.Exec(`UPDATE mui_subscriptions SET data=$1 WHERE id=$2`, Marshal(list[0]), list[0].ID); err != nil {
 		t.Fatal(err)
 	}
+	p.app.expirySyncAt.Store(0)
 	job = p.applyNext(agent, "success")
 	if len(job["state"].(map[string]any)["nodes"].([]any)[0].(map[string]any)["users"].([]any)) != 1 {
 		t.Fatal("expired user remained configured")

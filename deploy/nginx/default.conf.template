@@ -8,6 +8,10 @@ map "$mui_edge_proxy:$http_x_forwarded_proto" $mui_forwarded_proto {
     "1:https" https;
     "1:http" http;
 }
+map $mui_forwarded_proto $mui_hsts {
+    default "";
+    https "max-age=31536000";
+}
 
 server {
     listen 8086;

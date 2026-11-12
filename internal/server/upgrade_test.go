@@ -178,6 +178,9 @@ func TestAgentUpgradeRejectsBadReleaseAndExpiresUnconfirmed(t *testing.T) {
 	if code, _, _ := p.do("GET", "/api/operations", nil, nil); code != 200 {
 		t.Fatalf("operations: %d", code)
 	}
+	if err := p.store.ExpireUpgrades(); err != nil {
+		t.Fatal(err)
+	}
 	op, err := p.store.Operation("expired")
 	if err != nil || op.Status != "failed" {
 		t.Fatalf("unconfirmed upgrade not expired: %+v %v", op, err)

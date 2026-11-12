@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -242,4 +243,16 @@ func (s *Store) ExpireUpgrades() error {
 		}
 	}
 	return nil
+}
+
+// PruneOperations deletes terminal operations (claimed_at=-1 and state='')
+// created before the cutoff, using the hex-encoded UnixNano timestamp prefix
+// of operation IDs without parsing JSON payloads.
+func (s *Store) PruneOperations(before time.Time) error {
+	cutoff := before.UnixNano()
+	if cutoff <= 0 {
+		return nil
+	}
+	_, err := s.DB.Exec(`DELETE FROM mui_operations WHERE claimed_at=-1 AND state='' AND id<$1`, fmt.Sprintf("%016x", cutoff))
+	return err
 }

@@ -296,6 +296,14 @@ ARM64 服务器将 amd64 换成 arm64。已是当前构建、Agent 不支持自�
 		// (deduplicating any colliding names), and creates a unique index;
 		// executed via dataMigrations[23] because SQLite lower() is ASCII-only.
 	},
+	{
+		`CREATE INDEX IF NOT EXISTS mui_idx_traffic_at_ms ON mui_traffic(at_ms)`,
+		`CREATE INDEX IF NOT EXISTS mui_idx_user_traffic_at_ms ON mui_user_traffic(at_ms)`,
+		`CREATE INDEX IF NOT EXISTS mui_idx_server_traffic_at_ms ON mui_server_traffic(at_ms)`,
+	},
+	{
+		`CREATE INDEX IF NOT EXISTS mui_idx_ops_server_claimed ON mui_operations(server_id,claimed_at)`,
+	},
 }
 
 var dataMigrations = map[int64]func(*sql.Tx, string) error{

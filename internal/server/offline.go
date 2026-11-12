@@ -53,6 +53,10 @@ func (a *App) offlineForwards(id string) ([]shared.ForwardRule, error) {
 
 func (a *App) offlineExport(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if !validServerID(id) || !a.serverExists(id) {
+		errorJSON(w, 404, "服务器不存在")
+		return
+	}
 	unlock := a.lockServer(id)
 	defer unlock()
 	server, err := a.Store.Server(id)

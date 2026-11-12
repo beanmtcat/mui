@@ -14,13 +14,6 @@ import (
 var operationKinds = []string{"nodes.apply", "firewall.apply", "forwards.apply", "subscriptions.apply", "ufw.init", "ufw.delete", "agent.upgrade", "core.upgrade"}
 
 func (a *App) operations(w http.ResponseWriter, r *http.Request) {
-	a.mu.Lock()
-	if err := a.Store.ExpireUpgrades(); err != nil {
-		a.mu.Unlock()
-		errorJSON(w, 500, err.Error())
-		return
-	}
-	a.mu.Unlock()
 	// IDs start with their creation time, so "before an ID" means "older than".
 	query, args := newLogQuery(`SELECT data FROM mui_operations`)
 	query.equal("server_id", r.URL.Query().Get("serverId"))

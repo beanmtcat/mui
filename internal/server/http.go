@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"mui/internal/shared"
@@ -61,6 +62,8 @@ type App struct {
 	// then carry a manifest signed by its private half.
 	releaseKey    ed25519.PublicKey
 	releaseKeyB64 string
+	expirySyncMu  sync.Mutex
+	expirySyncAt  atomic.Int64
 }
 
 func NewApp(s *Store, publicURL string) (*App, error) {
@@ -256,6 +259,9 @@ func (a *App) SecurityHeaders(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("X-Frame-Options", "DENY")
+		if a.requestScheme(r) == "https" {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		}
 		// The panel serves only its own scripts, styles and (for TOTP QR
 		// codes) data: images. No plugins, no framing, no third-party origins.
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self' 'unsafe-inline'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'")

@@ -68,7 +68,7 @@ func (s *Store) SaveForwardTraffic(serverID string, points []shared.ForwardTraff
 		return err
 	}
 	for _, point := range points {
-		if point.ForwardID == "" || point.InstanceID == "" || point.Uplink < 0 || point.Downlink < 0 {
+		if point.ForwardID == "" || point.InstanceID == "" || len(point.InstanceID) > 128 || point.Uplink < 0 || point.Downlink < 0 {
 			continue
 		}
 		if !owned[point.ForwardID] {
@@ -115,7 +115,7 @@ func (s *Store) SaveTraffic(serverID string, points []shared.TrafficPoint) error
 		return err
 	}
 	for _, p := range points {
-		if p.NodeID == "" || p.InstanceID == "" || p.Uplink < 0 || p.Downlink < 0 {
+		if p.NodeID == "" || p.InstanceID == "" || len(p.InstanceID) > 128 || p.Uplink < 0 || p.Downlink < 0 || p.At.IsZero() {
 			continue
 		}
 		if !owned[p.NodeID] {
@@ -145,18 +145,24 @@ func (s *Store) SaveUserTraffic(serverID string, points []shared.UserTrafficPoin
 	}
 	defer tx.Rollback()
 	nodeIDs := make([]string, 0, len(points))
+	subIDs := make([]string, 0, len(points))
 	for _, p := range points {
 		nodeIDs = append(nodeIDs, p.NodeID)
+		subIDs = append(subIDs, p.SubscriptionID)
 	}
 	owned, err := ownedIDs(ctx, tx, "mui_nodes", serverID, nodeIDs)
 	if err != nil {
 		return err
 	}
+	knownSubs, err := existingIDs(ctx, tx, "mui_subscriptions", subIDs)
+	if err != nil {
+		return err
+	}
 	for _, p := range points {
-		if p.NodeID == "" || p.SubscriptionID == "" || p.InstanceID == "" || p.Uplink < 0 || p.Downlink < 0 || p.At.IsZero() {
+		if p.NodeID == "" || p.SubscriptionID == "" || p.InstanceID == "" || len(p.InstanceID) > 128 || p.Uplink < 0 || p.Downlink < 0 || p.At.IsZero() {
 			continue
 		}
-		if !owned[p.NodeID] {
+		if !owned[p.NodeID] || !knownSubs[p.SubscriptionID] {
 			continue
 		}
 		result, e := tx.ExecContext(ctx, `INSERT INTO mui_user_traffic(node_id,subscription_id,instance_id,sequence,uplink,downlink,at_ms) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(node_id,subscription_id,instance_id,sequence) DO NOTHING`, p.NodeID, p.SubscriptionID, p.InstanceID, p.Sequence, p.Uplink, p.Downlink, p.At.UnixMilli())
@@ -182,7 +188,7 @@ func (s *Store) SaveServerTraffic(serverID string, points []shared.ServerTraffic
 	}
 	defer tx.Rollback()
 	for _, p := range points {
-		if p.BootID == "" || p.Interface == "" || p.Sequence <= 0 || p.Rx < 0 || p.Tx < 0 {
+		if p.BootID == "" || len(p.BootID) > 128 || p.Interface == "" || len(p.Interface) > 128 || p.Sequence <= 0 || p.Rx < 0 || p.Tx < 0 || p.At.IsZero() {
 			continue
 		}
 		result, err := tx.ExecContext(ctx, `INSERT INTO mui_server_traffic(server_id,boot_id,sequence,interface,rx,tx,at_ms) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(server_id,boot_id,sequence) DO NOTHING`, serverID, p.BootID, p.Sequence, p.Interface, p.Rx, p.Tx, p.At.UnixMilli())

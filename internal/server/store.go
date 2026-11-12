@@ -200,6 +200,17 @@ func (s *Store) PruneAudit(before time.Time) error {
 	return err
 }
 
+// PruneSessions deletes expired or 24h-idle sessions and orphaned pending TOTP
+// setup rows whose session no longer exists.
+func (s *Store) PruneSessions(now time.Time) error {
+	nowUnix := now.Unix()
+	if _, err := s.DB.Exec(`DELETE FROM mui_sessions WHERE expires_at<$1 OR (last_seen_at>0 AND last_seen_at<$2)`, nowUnix, nowUnix-24*3600); err != nil {
+		return err
+	}
+	_, err := s.DB.Exec(`DELETE FROM mui_totp_pending WHERE session_hash NOT IN (SELECT token_hash FROM mui_sessions)`)
+	return err
+}
+
 // TOTP replay state is a single row (id=1) in mui_totp_state.
 func (s *Store) TOTPState() (lastStep uint64, failures int, lockedUntil time.Time, err error) {
 	var step, lockedMs int64

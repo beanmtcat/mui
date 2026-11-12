@@ -55,27 +55,20 @@ func (a *App) subscriptions(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		linkRows.Close()
-		var world *routeWorld
-		if slices.ContainsFunc(list, func(s shared.Subscription) bool { return len(s.RouteIDs) > 0 }) {
-			loaded, err := a.loadRouteWorld()
-			if err != nil {
-				errorJSON(w, 500, err.Error())
-				return
-			}
-			world = &loaded
+		world, err := a.loadRouteWorld()
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
 		}
+		cache := a.newLivenessCache(world)
+		now := time.Now()
 		for i := range list {
 			list[i].Uplink, list[i].Downlink = totals[list[i].ID][0], totals[list[i].ID][1]
 			list[i].LinkAvailable = hasLink[list[i].ID]
-			if list[i].Enabled && (list[i].ExpiresAt == nil || time.Now().Before(*list[i].ExpiresAt)) {
-				if _, _, pending, err := a.subscriptionItems(list[i], world); err == nil {
-					for _, id := range pending {
-						if slices.Contains(list[i].RouteIDs, id) {
-							list[i].PendingRouteIDs = append(list[i].PendingRouteIDs, id)
-						} else {
-							list[i].PendingNodeIDs = append(list[i].PendingNodeIDs, id)
-						}
-					}
+			if list[i].Enabled && (list[i].ExpiresAt == nil || now.Before(*list[i].ExpiresAt)) {
+				if pendingNodes, pendingRoutes, err := cache.subscriptionPending(list[i]); err == nil {
+					list[i].PendingNodeIDs = pendingNodes
+					list[i].PendingRouteIDs = pendingRoutes
 				}
 			}
 		}
@@ -366,6 +359,25 @@ func (a *App) queueSubscriptionApply(nodeIDs []string) error {
 	return nil
 }
 
+var expirySyncInterval = 30 * time.Second
+
+func (a *App) syncExpiredSubscriptionsThrottled() error {
+	now := time.Now().UnixNano()
+	if last := a.expirySyncAt.Load(); last > 0 && now-last < int64(expirySyncInterval) {
+		return nil
+	}
+	a.expirySyncMu.Lock()
+	defer a.expirySyncMu.Unlock()
+	if last := a.expirySyncAt.Load(); last > 0 && time.Now().UnixNano()-last < int64(expirySyncInterval) {
+		return nil
+	}
+	if err := a.syncExpiredSubscriptions(); err != nil {
+		return err
+	}
+	a.expirySyncAt.Store(time.Now().UnixNano())
+	return nil
+}
+
 // A subscription expiry must remove its credentials even if no administrator
 // is using the panel. Agents poll this path, so one of them schedules the apply.
 func (a *App) syncExpiredSubscriptions() error {
@@ -591,6 +603,62 @@ func (a *App) subscriptionItem(sub shared.Subscription, n shared.Node, server sh
 		item.Password = user.Password
 	}
 	return item, nil
+}
+
+func (c *livenessCache) subscriptionPending(sub shared.Subscription) (pendingNodes []string, pendingRoutes []string, err error) {
+	for _, id := range sub.NodeIDs {
+		n, ok := c.world.nodes[id]
+		if !ok {
+			continue
+		}
+		server, ok := c.world.servers[n.ServerID]
+		if !ok {
+			continue
+		}
+		if !n.Enabled || n.Deleting {
+			continue
+		}
+		if validateSubscriptionNode(sub.Format, n) != nil {
+			continue
+		}
+		live, err := c.nodeLive(n, server, sub.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !live {
+			if slices.Contains(sub.RouteIDs, n.ID) {
+				pendingRoutes = append(pendingRoutes, n.ID)
+			} else {
+				pendingNodes = append(pendingNodes, n.ID)
+			}
+		}
+	}
+	if len(sub.RouteIDs) == 0 {
+		return pendingNodes, pendingRoutes, nil
+	}
+	for _, rt := range c.world.routes {
+		if !slices.Contains(sub.RouteIDs, rt.ID) {
+			continue
+		}
+		n, ok := c.world.nodes[rt.NodeID]
+		if !ok {
+			continue
+		}
+		if !rt.Enabled || !n.Enabled || n.Deleting {
+			continue
+		}
+		if validateSubscriptionNode(sub.Format, n) != nil {
+			continue
+		}
+		live, err := c.routeLive(rt, sub.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !live {
+			pendingRoutes = append(pendingRoutes, rt.ID)
+		}
+	}
+	return pendingNodes, pendingRoutes, nil
 }
 
 // subscriptionItems resolves a subscription to the nodes that can be handed
