@@ -5,6 +5,15 @@ import { cityTable, regionTable, type PlaceEntry } from "./geo-places";
 export type Point = [longitude: number, latitude: number];
 export type ServerPlace = { point: Point; precision: "city" | "country" };
 export type RouteSegment = { from: string; to: string; routeIds: string[]; routeNames: string[]; active: boolean };
+export type ScreenPoint<T> = { id: string; point: Point; screen: Point; item: T };
+export type ScreenCluster<T> = {
+  key: string;
+  screen: Point;
+  point: Point;
+  items: T[];
+  points: Point[];
+  coLocated: boolean;
+};
 
 const normalize = (value: string) =>
   value.normalize("NFKC").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().replace(/[\s._\-,/()（）·'"’]+/g, "");
@@ -140,4 +149,78 @@ export function routeSegments(routes: Route[], nodes: Node[], includeDisabled: b
     }
   }
   return [...segments.values()];
+}
+
+function sphericalCentroid(points: readonly Point[]): Point {
+  if (points.length <= 1) return points[0] || [0, 0];
+  let sx = 0, sy = 0, sz = 0;
+  for (const [lon, lat] of points) {
+    const lonRad = lon * Math.PI / 180;
+    const latRad = lat * Math.PI / 180;
+    const cosLat = Math.cos(latRad);
+    sx += cosLat * Math.cos(lonRad);
+    sy += cosLat * Math.sin(lonRad);
+    sz += Math.sin(latRad);
+  }
+  const len = Math.hypot(sx, sy, sz);
+  if (len < 1e-6) return points[0];
+  return [
+    Math.atan2(sy, sx) * 180 / Math.PI,
+    Math.atan2(sz, Math.hypot(sx, sy)) * 180 / Math.PI,
+  ];
+}
+
+export function clusterScreenPoints<T>(entries: readonly ScreenPoint<T>[], threshold = 26): ScreenCluster<T>[] {
+  const working: {
+    ids: string[];
+    items: T[];
+    points: Point[];
+    sumX: number;
+    sumY: number;
+    screen: Point;
+  }[] = [];
+
+  for (const entry of entries) {
+    let bestIndex = -1;
+    let bestDist = threshold;
+    for (let i = 0; i < working.length; i++) {
+      const dist = Math.hypot(entry.screen[0] - working[i].screen[0], entry.screen[1] - working[i].screen[1]);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestIndex = i;
+      }
+    }
+    if (bestIndex >= 0) {
+      const target = working[bestIndex];
+      target.ids.push(entry.id);
+      target.items.push(entry.item);
+      target.points.push(entry.point);
+      target.sumX += entry.screen[0];
+      target.sumY += entry.screen[1];
+      const count = target.items.length;
+      target.screen = [target.sumX / count, target.sumY / count];
+    } else {
+      working.push({
+        ids: [entry.id],
+        items: [entry.item],
+        points: [entry.point],
+        sumX: entry.screen[0],
+        sumY: entry.screen[1],
+        screen: [entry.screen[0], entry.screen[1]],
+      });
+    }
+  }
+
+  return working.map((cluster) => {
+    const first = cluster.points[0];
+    const coLocated = cluster.points.every((point) => point[0] === first[0] && point[1] === first[1]);
+    return {
+      key: cluster.ids.join(","),
+      screen: cluster.screen,
+      point: coLocated ? first : sphericalCentroid(cluster.points),
+      items: cluster.items,
+      points: cluster.points,
+      coLocated,
+    };
+  });
 }

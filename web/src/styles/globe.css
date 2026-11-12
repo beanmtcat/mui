@@ -39,11 +39,19 @@
 }
 .globeMode button,
 .globeZoom button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   border-radius: 0;
   padding: 6px 11px;
   background: var(--surface);
   color: var(--muted);
+}
+.globeMode button:hover:not(:disabled):not(.active),
+.globeZoom button:hover:not(:disabled) {
+  background: var(--surface-hover);
+  color: var(--text);
 }
 .globeMode button + button,
 .globeZoom button + button {
@@ -61,31 +69,40 @@
   font-size: 18px;
   line-height: 1;
 }
+.globeZoom button.globeZoomText {
+  min-width: 0;
+  padding: 6px 10px;
+  font-size: 13px;
+  line-height: 1.2;
+}
 .globeLayout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 330px);
-  min-height: 550px;
+  grid-template-rows: minmax(0, 1fr);
+  height: clamp(420px, 70vh, 680px);
+}
+.globeMapStage {
+  position: relative;
+  min-width: 0;
+  min-height: 420px;
+  height: 100%;
 }
 .globeCanvas {
-  position: relative;
-  display: grid;
-  place-items: center;
-  min-width: 0;
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
   overflow: hidden;
   background: radial-gradient(ellipse at 50% 50%, #152f44 0%, #091923 68%, #07121a 100%);
 }
 .globeCanvas svg {
   display: block;
   width: 100%;
-  max-height: 680px;
-  aspect-ratio: 8 / 5;
+  height: 100%;
   cursor: grab;
 }
-.globeCanvas.globe svg {
-  touch-action: pan-y;
-}
+.globeCanvas.globe svg,
 .globeCanvas.flat svg {
-  touch-action: auto;
+  touch-action: pan-y;
 }
 .globeCanvas svg:active {
   cursor: grabbing;
@@ -151,6 +168,24 @@
   fill: #4de0b5;
   stroke: #effff8;
 }
+.globeMarker.partial .globeMarkerHalo {
+  fill: #4de0b5;
+  stroke: #ffd291;
+  stroke-opacity: 0.88;
+  stroke-width: 1.5;
+}
+.globeMarker.partial .globeMarkerCore {
+  fill: #4de0b5;
+  stroke: #ffd291;
+  stroke-width: 2.3;
+}
+.globeMarker.hovered .globeMarkerHalo,
+.globeMarker:hover .globeMarkerHalo {
+  stroke: #ffffff;
+  stroke-opacity: 0.95;
+  stroke-width: 2.5;
+  fill-opacity: 0.48;
+}
 .globeMarker.selected .globeMarkerHalo,
 .globeMarker:focus-visible .globeMarkerHalo {
   stroke: white;
@@ -162,6 +197,27 @@
   font-size: 11px;
   font-weight: 800;
   pointer-events: none;
+}
+.globeLabels {
+  pointer-events: none;
+}
+.globeLabel.dimmed {
+  opacity: 0.36;
+}
+.globeLabel rect {
+  fill: #081824d9;
+  stroke: #8cc2d666;
+  stroke-width: 0.8;
+}
+.globeLabel.active rect {
+  fill: #071622f2;
+  stroke: #ffffffcc;
+  stroke-width: 1.1;
+}
+.globeLabel text {
+  fill: #f0f8fb;
+  font-size: 11px;
+  font-weight: 600;
 }
 .globeLegend {
   position: absolute;
@@ -191,6 +247,12 @@
 .globeLegendDot.online {
   background: #4de0b5;
 }
+.globeLegendDot.partial {
+  width: 10px;
+  height: 10px;
+  background: #4de0b5;
+  border: 2px solid #ffd291;
+}
 .globeLegendDot.offline {
   background: #ffd291;
 }
@@ -208,6 +270,8 @@
   flex-direction: column;
   gap: 10px;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
   padding: 16px;
   border-left: 1px solid var(--line);
 }
@@ -241,6 +305,28 @@
   color: var(--accent);
   text-align: left;
 }
+.globeSelectionPeers {
+  display: grid;
+  gap: 5px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line-strong);
+}
+.globeSelectionPeersHead {
+  color: var(--muted);
+  font-size: 12px;
+}
+.globeSelectionPeers .globeServerList {
+  max-height: 176px;
+}
+.globeSelectionPeers .globeServerList button {
+  background: var(--surface);
+  border-color: var(--line);
+}
+.globeSelectionPeers .globeServerList button:hover,
+.globeSelectionPeers .globeServerList button.selected {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
 .globeRelated {
   display: flex;
   flex-wrap: wrap;
@@ -270,8 +356,10 @@
   display: grid;
   align-content: start;
   gap: 4px;
-  max-height: 455px;
   overflow-y: auto;
+}
+.globeSidebar > .globeServerList {
+  overflow-y: visible;
 }
 .globeServerList button {
   display: flex;
@@ -296,6 +384,7 @@
   height: 8px;
   border-radius: 50%;
   background: #ffd291;
+  box-shadow: inset 0 0 0 1px rgb(15 23 42 / 0.18);
 }
 .globeServerDot.online {
   background: #4de0b5;
@@ -346,16 +435,34 @@
   }
   .globeLayout {
     grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    height: auto;
   }
-  .globeCanvas svg {
+  .globeMapStage {
+    min-height: 0;
+    height: auto;
+  }
+  .globeCanvas {
+    height: 330px;
     min-height: 330px;
   }
+  .globeLegend {
+    position: static;
+    gap: 6px 12px;
+    padding: 8px 12px;
+    border: 0;
+    border-top: 1px solid #28465a;
+    border-radius: 0;
+    background: #0b2030;
+  }
   .globeSidebar {
+    overflow-y: visible;
     border-left: 0;
     border-top: 1px solid var(--line);
   }
-  .globeServerList {
+  .globeSidebar > .globeServerList {
     max-height: 280px;
+    overflow-y: auto;
   }
 }
 
