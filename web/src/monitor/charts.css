@@ -1,0 +1,314 @@
+/* Counterpart in status-web/src/monitor/charts.css — keep time range & chart styles in sync across both apps. */
+
+/* ==========================================================================
+   Segmented Time Range Switcher & Self-Contained SVG Charts
+   ========================================================================== */
+
+.monitorPage .monitorRangeTabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--mon-border);
+  border-radius: 10px;
+  background: var(--mon-surface-sunken);
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.monitorPage .monitorRangeTabs button {
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 5px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mon-text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.monitorPage .monitorRangeTabs button:hover:not(.active) {
+  color: var(--mon-text-primary);
+}
+
+.monitorPage .monitorRangeTabs button.active {
+  background: var(--mon-surface-elev);
+  color: var(--mon-accent-strong);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1);
+}
+
+.monitorPage .monitorChartsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
+
+/* Self-contained SVG plot primitives (works without pages.css) */
+.monitorPage .trafficChartHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.monitorPage .trafficLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 11.5px;
+  color: var(--mon-text-secondary);
+}
+
+.monitorPage .trafficLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.monitorPage .trafficLegend span::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.monitorPage .trafficPlotRow {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.monitorPage .trafficYAxis {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+  height: 185px;
+  color: var(--mon-text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.monitorPage .trafficPlot {
+  position: relative;
+  height: 185px;
+  min-width: 0;
+}
+
+.monitorPage .trafficPlot svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.monitorPage .trafficGridLine {
+  stroke: var(--mon-hairline);
+  stroke-dasharray: 4 5;
+  vector-effect: non-scaling-stroke;
+}
+
+.monitorPage .trafficLine {
+  fill: none;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.monitorPage .trafficCursor {
+  stroke: var(--mon-text-tertiary);
+  stroke-dasharray: 3 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.monitorPage .trafficDot {
+  stroke: var(--mon-surface-elev);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.monitorPage .trafficZero {
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--mon-text-tertiary);
+  background: var(--mon-surface-elev);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.monitorPage .trafficXAxis {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  margin: 4px 0 0 66px;
+  color: var(--mon-text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.monitorPage .trafficReadout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 10px;
+  padding: 7px 0 0;
+  font-size: 11.5px;
+}
+
+.monitorPage .monitorChartCard {
+  --mon-chart-accent: var(--mon-accent-500);
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  padding: 14px 15px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--mon-border);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--mon-chart-accent) 4%, var(--mon-surface-elev) 96%) 0%,
+      var(--mon-surface-elev) 48px
+    );
+}
+
+.monitorPage .monitorChartCard::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2.5px;
+  background: var(--mon-chart-accent);
+  opacity: 0.85;
+}
+
+.monitorPage .monitorChartHeadText {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.monitorPage .monitorChartTitle {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--mon-text-primary);
+}
+
+.monitorPage .monitorChartSub {
+  font-size: 11.5px;
+  color: var(--mon-text-tertiary);
+}
+
+.monitorPage .monitorReadout {
+  border-top: 1px solid var(--mon-border-subtle);
+  color: var(--mon-text-secondary);
+}
+
+.monitorPage .monitorReadout strong {
+  color: var(--mon-text-primary);
+}
+
+/* Semantic Chart Series Tones */
+.monitorPage .monitorLegend span.monSeries-cpu::before { background: var(--mon-progress-cpu); }
+.monitorPage .trafficLine.monSeries-cpu { stroke: var(--mon-progress-cpu); }
+.monitorPage .trafficDot.monSeries-cpu { fill: var(--mon-progress-cpu); }
+
+.monitorPage .monitorLegend span.monSeries-memory::before { background: var(--mon-progress-memory); }
+.monitorPage .trafficLine.monSeries-memory { stroke: var(--mon-progress-memory); }
+.monitorPage .trafficDot.monSeries-memory { fill: var(--mon-progress-memory); }
+
+.monitorPage .monitorLegend span.monSeries-swap::before { background: var(--mon-progress-swap); }
+.monitorPage .trafficLine.monSeries-swap { stroke: var(--mon-progress-swap); }
+.monitorPage .trafficDot.monSeries-swap { fill: var(--mon-progress-swap); }
+
+.monitorPage .monitorLegend span.monSeries-up::before { background: var(--mon-traffic-up); }
+.monitorPage .trafficLine.monSeries-up { stroke: var(--mon-traffic-up); }
+.monitorPage .trafficDot.monSeries-up { fill: var(--mon-traffic-up); }
+
+.monitorPage .monitorLegend span.monSeries-down::before { background: var(--mon-traffic-down); }
+.monitorPage .trafficLine.monSeries-down { stroke: var(--mon-traffic-down); }
+.monitorPage .trafficDot.monSeries-down { fill: var(--mon-traffic-down); }
+
+.monitorPage .monitorLegend span.monSeries-network::before { background: var(--mon-progress-network); }
+.monitorPage .trafficLine.monSeries-network { stroke: var(--mon-progress-network); }
+.monitorPage .trafficDot.monSeries-network { fill: var(--mon-progress-network); }
+
+.monitorPage .monitorLegend span.monSeries-load::before { background: var(--mon-progress-load); }
+.monitorPage .trafficLine.monSeries-load { stroke: var(--mon-progress-load); }
+.monitorPage .trafficDot.monSeries-load { fill: var(--mon-progress-load); }
+
+.monitorPage .monitorLegend span.monSeries-latency::before {
+  background: var(--mon-chart-latency, var(--mon-latency-excellent));
+}
+.monitorPage .trafficLine.monSeries-latency {
+  stroke: var(--mon-chart-latency, var(--mon-latency-excellent));
+}
+.monitorPage .trafficDot.monSeries-latency {
+  fill: var(--mon-chart-latency, var(--mon-latency-excellent));
+}
+
+.monitorPage .monitorLegend span.monSeries-latencyMax::before {
+  background: var(--mon-status-warning);
+}
+.monitorPage .trafficLine.monSeries-latencyMax {
+  stroke: var(--mon-status-warning);
+}
+.monitorPage .trafficDot.monSeries-latencyMax {
+  fill: var(--mon-status-warning);
+}
+
+.monitorPage .trafficLine.is-dashed {
+  stroke-dasharray: 5 3.5;
+  opacity: 0.88;
+}
+
+.monitorPage .monitorPingChartsSection {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--mon-hairline);
+  display: grid;
+  gap: 12px;
+}
+
+.monitorPage .monitorPingChartsSection h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--mon-text-primary);
+}
+
+/* Shared Responsive Rules */
+@media (max-width: 960px) {
+  .monitorPage .monitorChartsGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .monitorPage .trafficXAxis .optional {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .monitorPage .trafficPlotRow {
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .monitorPage .trafficXAxis {
+    margin-left: 54px;
+  }
+}

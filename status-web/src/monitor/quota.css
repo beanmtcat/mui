@@ -1,0 +1,148 @@
+/* Counterpart in web/src/monitor/quota.css — keep cycle quota & expiry footer styles in sync across both apps. */
+
+.monScope .monitorCycleSection {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--mon-hairline);
+  min-width: 0;
+}
+
+.monScope .monQuotaBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.monScope .monQuotaHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 8px;
+  min-width: 0;
+  font-size: 11.5px;
+}
+
+.monScope .monQuotaLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--mon-text-secondary);
+  font-weight: 600;
+}
+
+.monScope .monQuotaLabel svg {
+  color: var(--mon-progress-network);
+  flex-shrink: 0;
+}
+
+.monScope .monQuotaRemain {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--mon-text-tertiary);
+  white-space: nowrap;
+}
+
+.monScope .monQuotaUsage {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--mon-text-primary);
+  white-space: nowrap;
+}
+
+.monScope .monQuotaUsage.is-warning {
+  color: var(--mon-ink-warning);
+}
+
+.monScope .monQuotaUsage.is-danger {
+  color: var(--mon-ink-error);
+}
+
+.monScope .monQuotaTrack {
+  display: grid;
+  grid-template-columns: repeat(18, minmax(0, 1fr));
+  gap: 2px;
+  height: 7px;
+  min-width: 0;
+}
+
+.monScope .monQuotaSegment {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  transition: background-color 0.2s ease;
+}
+
+.monScope .monitorCyclePlain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+  font-size: 11.5px;
+  min-width: 0;
+}
+
+.monScope .monitorCyclePlain strong {
+  color: var(--mon-text-primary);
+  font-weight: 650;
+}
+
+.monScope .monitorCardFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 8px;
+  padding-top: 9px;
+  border-top: 1px dashed var(--mon-border);
+  min-width: 0;
+}
+
+.monScope .monFooterInfo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  min-width: 0;
+}
+
+.monScope .monExpireChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4.5px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--mon-text-secondary);
+}
+
+.monScope .monExpireChip svg {
+  color: var(--mon-expire-color, var(--mon-text-tertiary));
+  flex-shrink: 0;
+}
+
+.monScope .monExpireDate {
+  color: var(--mon-text-tertiary);
+}
+
+.monScope .monExpireChip strong {
+  color: var(--mon-expire-color, var(--mon-text-secondary));
+  font-weight: 700;
+}
+
+.monScope .monExpireChip[data-tone="critical"] strong {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--mon-tag-red-bg);
+  color: var(--mon-tag-red-fg);
+}
+
+.monScope .monExpireChip[data-tone="warning"] strong {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--mon-tag-amber-bg);
+  color: var(--mon-tag-amber-fg);
+}

@@ -1,0 +1,328 @@
+/* Counterpart in status-web/src/monitor/card.css — keep monitor card styles in sync across both apps. */
+
+.monitorPage .monitorGroupSection {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.monitorPage .monitorGroupHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--mon-hairline);
+  font-size: 13px;
+  min-width: 0;
+}
+
+.monitorPage .monitorGroupHead strong {
+  color: var(--mon-text-primary);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monitorPage .monitorGroupHead span {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--mon-fill-tertiary);
+  border: 1px solid var(--mon-border-subtle);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--mon-text-secondary);
+}
+
+.monitorPage .monitorGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
+
+/* ==========================================================================
+   Server Monitor Card (adapted from NodeCard / CompactNodeCard / MetricBar)
+   ========================================================================== */
+
+.monitorPage .monitorCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 14px 15px;
+  border-radius: 13px;
+  border: 1px solid var(--mon-border);
+  background: var(--mon-surface-elev);
+  color: var(--mon-text-primary);
+  cursor: pointer;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    background-color 0.16s ease;
+}
+
+.monitorPage .monitorCard:hover {
+  border-color: var(--mon-border-strong);
+  box-shadow: 0 6px 18px -10px rgba(15, 23, 42, 0.22);
+}
+
+.monitorPage .monitorCard:focus-visible {
+  outline: 2px solid var(--mon-accent-500);
+  outline-offset: 2px;
+}
+
+.monitorPage .monitorCard.active {
+  border-color: var(--mon-accent-500);
+  box-shadow:
+    0 0 0 2px var(--mon-ring),
+    0 8px 20px -12px rgba(37, 99, 235, 0.28);
+}
+
+.monitorPage .monitorCard.offline {
+  background: color-mix(in srgb, var(--mon-surface-sunken) 48%, var(--mon-surface-elev) 52%);
+}
+
+/* Card Header */
+.monitorPage .monitorCardHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.monitorPage .monTitleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.monitorPage .monTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.monitorPage .monitorFlag {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.monitorPage .monServerName {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  color: var(--mon-text-primary);
+}
+
+.monitorPage .monSubtitleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.monitorPage .monSubtitlePill {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  line-height: 1.3;
+  color: var(--mon-text-tertiary);
+}
+
+.monitorPage .monStackBadge {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 5.5px;
+  border-radius: 5px;
+  background: var(--mon-fill-tertiary);
+  border: 1px solid var(--mon-border-subtle);
+  font-size: 10.5px;
+  font-weight: 650;
+  line-height: 1.35;
+  color: var(--mon-text-secondary);
+  flex-shrink: 0;
+}
+
+.monitorPage .monitorBadges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex-shrink: 0;
+  max-width: 55%;
+}
+
+.monitorPage .monTagChip {
+  display: inline-flex;
+  align-items: center;
+  height: 21px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  background: var(--mon-tag-gray-bg);
+  color: var(--mon-tag-gray-fg);
+}
+
+.monitorPage .monTagChip[data-tone="blue"] {
+  background: var(--mon-tag-blue-bg);
+  color: var(--mon-tag-blue-fg);
+}
+
+.monitorPage .monTagChip[data-tone="amber"] {
+  background: var(--mon-tag-amber-bg);
+  color: var(--mon-tag-amber-fg);
+}
+
+.monitorPage .monTagChip[data-tone="red"] {
+  background: var(--mon-tag-red-bg);
+  color: var(--mon-tag-red-fg);
+}
+
+.monitorPage .monTagChip[data-tone="green"] {
+  background: var(--mon-tag-green-bg);
+  color: var(--mon-tag-green-fg);
+}
+
+.monitorPage .monStatusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  background: var(--mon-tag-green-bg);
+  color: var(--mon-tag-green-fg);
+}
+
+.monitorPage .monStatusPill[data-online="false"] {
+  background: var(--mon-tag-red-bg);
+  color: var(--mon-tag-red-fg);
+}
+
+.monitorPage .monStatusDot {
+  width: 6.5px;
+  height: 6.5px;
+  border-radius: 999px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.monitorPage .monStatusDot.is-online {
+  background: var(--mon-status-online);
+}
+
+.monitorPage .monStatusPill[data-online="true"] .monStatusDot {
+  background: var(--mon-status-online);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--mon-status-online) 24%, transparent);
+}
+
+/* Host Info, Public Note & Empty/Upgrade Notices */
+.monitorPage .monitorHostMeta {
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: var(--mon-fill-tertiary);
+  border: 1px solid var(--mon-border-subtle);
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--mon-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.monitorPage .monPublicNote {
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: var(--mon-fill-tertiary);
+  border: 1px solid var(--mon-border-subtle);
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--mon-text-secondary);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.monitorPage .monitorUpgradeNotice {
+  display: grid;
+  gap: 6px;
+  padding: 11px 12px;
+  border-radius: 9px;
+  background: var(--mon-fill-tertiary);
+  border: 1px dashed var(--mon-border-strong);
+  min-width: 0;
+}
+
+.monitorPage .monitorUpgradeNotice .monTagChip {
+  justify-self: start;
+}
+
+.monitorPage .monitorUpgradeNotice p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--mon-text-secondary);
+}
+
+.monitorPage .monitorUpgradeNotice small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--mon-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+
+@media (min-width: 641px) and (max-width: 1024px) {
+  .monitorPage .monitorGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .monitorPage .monitorGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .monitorPage .monitorCard {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .monitorPage .monitorBadges {
+    max-width: 58%;
+    gap: 4px;
+  }
+}

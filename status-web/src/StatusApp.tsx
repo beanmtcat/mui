@@ -1,138 +1,26 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import {
-  countryFlag,
-  formatBytes,
-  UNGROUPED_FILTER,
-  UNGROUPED_LABEL,
-} from "./monitor/format";
-import { MonitorMetricsCharts, PingTaskChart } from "./monitor/MonitorCharts";
+import { StatusDetailPanel } from "./components/StatusDetailPanel";
+import { MoonIcon, SunIcon } from "./components/ThemeIcons";
+import { usePublicHistory } from "./hooks/usePublicHistory";
+import { usePublicStatus } from "./hooks/usePublicStatus";
+import { UNGROUPED_FILTER, UNGROUPED_LABEL } from "./monitor/format";
 import { MonitorServerCard } from "./monitor/MonitorServerCard";
-import type {
-  MonitorCardSample,
-  MonitorCardViewModel,
-  MonitorRange,
-  SharedMonitorRecord,
-  SharedPingPoint,
-  SharedTrafficLimitType,
-} from "./monitor/types";
+import { toPublicCardViewModel, type PublicServerItem } from "./monitor/publicCard";
+import type { MonitorRange } from "./monitor/types";
 import { applyStatusTheme, readInitialStatusTheme, type StatusTheme } from "./theme";
-
-const PUBLIC_RANGES: { id: MonitorRange; label: string }[] = [
-  { id: "1h", label: "1 小时" },
-  { id: "6h", label: "6 小时" },
-  { id: "24h", label: "24 小时" },
-  { id: "7d", label: "7 天" },
-];
-
-type PublicCycleTraffic = {
-  startAt: string;
-  resetAt: string;
-  used: number;
-  limit: number;
-  type: SharedTrafficLimitType;
-};
-
-type PublicServerItem = {
-  id: string;
-  name: string;
-  group: string;
-  country: string;
-  region?: string;
-  city?: string;
-  online: boolean;
-  hostMonitor: boolean;
-  os?: string;
-  arch?: string;
-  virtualization?: string;
-  cpuName?: string;
-  cpuCores?: number;
-  memTotal?: number;
-  swapTotal?: number;
-  diskTotal?: number;
-  sample?: MonitorCardSample;
-  cycleTraffic?: PublicCycleTraffic;
-  expiresAt?: string;
-  publicNote?: string;
-};
-
-type PublicStatusResponse = {
-  title: string;
-  description: string;
-  showTraffic: boolean;
-  showPing: boolean;
-  generatedAt: string;
-  servers: PublicServerItem[];
-};
-
-type PublicPingTaskSeries = {
-  id: string;
-  name: string;
-  intervalSeconds: number;
-  records: SharedPingPoint[];
-};
 
 const zhCollator = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "base" });
 
-function SunIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="4" />
-      <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" />
-    </svg>
-  );
-}
-
-function MoonIcon() {
-  return (
-    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
-    </svg>
-  );
-}
-
-function toPublicCardViewModel(srv: PublicServerItem, showTraffic: boolean): MonitorCardViewModel {
-  const loc = [srv.region, srv.city].filter(Boolean).join(" · ") || srv.country;
-  const hostLine = [
-    srv.cpuName,
-    srv.cpuCores ? `${srv.cpuCores} 核` : "",
-    srv.os,
-    srv.virtualization,
-  ]
-    .filter(Boolean)
-    .join(" · ");
-
-  return {
-    id: srv.id,
-    name: srv.name,
-    country: srv.country,
-    locationText: loc,
-    online: srv.online,
-    supported: srv.hostMonitor,
-    unsupportedMessage: "暂未启用实时采集。",
-    hostLine: hostLine || undefined,
-    cpuCores: srv.cpuCores,
-    sample: srv.sample,
-    showTraffic,
-    cycleTraffic: showTraffic && srv.cycleTraffic ? srv.cycleTraffic : undefined,
-    expiresAt: srv.expiresAt,
-    publicNote: srv.publicNote,
-  };
-}
-
 export function StatusApp() {
   const [theme, setTheme] = useState<StatusTheme>(() => readInitialStatusTheme());
-  const [pageState, setPageState] = useState<"loading" | "disabled" | "ready">("loading");
-  const [data, setData] = useState<PublicStatusResponse | null>(null);
-  const [disconnected, setDisconnected] = useState(false);
 
   const [groupFilter, setGroupFilter] = useState("");
   const [search, setSearch] = useState("");
   const [selectedId, setSelectedId] = useState("");
   const [range, setRange] = useState<MonitorRange>("24h");
 
-  const [records, setRecords] = useState<SharedMonitorRecord[]>([]);
-  const [pings, setPings] = useState<PublicPingTaskSeries[]>([]);
-  const [loadingDetail, setLoadingDetail] = useState(false);
+  const handleDisabled = useCallback(() => setSelectedId(""), []);
+  const { pageState, data, disconnected } = usePublicStatus(handleDisabled);
 
   const toggleTheme = useCallback(() => {
     setTheme((prev) => {
@@ -142,56 +30,6 @@ export function StatusApp() {
     });
   }, []);
 
-  const fetchStatus = useCallback(async () => {
-    try {
-      const res = await fetch("/api/public/status", {
-        method: "GET",
-        credentials: "omit",
-        headers: { Accept: "application/json" },
-      });
-      if (res.status === 404) {
-        setData(null);
-        setDisconnected(false);
-        setSelectedId("");
-        setPageState("disabled");
-        document.title = "状态页未开启";
-        return;
-      }
-      if (!res.ok) {
-        setDisconnected(true);
-        setPageState((prev) => (prev === "loading" ? "ready" : prev));
-        return;
-      }
-      const next = (await res.json()) as PublicStatusResponse;
-      setData(next);
-      setDisconnected(false);
-      setPageState("ready");
-      document.title = next.title || "服务状态";
-    } catch {
-      setDisconnected(true);
-      setPageState((prev) => (prev === "loading" ? "ready" : prev));
-    }
-  }, []);
-
-  useEffect(() => {
-    void fetchStatus();
-    const id = window.setInterval(() => {
-      if (document.visibilityState === "visible") {
-        void fetchStatus();
-      }
-    }, 5000);
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        void fetchStatus();
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [fetchStatus]);
-
   const servers = useMemo(() => data?.servers ?? [], [data]);
 
   const selectedServer = useMemo(
@@ -199,53 +37,12 @@ export function StatusApp() {
     [selectedId, servers],
   );
 
-  const loadDetailHistory = useCallback(async () => {
-    if (!selectedServer || pageState !== "ready") {
-      setRecords([]);
-      setPings([]);
-      return;
-    }
-    setLoadingDetail(true);
-    try {
-      const recPromise = fetch(
-        `/api/public/servers/${encodeURIComponent(selectedServer.id)}/records?range=${range}`,
-        { method: "GET", credentials: "omit", headers: { Accept: "application/json" } },
-      );
-      const pingPromise = data?.showPing
-        ? fetch(
-            `/api/public/servers/${encodeURIComponent(selectedServer.id)}/pings?range=${range}`,
-            { method: "GET", credentials: "omit", headers: { Accept: "application/json" } },
-          )
-        : Promise.resolve(null);
-
-      const [recRes, pingRes] = await Promise.all([recPromise, pingPromise]);
-      if (recRes.ok) {
-        setRecords((await recRes.json()) as SharedMonitorRecord[]);
-      }
-      if (pingRes && pingRes.ok) {
-        setPings((await pingRes.json()) as PublicPingTaskSeries[]);
-      } else {
-        setPings([]);
-      }
-    } catch {
-      // Keep last loaded history points if transient failure occurs.
-    } finally {
-      setLoadingDetail(false);
-    }
-  }, [selectedServer, pageState, range, data?.showPing]);
-
-  useEffect(() => {
-    setRecords([]);
-    setPings([]);
-    void loadDetailHistory();
-    if (!selectedServer || pageState !== "ready") return;
-    const id = window.setInterval(() => {
-      if (document.visibilityState === "visible") {
-        void loadDetailHistory();
-      }
-    }, 30_000);
-    return () => window.clearInterval(id);
-  }, [loadDetailHistory, selectedServer, pageState]);
+  const { records, pings, loadingDetail } = usePublicHistory(
+    selectedServer,
+    pageState,
+    range,
+    data?.showPing,
+  );
 
   const groupOptions = useMemo(() => {
     const named = new Set<string>();
@@ -437,77 +234,16 @@ export function StatusApp() {
             </section>
 
             {selectedServer && (
-              <section className="statusSurface statusDetailPanel">
-                <div className="statusDetailHead">
-                  <div className="statusDetailTitle">
-                    <h2>
-                      {countryFlag(selectedServer.country)} {selectedServer.name} · 历史曲线
-                    </h2>
-                    <p className="statusDetailMeta">
-                      {[
-                        selectedServer.cpuName &&
-                          `${selectedServer.cpuName}${selectedServer.cpuCores ? `（${selectedServer.cpuCores} 核）` : ""}`,
-                        selectedServer.os &&
-                          `${selectedServer.os}${selectedServer.arch ? ` (${selectedServer.arch})` : ""}`,
-                        selectedServer.virtualization && `虚拟化 ${selectedServer.virtualization}`,
-                        selectedServer.memTotal ? `内存 ${formatBytes(selectedServer.memTotal)}` : "",
-                        selectedServer.diskTotal ? `磁盘 ${formatBytes(selectedServer.diskTotal)}` : "",
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </p>
-                  </div>
-
-                  <div className="statusDetailControls">
-                    <div className="monitorRangeTabs" role="tablist" aria-label="监控时间范围">
-                      {PUBLIC_RANGES.map((r) => (
-                        <button
-                          key={r.id}
-                          type="button"
-                          role="tab"
-                          aria-selected={range === r.id}
-                          className={range === r.id ? "active" : ""}
-                          onClick={() => setRange(r.id)}
-                        >
-                          {r.label}
-                        </button>
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      className="statusCloseBtn"
-                      onClick={() => setSelectedId("")}
-                    >
-                      收起详情
-                    </button>
-                  </div>
-                </div>
-
-                <div className="statusDetailBody">
-                  {loadingDetail && records.length === 0 ? (
-                    <p className="statusHint">正在加载历史记录…</p>
-                  ) : (
-                    <>
-                      <MonitorMetricsCharts records={records} range={range} />
-                      {data.showPing && pings.length > 0 && (
-                        <div className="monitorPingChartsSection">
-                          <h3>延迟监测曲线</h3>
-                          <div className="monitorChartsGrid">
-                            {pings.map((task) => (
-                              <PingTaskChart
-                                key={task.id}
-                                title={task.name}
-                                records={task.records}
-                                range={range}
-                              />
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                    </>
-                  )}
-                </div>
-              </section>
+              <StatusDetailPanel
+                server={selectedServer}
+                range={range}
+                onRangeChange={setRange}
+                onClose={() => setSelectedId("")}
+                loadingDetail={loadingDetail}
+                records={records}
+                showPing={data.showPing}
+                pings={pings}
+              />
             )}
           </>
         )}

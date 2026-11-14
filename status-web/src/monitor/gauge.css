@@ -1,0 +1,271 @@
+/* Counterpart in web/src/monitor/gauge.css — keep metric gauge & traffic strip styles in sync across both apps. */
+
+.monScope .monCardStack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.monScope .monMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+  min-width: 0;
+}
+
+.monScope .monMetricItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.monScope .monMetricHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.monScope .monMetricLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.2;
+  color: var(--mon-text-secondary);
+}
+
+.monScope .monMetricLabel svg {
+  color: var(--mon-gauge-color);
+  flex-shrink: 0;
+}
+
+.monScope .monMetricValue {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1.5px;
+  flex-shrink: 0;
+  color: var(--mon-text-primary);
+}
+
+.monScope .monMetricValue strong {
+  font-size: 13px;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+}
+
+.monScope .monMetricValue small {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--mon-text-tertiary);
+}
+
+.monScope .monMetricDetail {
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--mon-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.monScope .monGaugeTrack {
+  min-width: 0;
+  height: 7px;
+  overflow: hidden;
+  background: linear-gradient(
+    to right,
+    var(--mon-gauge-color) 0,
+    var(--mon-gauge-color) var(--mon-gauge-fill, 0%),
+    var(--mon-progress-bg) var(--mon-gauge-fill, 0%),
+    var(--mon-progress-bg) 100%
+  );
+  -webkit-mask: repeating-linear-gradient(
+    to right,
+    #000 0,
+    #000 calc((100% + 2px) / 18 - 2px),
+    transparent calc((100% + 2px) / 18 - 2px),
+    transparent calc((100% + 2px) / 18)
+  );
+  mask: repeating-linear-gradient(
+    to right,
+    #000 0,
+    #000 calc((100% + 2px) / 18 - 2px),
+    transparent calc((100% + 2px) / 18 - 2px),
+    transparent calc((100% + 2px) / 18)
+  );
+}
+
+@supports (
+  (-webkit-mask-image: url("data:image/svg+xml,%3Csvg%3E%3C/svg%3E")) or
+    (mask-image: url("data:image/svg+xml,%3Csvg%3E%3C/svg%3E"))
+) {
+  .monScope .monGaugeTrack {
+    --mon-segment-mask: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27 preserveAspectRatio=%27none%27%3E%3Crect width=%2784%27 height=%27100%27 rx=%2716%27 ry=%2724%27 fill=%27black%27/%3E%3C/svg%3E");
+    -webkit-mask-image: var(--mon-segment-mask);
+    -webkit-mask-position: left top;
+    -webkit-mask-repeat: repeat-x;
+    -webkit-mask-size: calc((100% + 2px) / 18) 100%;
+    mask-image: var(--mon-segment-mask);
+    mask-position: left top;
+    mask-repeat: repeat-x;
+    mask-size: calc((100% + 2px) / 18) 100%;
+  }
+}
+
+.monScope .monSectionDivider {
+  padding-top: 9px;
+  border-top: 1px solid var(--mon-hairline);
+  min-width: 0;
+}
+
+.monScope .monTrafficGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+.monScope .monTrafficStat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--mon-fill-tertiary);
+  border: 1px solid var(--mon-border-subtle);
+}
+
+.monScope .monTrafficHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.monScope .monTrafficDir {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--mon-text-secondary);
+  flex-shrink: 0;
+}
+
+.monScope .monTrafficIconUp {
+  display: inline-flex;
+  color: var(--mon-traffic-up);
+}
+
+.monScope .monTrafficIconDown {
+  display: inline-flex;
+  color: var(--mon-traffic-down);
+}
+
+.monScope .monTrafficRate {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.monScope .monTrafficRate small {
+  font-size: 10.5px;
+  font-weight: 600;
+  opacity: 0.88;
+}
+
+.monScope .monTrafficFoot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--mon-text-tertiary);
+  min-width: 0;
+}
+
+.monScope .monTrafficFoot strong {
+  color: var(--mon-text-secondary);
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monScope .monMetaGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+
+.monScope .monMetaItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11.5px;
+}
+
+.monScope .monMetaLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--mon-text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.monScope .monMetaValue {
+  color: var(--mon-text-primary);
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.monScope .monMetaValue[data-tone="online"] {
+  color: var(--mon-ink-success);
+}
+
+.monScope .monMetaValue[data-tone="muted"] {
+  color: var(--mon-text-tertiary);
+}
+
+.monScope .monMetaValue small {
+  margin-left: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--mon-text-tertiary);
+}
+
+
+@media (max-width: 480px) {
+  .monScope .monMetricGrid {
+    gap: 9px 10px;
+  }
+
+  .monScope .monTrafficGrid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .monScope .monMetaGrid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+}

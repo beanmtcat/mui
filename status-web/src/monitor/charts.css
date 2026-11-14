@@ -1,0 +1,307 @@
+/* Counterpart in web/src/monitor/charts.css — keep time range & chart styles in sync across both apps. */
+
+.monScope .monitorRangeTabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--mon-border);
+  border-radius: 10px;
+  background: var(--mon-surface-sunken);
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.monScope .monitorRangeTabs button {
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 5px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mon-text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.monScope .monitorRangeTabs button:hover:not(.active) {
+  color: var(--mon-text-primary);
+}
+
+.monScope .monitorRangeTabs button.active {
+  background: var(--mon-surface-elev);
+  color: var(--mon-accent-strong);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1);
+}
+
+.monScope .monitorChartsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
+
+.monScope .trafficChartHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.monScope .trafficLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 11.5px;
+  color: var(--mon-text-secondary);
+}
+
+.monScope .trafficLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.monScope .trafficLegend span::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.monScope .trafficPlotRow {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.monScope .trafficYAxis {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+  height: 185px;
+  color: var(--mon-text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.monScope .trafficPlot {
+  position: relative;
+  height: 185px;
+  min-width: 0;
+}
+
+.monScope .trafficPlot svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.monScope .trafficGridLine {
+  stroke: var(--mon-hairline);
+  stroke-dasharray: 4 5;
+  vector-effect: non-scaling-stroke;
+}
+
+.monScope .trafficLine {
+  fill: none;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.monScope .trafficCursor {
+  stroke: var(--mon-text-tertiary);
+  stroke-dasharray: 3 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.monScope .trafficDot {
+  stroke: var(--mon-surface-elev);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.monScope .trafficZero {
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--mon-text-tertiary);
+  background: var(--mon-surface-elev);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.monScope .trafficXAxis {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  margin: 4px 0 0 66px;
+  color: var(--mon-text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.monScope .trafficReadout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 10px;
+  padding: 7px 0 0;
+  font-size: 11.5px;
+}
+
+.monScope .monitorChartCard {
+  --mon-chart-accent: var(--mon-accent-500);
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  padding: 14px 15px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--mon-border);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--mon-chart-accent) 4%, var(--mon-surface-elev) 96%) 0%,
+      var(--mon-surface-elev) 48px
+    );
+}
+
+.monScope .monitorChartCard::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2.5px;
+  background: var(--mon-chart-accent);
+  opacity: 0.85;
+}
+
+.monScope .monitorChartHeadText {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.monScope .monitorChartTitle {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--mon-text-primary);
+}
+
+.monScope .monitorChartSub {
+  font-size: 11.5px;
+  color: var(--mon-text-tertiary);
+}
+
+.monScope .monitorReadout {
+  border-top: 1px solid var(--mon-border-subtle);
+  color: var(--mon-text-secondary);
+}
+
+.monScope .monitorReadout strong {
+  color: var(--mon-text-primary);
+}
+
+.monScope .monitorLegend span.monSeries-cpu::before { background: var(--mon-progress-cpu); }
+.monScope .trafficLine.monSeries-cpu { stroke: var(--mon-progress-cpu); }
+.monScope .trafficDot.monSeries-cpu { fill: var(--mon-progress-cpu); }
+
+.monScope .monitorLegend span.monSeries-memory::before { background: var(--mon-progress-memory); }
+.monScope .trafficLine.monSeries-memory { stroke: var(--mon-progress-memory); }
+.monScope .trafficDot.monSeries-memory { fill: var(--mon-progress-memory); }
+
+.monScope .monitorLegend span.monSeries-swap::before { background: var(--mon-progress-swap); }
+.monScope .trafficLine.monSeries-swap { stroke: var(--mon-progress-swap); }
+.monScope .trafficDot.monSeries-swap { fill: var(--mon-progress-swap); }
+
+.monScope .monitorLegend span.monSeries-up::before { background: var(--mon-traffic-up); }
+.monScope .trafficLine.monSeries-up { stroke: var(--mon-traffic-up); }
+.monScope .trafficDot.monSeries-up { fill: var(--mon-traffic-up); }
+
+.monScope .monitorLegend span.monSeries-down::before { background: var(--mon-traffic-down); }
+.monScope .trafficLine.monSeries-down { stroke: var(--mon-traffic-down); }
+.monScope .trafficDot.monSeries-down { fill: var(--mon-traffic-down); }
+
+.monScope .monitorLegend span.monSeries-network::before { background: var(--mon-progress-network); }
+.monScope .trafficLine.monSeries-network { stroke: var(--mon-progress-network); }
+.monScope .trafficDot.monSeries-network { fill: var(--mon-progress-network); }
+
+.monScope .monitorLegend span.monSeries-load::before { background: var(--mon-progress-load); }
+.monScope .trafficLine.monSeries-load { stroke: var(--mon-progress-load); }
+.monScope .trafficDot.monSeries-load { fill: var(--mon-progress-load); }
+
+.monScope .monitorLegend span.monSeries-latency::before {
+  background: var(--mon-chart-latency, var(--mon-latency-excellent));
+}
+.monScope .trafficLine.monSeries-latency {
+  stroke: var(--mon-chart-latency, var(--mon-latency-excellent));
+}
+.monScope .trafficDot.monSeries-latency {
+  fill: var(--mon-chart-latency, var(--mon-latency-excellent));
+}
+
+.monScope .monitorLegend span.monSeries-latencyMax::before {
+  background: var(--mon-status-warning);
+}
+.monScope .trafficLine.monSeries-latencyMax {
+  stroke: var(--mon-status-warning);
+}
+.monScope .trafficDot.monSeries-latencyMax {
+  fill: var(--mon-status-warning);
+}
+
+.monScope .trafficLine.is-dashed {
+  stroke-dasharray: 5 3.5;
+  opacity: 0.88;
+}
+
+.monScope .monitorPingChartsSection {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--mon-hairline);
+  display: grid;
+  gap: 12px;
+}
+
+.monScope .monitorPingChartsSection h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--mon-text-primary);
+}
+
+@media (max-width: 960px) {
+  .monScope .monitorChartsGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .monScope .trafficXAxis .optional {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .monScope .trafficPlotRow {
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .monScope .trafficXAxis {
+    margin-left: 54px;
+  }
+}
