@@ -104,9 +104,21 @@ func main() {
 		}
 	}()
 	// Roll up completed minute buckets into hourly monitor history.
+	// The first pass after startup covers 72h (matching minute retention) to fill
+	// any downtime gaps; subsequent hourly passes only cover the last 3h.
 	go func() {
+		startup := true
 		for {
-			if err := store.RollupMonitorHours(time.Now()); err != nil {
+			var err error
+			if startup {
+				err = store.RollupMonitorHoursStartup(time.Now())
+				if err == nil {
+					startup = false
+				}
+			} else {
+				err = store.RollupMonitorHours(time.Now())
+			}
+			if err != nil {
 				log.Println("monitor hourly rollup:", err)
 			}
 			time.Sleep(time.Hour)

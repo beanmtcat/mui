@@ -345,26 +345,30 @@ func autoRenewEligible(srv shared.Server, now time.Time) bool {
 // alertEvalMu. Each server update acquires lockServer(id), reloads the fresh
 // server document, and writes via PutServer so concurrent Agent reports are
 // never overwritten.
-func (a *App) autoRenewServers(now time.Time) {
+func (a *App) autoRenewServers(now time.Time) ([]shared.Server, bool, error) {
 	servers, err := a.Store.Servers()
 	if err != nil {
-		return
+		return nil, false, err
 	}
 	loc := a.Store.timeLocation()
+	renewed := false
 	for _, s := range servers {
 		if !autoRenewEligible(s, now) {
 			continue
 		}
-		a.autoRenewOneServer(s.ID, now, loc)
+		if a.autoRenewOneServer(s.ID, now, loc) {
+			renewed = true
+		}
 	}
+	return servers, renewed, nil
 }
 
-func (a *App) autoRenewOneServer(id string, now time.Time, loc *time.Location) {
+func (a *App) autoRenewOneServer(id string, now time.Time, loc *time.Location) bool {
 	unlock := a.lockServer(id)
 	cur, err := a.Store.Server(id)
 	if err != nil || !autoRenewEligible(cur, now) {
 		unlock()
-		return
+		return false
 	}
 	oldExp := *cur.ExpiresAt
 	oldExpDate := formatExpiryDate(oldExp, loc)
@@ -372,7 +376,7 @@ func (a *App) autoRenewOneServer(id string, now time.Time, loc *time.Location) {
 	newExp, anchorDay, exceeded, err := computeRenewedExpiry(cur, now)
 	if err != nil {
 		unlock()
-		return
+		return false
 	}
 	if exceeded {
 		unlock()
@@ -383,7 +387,7 @@ func (a *App) autoRenewOneServer(id string, now time.Time, loc *time.Location) {
 			_ = a.Store.putAlertState(abandonKey, "sent", nowMs, nowMs)
 			a.Store.Audit("server.renew", cur.ID, fmt.Sprintf("自动续期已放弃：原到期日 %s 顺延 %d 个周期后仍未晚于当前时间", oldExpDate, maxBillingRenewSteps))
 		}
-		return
+		return false
 	}
 
 	before := cur
@@ -391,7 +395,7 @@ func (a *App) autoRenewOneServer(id string, now time.Time, loc *time.Location) {
 	cur.BillingAnchorDay = anchorDay
 	if err := a.Store.PutServer(cur); err != nil {
 		unlock()
-		return
+		return false
 	}
 	unlock()
 
@@ -418,6 +422,7 @@ func (a *App) autoRenewOneServer(id string, now time.Time, loc *time.Location) {
 		msg.WriteString(fmt.Sprintf("\n周期费用：%s%.2f", currencyOrDefault(cur.Currency), cur.Price))
 	}
 	a.notify("serverRenewed", "serverRenewed:"+cur.ID+":"+newExpDate, msg.String())
+	return true
 }
 
 func (a *App) renewServer(w http.ResponseWriter, r *http.Request) {

@@ -39,6 +39,7 @@ func (s *Store) SetAppliedDeployment(serverID string, nodes map[string]shared.No
 }
 
 func (s *Store) Servers() ([]shared.Server, error) {
+	s.serversCalls.Add(1)
 	list, err := queryJSON[shared.Server](s.DB, `SELECT data FROM mui_servers ORDER BY id`)
 	if err != nil {
 		return nil, err

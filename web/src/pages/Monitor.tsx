@@ -240,7 +240,10 @@ function PingTaskDialog({
 }
 
 export default function Monitor() {
-  const { servers, trafficLimitThreshold, act, setConfirmation, redactScreenshot, protect } = useApp();
+  const { servers, trafficLimitThreshold, ensureTrafficLimitThreshold, act, setConfirmation, redactScreenshot, protect } = useApp();
+  useEffect(() => {
+    ensureTrafficLimitThreshold();
+  }, [ensureTrafficLimitThreshold]);
   const [selectedId, setSelectedId] = useUrlParam("server");
   const [rangeParam, setRangeParam] = useUrlParam("range");
   const [groupFilter, setGroupFilter] = useUrlParam("group");

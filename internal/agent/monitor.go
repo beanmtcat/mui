@@ -372,14 +372,6 @@ func runMonitorLoop(ctx context.Context, c Config) {
 	}
 }
 
-var monitorCGNAT = netip.MustParsePrefix("100.64.0.0/10")
-
-func allowedMonitorPingIP(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	return ip.IsValid() && ip.Zone() == "" && ip.IsGlobalUnicast() && !ip.IsPrivate() &&
-		!ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified() && !monitorCGNAT.Contains(ip)
-}
-
 // Resolve once, inspect every answer, then dial only the approved literal IP.
 // Rejecting a mixed public/private answer prevents a panel-controlled name
 // from selecting an internal address or changing DNS between check and dial.
@@ -416,7 +408,7 @@ func resolveMonitorTCPTarget(ctx context.Context, target string, lookup func(con
 	}
 	addresses := make([]string, 0, len(ips))
 	for _, ip := range ips {
-		if !allowedMonitorPingIP(ip) {
+		if !shared.AllowedPingPublicIP(ip) {
 			return nil, errors.New("target address is not public")
 		}
 		addresses = append(addresses, net.JoinHostPort(ip.Unmap().String(), port))

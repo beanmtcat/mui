@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -854,5 +855,150 @@ func TestPublicStatusDeleteServerInvalidatesCache(t *testing.T) {
 	rAfter := statusServe(statusMux, "GET", "/api/public/servers/"+fpDel+"/records?range=1h", nil, "198.51.100.40:1000")
 	if rAfter.Code != 404 {
 		t.Fatalf("expected 404 on deleted server /records immediately after delete, got %d %s", rAfter.Code, rAfter.Body.String())
+	}
+}
+
+func TestPublicStatusStampedeSingleflightAndErrorPropagation(t *testing.T) {
+	t.Setenv("MUI_STATUS_LISTEN", "127.0.0.1:18081")
+	p := newTestMui(t)
+
+	var clockMu sync.Mutex
+	curNow := time.Date(2026, 11, 14, 14, 0, 0, 0, time.UTC)
+	p.app.monitorNow = func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return curNow
+	}
+	advanceClock := func(d time.Duration) {
+		clockMu.Lock()
+		curNow = curNow.Add(d)
+		clockMu.Unlock()
+	}
+
+	srvID, _, _ := enrollMonitorTestServer(t, p, "Stampede-Node")
+	srv, err := p.store.Server(srvID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lastSeen := curNow.Add(-5 * time.Second)
+	srv.PublicVisible = true
+	srv.HostMonitor = true
+	srv.LastSeen = &lastSeen
+	if err := p.store.PutServer(srv); err != nil {
+		t.Fatal(err)
+	}
+	minAt := curNow.Add(-time.Minute).Truncate(time.Minute)
+	if err := p.store.PutMonitorMinute(srvID, minAt.UnixMilli(), MonitorRecord{
+		At:      minAt,
+		CPU:     18.5,
+		RAMUsed: 1024,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.PutPingTask(MonitorPingTask{
+		ID: "pt1", Name: "CF", Target: "1.1.1.1:443", IntervalSeconds: 30,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.store.UpsertPingMinute("pt1", srvID, minAt.UnixMilli(), 12, 16, 2, 0); err != nil {
+		t.Fatal(err)
+	}
+
+	code, _, _ := p.do("PUT", "/api/settings/status-page", map[string]any{
+		"enabled":     true,
+		"title":       "Stampede Check",
+		"showTraffic": true,
+		"showPing":    true,
+	}, nil)
+	if code != 200 {
+		t.Fatalf("enable status page: %d", code)
+	}
+
+	statusMux := p.app.StatusHandler()
+	fp := p.store.Fingerprint("status-page", srvID)
+
+	// Warm all three caches first, then advance past TTL so all 50 concurrent
+	// requests hit an expired (non-nil) cache entry simultaneously.
+	if w := statusServe(statusMux, "GET", "/api/public/status", nil, "198.51.100.1:3000"); w.Code != 200 {
+		t.Fatalf("warm /api/public/status: %d", w.Code)
+	}
+	if w := statusServe(statusMux, "GET", "/api/public/servers/"+fp+"/records?range=1h", nil, "198.51.100.1:3000"); w.Code != 200 {
+		t.Fatalf("warm /records: %d", w.Code)
+	}
+	if w := statusServe(statusMux, "GET", "/api/public/servers/"+fp+"/pings?range=1h", nil, "198.51.100.1:3000"); w.Code != 200 {
+		t.Fatalf("warm /pings: %d", w.Code)
+	}
+
+	p.app.statusBuildHook = func(string) {
+		time.Sleep(40 * time.Millisecond)
+	}
+
+	fire50 := func(target string, wantCode int) {
+		t.Helper()
+		const n = 50
+		start := make(chan struct{})
+		codes := make([]int, n)
+		bodies := make([]string, n)
+		var wg sync.WaitGroup
+		wg.Add(n)
+		for i := 0; i < n; i++ {
+			go func(idx int) {
+				defer wg.Done()
+				<-start
+				rec := statusServe(statusMux, "GET", target, nil, fmt.Sprintf("198.51.100.%d:4000", (idx%50)+1))
+				codes[idx] = rec.Code
+				bodies[idx] = rec.Body.String()
+			}(i)
+		}
+		close(start)
+		done := make(chan struct{})
+		go func() {
+			wg.Wait()
+			close(done)
+		}()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("concurrent requests to %s timed out (hung waiters)", target)
+		}
+		for i := 0; i < n; i++ {
+			if codes[i] != wantCode {
+				t.Fatalf("%s request %d: expected %d, got %d (%s)", target, i, wantCode, codes[i], bodies[i])
+			}
+			if wantCode == 200 && bodies[i] != bodies[0] {
+				t.Fatalf("%s request %d got mismatched body", target, i)
+			}
+		}
+	}
+
+	// 1. Expire 2s /api/public/status cache and fire 50 concurrent requests -> 1 rebuild.
+	advanceClock(3 * time.Second)
+	beforeSnap := p.app.statusSnapshotBuilds.Load()
+	fire50("/api/public/status", 200)
+	if got := p.app.statusSnapshotBuilds.Load() - beforeSnap; got != 1 {
+		t.Fatalf("expected 1 snapshot rebuild for 50 concurrent requests on expired cache, got %d", got)
+	}
+
+	// 2. Expire 30s history cache and fire 50 concurrent requests at /records and /pings -> 1 rebuild each.
+	advanceClock(31 * time.Second)
+	beforeHist := p.app.statusHistoryBuilds.Load()
+	fire50("/api/public/servers/"+fp+"/records?range=1h", 200)
+	if got := p.app.statusHistoryBuilds.Load() - beforeHist; got != 1 {
+		t.Fatalf("expected 1 records rebuild for 50 concurrent requests on expired cache, got %d", got)
+	}
+
+	beforePings := p.app.statusHistoryBuilds.Load()
+	fire50("/api/public/servers/"+fp+"/pings?range=1h", 200)
+	if got := p.app.statusHistoryBuilds.Load() - beforePings; got != 1 {
+		t.Fatalf("expected 1 pings rebuild for 50 concurrent requests on expired cache, got %d", got)
+	}
+
+	// 3. Rebuild failure: close underlying DB after expiring cache; all 50 waiters must receive 500 without blocking.
+	advanceClock(35 * time.Second)
+	_ = p.store.DB.Close()
+	beforeErrSnap := p.app.statusSnapshotBuilds.Load()
+	fire50("/api/public/status", 500)
+	if got := p.app.statusSnapshotBuilds.Load() - beforeErrSnap; got != 1 {
+		t.Fatalf("expected 1 failing snapshot rebuild for 50 concurrent requests, got %d", got)
 	}
 }

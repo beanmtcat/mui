@@ -154,7 +154,7 @@ func (a *App) EvaluateAlerts() {
 }
 
 func (a *App) evaluateAlertsAt(now time.Time) {
-	a.autoRenewServers(now)
+	servers, renewed, renewErr := a.autoRenewServers(now)
 
 	a.alertEvalMu.Lock()
 	defer a.alertEvalMu.Unlock()
@@ -170,13 +170,12 @@ func (a *App) evaluateAlertsAt(now time.Time) {
 	}
 
 	hasTrafficReport := cfg.Events.TrafficReport.Daily || cfg.Events.TrafficReport.Weekly || cfg.Events.TrafficReport.Monthly
-	var servers []shared.Server
 	needServers := cfg.Events.ServerOffline.Enabled ||
 		cfg.Events.ServerExpiring.Enabled ||
 		cfg.Events.Resource.Enabled ||
 		cfg.Events.TrafficLimit.Enabled ||
 		hasTrafficReport
-	if needServers {
+	if needServers && (renewErr != nil || renewed) {
 		servers, err = a.Store.Servers()
 		if err != nil {
 			return

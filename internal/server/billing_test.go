@@ -1048,3 +1048,52 @@ func TestEnsureCycleTrafficBackfillTracksTimezone(t *testing.T) {
 		t.Fatalf("expected 45 GB under Asia/Shanghai cycle after timezone change, got %d GB", cm[id].Used/gb)
 	}
 }
+
+func TestEvaluateAlertsSingleServersReadUnlessAutoRenewed(t *testing.T) {
+	p := newTestMui(t)
+	setupTelegramRecorder(t, p, nil)
+
+	now := time.Date(2026, 11, 14, 12, 0, 0, 0, time.UTC)
+	futureExp := now.Add(15 * 24 * time.Hour)
+	code, created, _ := p.do("POST", "/api/servers", map[string]any{
+		"name":           "Reuse-List-Node",
+		"managementMode": "external",
+		"firewallMode":   "manual",
+		"roles":          []string{"exit"},
+		"country":        "US",
+		"ipv4":           "203.0.113.88",
+		"autoRenew":      true,
+		"billingCycle":   "month",
+		"expiresAt":      futureExp.Format(time.RFC3339),
+	}, nil)
+	if code != 201 {
+		t.Fatalf("create server: %d %v", code, created)
+	}
+	srvID := created["server"].(map[string]any)["id"].(string)
+
+	// 1. No renewal happens -> evaluateAlertsAt must read Store.Servers() only once.
+	beforeNoRenew := p.store.serversCalls.Load()
+	p.app.evaluateAlertsAt(now)
+	_ = p.app.FlushTelegramForTest(2 * time.Second)
+	if got := p.store.serversCalls.Load() - beforeNoRenew; got != 1 {
+		t.Fatalf("expected 1 Store.Servers() call when no server auto-renewed, got %d", got)
+	}
+
+	// 2. Server expires and auto-renews -> evaluateAlertsAt re-reads Store.Servers() once (total 2 calls).
+	pastExp := now.Add(-time.Hour)
+	srv, err := p.store.Server(srvID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.ExpiresAt = &pastExp
+	if err := p.store.PutServer(srv); err != nil {
+		t.Fatal(err)
+	}
+
+	beforeRenew := p.store.serversCalls.Load()
+	p.app.evaluateAlertsAt(now)
+	_ = p.app.FlushTelegramForTest(2 * time.Second)
+	if got := p.store.serversCalls.Load() - beforeRenew; got != 2 {
+		t.Fatalf("expected 2 Store.Servers() calls when auto-renewal occurred, got %d", got)
+	}
+}

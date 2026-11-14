@@ -70,6 +70,8 @@ export function useAppState() {
     [agentReleases, setAgentReleases] = useState<Record<string, string>>({}),
     [coreReleases, setCoreReleases] = useState<Record<string, string>>({}),
     [trafficLimitThreshold, setTrafficLimitThreshold] = useState(80);
+  const trafficThresholdLoaded = useRef(false);
+  const trafficThresholdLoading = useRef(false);
   // Every list and picker of servers shows them by name, so "-2" comes before "-10".
   const servers = useMemo(() => [...serverRecords].sort((a, b) => collator.compare(a.name, b.name)), [serverRecords]);
   const [refreshTick, setRefreshTick] = useState(0),
@@ -107,6 +109,28 @@ export function useAppState() {
     }
     return out;
   }, []);
+
+  const syncTrafficLimitThreshold = useCallback((v?: TelegramSettings | null) => {
+    const th = v?.events?.trafficLimit?.threshold;
+    setTrafficLimitThreshold(typeof th === "number" && th >= 50 && th <= 100 ? th : 80);
+    trafficThresholdLoaded.current = true;
+  }, []);
+
+  const ensureTrafficLimitThreshold = useCallback(() => {
+    if (trafficThresholdLoaded.current || trafficThresholdLoading.current) return;
+    trafficThresholdLoading.current = true;
+    trafficThresholdLoaded.current = true;
+    api<TelegramSettings>("/api/settings/telegram")
+      .then((v) => {
+        syncTrafficLimitThreshold(v);
+      })
+      .catch(() => {
+        setTrafficLimitThreshold(80);
+      })
+      .finally(() => {
+        trafficThresholdLoading.current = false;
+      });
+  }, [syncTrafficLimitThreshold]);
 
   const loadDashboardTraffic = useCallback(async (onFailure?: (msg: string) => void) => {
     const fail = (e: unknown) => { if (onFailure) onFailure((e as Error).message); };
@@ -156,12 +180,6 @@ export function useAppState() {
         load<Customer>("/api/customers", setCustomers),
         api<Record<string, string>>("/api/agent/release").then(setAgentReleases).catch(() => setAgentReleases({})),
         api<Record<string, string>>("/api/core/release").then(setCoreReleases).catch(() => setCoreReleases({})),
-        api<TelegramSettings>("/api/settings/telegram")
-          .then((v) => {
-            const th = v?.events?.trafficLimit?.threshold;
-            setTrafficLimitThreshold(typeof th === "number" && th >= 50 && th <= 100 ? th : 80);
-          })
-          .catch(() => setTrafficLimitThreshold(80)),
         ...(withTraffic ? [loadDashboardTraffic(recordFailure)] : []),
       ]);
       if (!withTraffic && tabRef.current === "dashboard") {
@@ -211,6 +229,13 @@ export function useAppState() {
       })
       .catch(() => setAuthed(false));
   }, [refresh]);
+  useEffect(() => {
+    if (!authed) {
+      trafficThresholdLoaded.current = false;
+      trafficThresholdLoading.current = false;
+      setTrafficLimitThreshold(80);
+    }
+  }, [authed]);
   useEffect(() => {
     if (authed && tab === "dashboard" && !refreshInFlight.current) {
       void loadDashboardTraffic((msg) => setError(msg));
@@ -622,7 +647,7 @@ export function useAppState() {
 
   return useMemo(() => ({
     refreshing, screenshotMode, setScreenshotMode, theme, setTheme, authed, setAuthed, totpEnabled, setTotpEnabled, tab, currentServerId,
-    servers, nodes, templates, certificates, rules, forwards, routes, subs, surgeTemplates, surgeTemplatesStatus, customers, operations, agentReleases, coreReleases, trafficLimitThreshold,
+    servers, nodes, templates, certificates, rules, forwards, routes, subs, surgeTemplates, surgeTemplatesStatus, customers, operations, agentReleases, coreReleases, trafficLimitThreshold, ensureTrafficLimitThreshold, syncTrafficLimitThreshold,
     refreshTick, pollTick, modal, confirmation, setConfirmation, batch, setBatch,
     installInfo, setInstallInfo, installMethod, setInstallMethod, installArch, setInstallArch, issued, setIssued, preview, setPreview,
     trafficNode, setTrafficNode, trafficSub, setTrafficSub, agentDownloads, setAgentDownloads, offlineServer, setOfflineServer,
@@ -633,7 +658,7 @@ export function useAppState() {
     onlySharedSubNodes, routePath, restartNotice, surgeImportHelp, protect, redactScreenshot, expiring,
   }), [
     refreshing, screenshotMode, theme, authed, totpEnabled, tab, currentServerId,
-    servers, nodes, templates, certificates, rules, forwards, routes, subs, surgeTemplates, surgeTemplatesStatus, customers, operations, agentReleases, coreReleases, trafficLimitThreshold,
+    servers, nodes, templates, certificates, rules, forwards, routes, subs, surgeTemplates, surgeTemplatesStatus, customers, operations, agentReleases, coreReleases, trafficLimitThreshold, ensureTrafficLimitThreshold, syncTrafficLimitThreshold,
     refreshTick, pollTick, modal, confirmation, batch,
     installInfo, installMethod, installArch, issued, preview,
     trafficNode, trafficSub, agentDownloads, offlineServer,

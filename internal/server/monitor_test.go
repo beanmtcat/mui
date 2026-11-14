@@ -589,3 +589,63 @@ func TestStage2TelegramServerExpiringAndResourceAlerts(t *testing.T) {
 	}
 	mu.Unlock()
 }
+
+func TestMonitorRollupStartupBackfills72hGapWhilePeriodicSkipsOlderThan3h(t *testing.T) {
+	p := newTestMui(t)
+	srvID, _, _ := enrollMonitorTestServer(t, p, "Rollup-Gap-Node")
+
+	now := time.Date(2026, 11, 14, 18, 25, 0, 0, time.UTC)
+	tenHoursAgo := now.Truncate(time.Hour).Add(-10 * time.Hour)
+
+	for i, cpu := range []float64{20.0, 40.0} {
+		sampleAt := tenHoursAgo.Add(time.Duration(i*10) * time.Minute)
+		if err := p.store.PutMonitorMinute(srvID, sampleAt.UnixMilli(), MonitorRecord{
+			At:        sampleAt,
+			CPU:       cpu,
+			Load1:     1.5,
+			RAMUsed:   1024,
+			RAMTotal:  4096,
+			DiskUsed:  10240,
+			DiskTotal: 40960,
+			NetUp:     100,
+			NetDown:   200,
+			TotalUp:   int64(1000 * (i + 1)),
+			TotalDown: int64(2000 * (i + 1)),
+			TCP:       10,
+			UDP:       2,
+			Process:   50,
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Regular hourly rollup only covers the last 3 hours and must NOT touch 10h-old minutes.
+	if err := p.store.RollupMonitorHours(now); err != nil {
+		t.Fatal(err)
+	}
+	var hourCount int
+	if err := p.store.DB.QueryRow(`SELECT COUNT(*) FROM mui_monitor_hours WHERE server_id=$1`, srvID).Scan(&hourCount); err != nil {
+		t.Fatal(err)
+	}
+	if hourCount != 0 {
+		t.Fatalf("expected regular RollupMonitorHours to skip 10h-old minute rows, got %d hourly rows", hourCount)
+	}
+
+	// Startup rollup covers 72 hours and backfills the missing 10h-ago hourly row.
+	if err := p.store.RollupMonitorHoursStartup(now); err != nil {
+		t.Fatal(err)
+	}
+	recs, err := p.store.MonitorRecords(srvID, "7d", now, 720)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("expected 1 backfilled hourly row after RollupMonitorHoursStartup, got %d", len(recs))
+	}
+	if !recs[0].At.Equal(tenHoursAgo) {
+		t.Fatalf("expected hourly bucket at %v, got %v", tenHoursAgo, recs[0].At)
+	}
+	if recs[0].CPU != 30.0 {
+		t.Fatalf("expected averaged CPU 30.0, got %v", recs[0].CPU)
+	}
+}

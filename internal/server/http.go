@@ -90,11 +90,17 @@ type App struct {
 	statusListenConfigured bool
 	statusURL              string
 	statusCacheMu          sync.RWMutex
+	statusCacheGen         uint64
 	statusCfgLoaded        bool
 	statusCfg              storedStatusPageSettings
 	statusSnapshotBody     []byte
 	statusSnapshotExpires  time.Time
 	statusHistoryCache     map[string]publicHistoryCacheEntry
+	statusFlightsMu        sync.Mutex
+	statusFlights          map[string]*publicFlightCall
+	statusSnapshotBuilds   atomic.Int64
+	statusHistoryBuilds    atomic.Int64
+	statusBuildHook        func(key string)
 }
 
 func NewApp(s *Store, publicURL string) (*App, error) {

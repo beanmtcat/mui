@@ -27,8 +27,6 @@ const (
 	maxMonitorPoints     int   = 1500
 )
 
-var serverMonitorCGNAT = netip.MustParsePrefix("100.64.0.0/10")
-
 type latestMonitorSample struct {
 	sample     shared.MonitorSample
 	receivedAt time.Time
@@ -230,12 +228,6 @@ func sanitizeMonitorHost(in shared.MonitorHost) shared.MonitorHost {
 	}
 }
 
-func allowedPingPublicIP(ip netip.Addr) bool {
-	ip = ip.Unmap()
-	return ip.IsValid() && ip.Zone() == "" && ip.IsGlobalUnicast() && !ip.IsPrivate() &&
-		!ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified() && !serverMonitorCGNAT.Contains(ip)
-}
-
 func validPingHostname(host string) bool {
 	if len(host) == 0 || len(host) > 253 {
 		return false
@@ -279,7 +271,7 @@ func validatePingTarget(raw string) (string, error) {
 		return "", errors.New("监测目标端口必须在 1–65535 之间")
 	}
 	if ip, parseErr := netip.ParseAddr(host); parseErr == nil {
-		if !allowedPingPublicIP(ip) {
+		if !shared.AllowedPingPublicIP(ip) {
 			return "", errors.New("监测目标只允许公网地址，不能使用内网、回环、链路本地或 CGNAT 地址")
 		}
 		return net.JoinHostPort(ip.Unmap().String(), strconv.Itoa(port)), nil

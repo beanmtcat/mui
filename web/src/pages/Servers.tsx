@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useMemo } from "react";
+import { Fragment, useCallback, useEffect, useMemo } from "react";
 import { bytes, canHostNodes, mutation, type InstallGuide, type Server } from "../api";
 import { useApp } from "../app/context";
 import {
@@ -19,7 +19,10 @@ import { ActionMenu, Empty, HelpTip, parseSort, SortHeader, sortRows, Status, Ta
 import { useUrlParam } from "../app/url";
 
 export default function Servers() {
-  const { servers, nodes, forwards, operations, agentReleases, coreReleases, upgradingAgentIDs, updatingAgentIDs, serverWarnings, trafficLimitThreshold, goTo, act, copy, runBatch, setConfirmation, setAgentDownloads, setOfflineServer, openServer, showInstall, deleteServer, matches, protect } = useApp();
+  const { servers, nodes, forwards, operations, agentReleases, coreReleases, upgradingAgentIDs, updatingAgentIDs, serverWarnings, trafficLimitThreshold, ensureTrafficLimitThreshold, goTo, act, copy, runBatch, setConfirmation, setAgentDownloads, setOfflineServer, openServer, showInstall, deleteServer, matches, protect } = useApp();
+  useEffect(() => {
+    ensureTrafficLimitThreshold();
+  }, [ensureTrafficLimitThreshold]);
   const [q, setQ] = useUrlParam("q"), [groupFilter, setGroupFilter] = useUrlParam("group"),
     [country, setCountry] = useUrlParam("country"), [provider, setProvider] = useUrlParam("provider"),
     [region, setRegion] = useUrlParam("region"), [city, setCity] = useUrlParam("city"), [status, setStatus] = useUrlParam("status"), [sortValue, setSort] = useUrlParam("sort");

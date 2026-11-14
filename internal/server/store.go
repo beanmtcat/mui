@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -33,6 +34,7 @@ type Store struct {
 	cycleLocksMu    sync.Mutex
 	cycleLocks      map[string]*sync.Mutex
 	timeLoc         *time.Location
+	serversCalls    atomic.Int64
 }
 
 // checkSecretStrength requires length plus character-class diversity. The key

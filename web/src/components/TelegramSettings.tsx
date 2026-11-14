@@ -98,7 +98,7 @@ function snapshotForm(s: TelegramSettings, d: NumberDrafts) {
 }
 
 export default function TelegramSettingsCard() {
-  const { refreshTick, act } = useApp();
+  const { refreshTick, act, syncTrafficLimitThreshold } = useApp();
   const { busy, run } = useBusy();
   const [saved, setSaved] = useState<TelegramSettings>(defaultSettings);
   const [form, setForm] = useState<TelegramSettings>(defaultSettings);
@@ -192,6 +192,7 @@ export default function TelegramSettingsCard() {
         setDrafts(draftsFromSettings(next));
         setBotToken("");
         setClearToken(false);
+        syncTrafficLimitThreshold(next);
       }, "Telegram 告警设置已保存");
     });
   };

@@ -259,6 +259,7 @@ func (a *App) cachedStatusPageSettings() (storedStatusPageSettings, error) {
 
 func (a *App) invalidatePublicStatusCache() {
 	a.statusCacheMu.Lock()
+	a.statusCacheGen++
 	a.statusCfgLoaded = false
 	a.statusSnapshotBody = nil
 	a.statusSnapshotExpires = time.Time{}
@@ -268,6 +269,7 @@ func (a *App) invalidatePublicStatusCache() {
 
 func (a *App) invalidatePublicStatusSnapshot() {
 	a.statusCacheMu.Lock()
+	a.statusCacheGen++
 	a.statusSnapshotBody = nil
 	a.statusSnapshotExpires = time.Time{}
 	a.statusHistoryCache = nil
@@ -338,6 +340,7 @@ func (a *App) statusPageSetting(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.statusCacheMu.Lock()
+	a.statusCacheGen++
 	a.statusCfg = cfg
 	a.statusCfgLoaded = true
 	a.statusSnapshotBody = nil
@@ -464,6 +467,45 @@ func publicDisplayName(s shared.Server) string {
 	return strings.TrimSpace(s.Name)
 }
 
+type publicFlightResult struct {
+	status int
+	body   []byte
+}
+
+type publicFlightCall struct {
+	done chan struct{}
+	res  publicFlightResult
+	err  error
+}
+
+// doPublicFlight coalesces concurrent cache-miss rebuilds for the same key
+// using only the Go standard library. Waiters share the result (including
+// errors) and are guaranteed to unblock via defer even if fn fails or panics.
+func (a *App) doPublicFlight(key string, fn func() (publicFlightResult, error)) (publicFlightResult, error) {
+	a.statusFlightsMu.Lock()
+	if a.statusFlights == nil {
+		a.statusFlights = make(map[string]*publicFlightCall)
+	}
+	if c, ok := a.statusFlights[key]; ok {
+		a.statusFlightsMu.Unlock()
+		<-c.done
+		return c.res, c.err
+	}
+	c := &publicFlightCall{done: make(chan struct{})}
+	a.statusFlights[key] = c
+	a.statusFlightsMu.Unlock()
+
+	defer func() {
+		a.statusFlightsMu.Lock()
+		delete(a.statusFlights, key)
+		a.statusFlightsMu.Unlock()
+		close(c.done)
+	}()
+
+	c.res, c.err = fn()
+	return c.res, c.err
+}
+
 func (a *App) publicStatus(w http.ResponseWriter, r *http.Request) {
 	cfg, ok := a.checkPublicStatusGate(w, r)
 	if !ok {
@@ -480,10 +522,46 @@ func (a *App) publicStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	a.statusCacheMu.RUnlock()
 
-	allServers, err := a.Store.Servers()
+	res, err := a.doPublicFlight("status", func() (publicFlightResult, error) {
+		recheckNow := a.nowMonitorUTC()
+		a.statusCacheMu.RLock()
+		if len(a.statusSnapshotBody) > 0 && recheckNow.Before(a.statusSnapshotExpires) {
+			body := a.statusSnapshotBody
+			a.statusCacheMu.RUnlock()
+			return publicFlightResult{status: http.StatusOK, body: body}, nil
+		}
+		gen := a.statusCacheGen
+		a.statusCacheMu.RUnlock()
+
+		a.statusSnapshotBuilds.Add(1)
+		if hook := a.statusBuildHook; hook != nil {
+			hook("status")
+		}
+
+		body, err := a.buildPublicStatusSnapshot(cfg, recheckNow)
+		if err != nil {
+			return publicFlightResult{}, err
+		}
+
+		a.statusCacheMu.Lock()
+		if a.statusCacheGen == gen {
+			a.statusSnapshotBody = body
+			a.statusSnapshotExpires = recheckNow.Add(publicStatusCacheTTL)
+		}
+		a.statusCacheMu.Unlock()
+		return publicFlightResult{status: http.StatusOK, body: body}, nil
+	})
 	if err != nil {
 		errorJSON(w, 500, "internal error")
 		return
+	}
+	writeCachedJSONBytes(w, "public, max-age=2", res.body)
+}
+
+func (a *App) buildPublicStatusSnapshot(cfg storedStatusPageSettings, now time.Time) ([]byte, error) {
+	allServers, err := a.Store.Servers()
+	if err != nil {
+		return nil, err
 	}
 	visible := make([]shared.Server, 0, len(allServers))
 	for _, s := range allServers {
@@ -507,16 +585,14 @@ func (a *App) publicStatus(w http.ResponseWriter, r *http.Request) {
 
 	hosts, err := a.Store.MonitorHosts()
 	if err != nil {
-		errorJSON(w, 500, "internal error")
-		return
+		return nil, err
 	}
 
 	var cycleMap map[string]shared.CycleTrafficSummary
 	if cfg.ShowTraffic && len(visible) > 0 {
 		cycleMap, err = a.Store.CycleTrafficMap(visible, now)
 		if err != nil {
-			errorJSON(w, 500, "internal error")
-			return
+			return nil, err
 		}
 	}
 
@@ -639,23 +715,10 @@ func (a *App) publicStatus(w http.ResponseWriter, r *http.Request) {
 		GeneratedAt: now,
 		Servers:     items,
 	}
-	body, err := json.Marshal(resp)
-	if err != nil {
-		errorJSON(w, 500, "internal error")
-		return
-	}
-
-	a.statusCacheMu.Lock()
-	a.statusSnapshotBody = body
-	a.statusSnapshotExpires = now.Add(publicStatusCacheTTL)
-	a.statusCacheMu.Unlock()
-
-	writeCachedJSONBytes(w, "public, max-age=2", body)
+	return json.Marshal(resp)
 }
 
-func (a *App) getPublicHistoryCache(key string, now time.Time) ([]byte, bool) {
-	a.statusCacheMu.RLock()
-	defer a.statusCacheMu.RUnlock()
+func (a *App) getPublicHistoryCacheLocked(key string, now time.Time) ([]byte, bool) {
 	if a.statusHistoryCache == nil {
 		return nil, false
 	}
@@ -666,9 +729,18 @@ func (a *App) getPublicHistoryCache(key string, now time.Time) ([]byte, bool) {
 	return entry.body, true
 }
 
-func (a *App) putPublicHistoryCache(key string, body []byte, now time.Time) {
+func (a *App) getPublicHistoryCache(key string, now time.Time) ([]byte, bool) {
+	a.statusCacheMu.RLock()
+	defer a.statusCacheMu.RUnlock()
+	return a.getPublicHistoryCacheLocked(key, now)
+}
+
+func (a *App) putPublicHistoryCache(key string, body []byte, now time.Time, gen uint64) {
 	a.statusCacheMu.Lock()
 	defer a.statusCacheMu.Unlock()
+	if a.statusCacheGen != gen {
+		return
+	}
 	if a.statusHistoryCache == nil {
 		a.statusHistoryCache = make(map[string]publicHistoryCacheEntry)
 	}
@@ -709,6 +781,10 @@ func (a *App) publicServerRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	publicID := r.PathValue("publicId")
+	if !validPublicID(publicID) {
+		http.NotFound(w, r)
+		return
+	}
 	now := a.nowMonitorUTC()
 	cacheKey := fmt.Sprintf("records:%s:%s:%t", publicID, rangeKey, cfg.ShowTraffic)
 	if cached, hit := a.getPublicHistoryCache(cacheKey, now); hit {
@@ -716,67 +792,88 @@ func (a *App) publicServerRecords(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srv, found, err := a.resolvePublicServer(publicID)
-	if err != nil {
-		errorJSON(w, 500, "internal error")
-		return
-	}
-	if !found {
-		http.NotFound(w, r)
-		return
-	}
-
-	var records []MonitorRecord
-	if !shared.NoAgentManaged(srv) {
-		records, err = a.Store.MonitorRecords(srv.ID, rangeKey, now, maxPublicMonitorPoints)
-		if err != nil {
-			errorJSON(w, 500, "internal error")
-			return
+	res, err := a.doPublicFlight(cacheKey, func() (publicFlightResult, error) {
+		recheckNow := a.nowMonitorUTC()
+		a.statusCacheMu.RLock()
+		if cached, hit := a.getPublicHistoryCacheLocked(cacheKey, recheckNow); hit {
+			a.statusCacheMu.RUnlock()
+			return publicFlightResult{status: http.StatusOK, body: cached}, nil
 		}
-		if table, dur, specErr := monitorRangeSpec(rangeKey); specErr == nil && table == "mui_monitor_minutes" {
-			if live, liveOK := a.currentMinuteMonitorRecord(srv.ID, now.Add(-dur)); liveOK {
-				if len(records) == 0 || live.At.After(records[len(records)-1].At) {
-					records = downsampleSlice(append(records, live), maxPublicMonitorPoints)
+		gen := a.statusCacheGen
+		a.statusCacheMu.RUnlock()
+
+		a.statusHistoryBuilds.Add(1)
+		if hook := a.statusBuildHook; hook != nil {
+			hook(cacheKey)
+		}
+
+		srv, found, err := a.resolvePublicServer(publicID)
+		if err != nil {
+			return publicFlightResult{}, err
+		}
+		if !found {
+			return publicFlightResult{status: http.StatusNotFound}, nil
+		}
+
+		var records []MonitorRecord
+		if !shared.NoAgentManaged(srv) {
+			records, err = a.Store.MonitorRecords(srv.ID, rangeKey, recheckNow, maxPublicMonitorPoints)
+			if err != nil {
+				return publicFlightResult{}, err
+			}
+			if table, dur, specErr := monitorRangeSpec(rangeKey); specErr == nil && table == "mui_monitor_minutes" {
+				if live, liveOK := a.currentMinuteMonitorRecord(srv.ID, recheckNow.Add(-dur)); liveOK {
+					if len(records) == 0 || live.At.After(records[len(records)-1].At) {
+						records = downsampleSlice(append(records, live), maxPublicMonitorPoints)
+					}
 				}
 			}
 		}
-	}
 
-	out := make([]PublicMonitorRecord, 0, len(records))
-	for _, rec := range records {
-		item := PublicMonitorRecord{
-			At:          rec.At,
-			CPU:         rec.CPU,
-			Load1:       rec.Load1,
-			RAMUsed:     rec.RAMUsed,
-			RAMTotal:    rec.RAMTotal,
-			SwapUsed:    rec.SwapUsed,
-			DiskUsed:    rec.DiskUsed,
-			DiskTotal:   rec.DiskTotal,
-			NetUp:       rec.NetUp,
-			NetDown:     rec.NetDown,
-			NetUpPeak:   rec.NetUpPeak,
-			NetDownPeak: rec.NetDownPeak,
-			TCP:         rec.TCP,
-			UDP:         rec.UDP,
-			Process:     rec.Process,
+		out := make([]PublicMonitorRecord, 0, len(records))
+		for _, rec := range records {
+			item := PublicMonitorRecord{
+				At:          rec.At,
+				CPU:         rec.CPU,
+				Load1:       rec.Load1,
+				RAMUsed:     rec.RAMUsed,
+				RAMTotal:    rec.RAMTotal,
+				SwapUsed:    rec.SwapUsed,
+				DiskUsed:    rec.DiskUsed,
+				DiskTotal:   rec.DiskTotal,
+				NetUp:       rec.NetUp,
+				NetDown:     rec.NetDown,
+				NetUpPeak:   rec.NetUpPeak,
+				NetDownPeak: rec.NetDownPeak,
+				TCP:         rec.TCP,
+				UDP:         rec.UDP,
+				Process:     rec.Process,
+			}
+			if cfg.ShowTraffic {
+				up := rec.TotalUp
+				down := rec.TotalDown
+				item.TotalUp = &up
+				item.TotalDown = &down
+			}
+			out = append(out, item)
 		}
-		if cfg.ShowTraffic {
-			up := rec.TotalUp
-			down := rec.TotalDown
-			item.TotalUp = &up
-			item.TotalDown = &down
-		}
-		out = append(out, item)
-	}
 
-	body, err := json.Marshal(out)
+		body, err := json.Marshal(out)
+		if err != nil {
+			return publicFlightResult{}, err
+		}
+		a.putPublicHistoryCache(cacheKey, body, recheckNow, gen)
+		return publicFlightResult{status: http.StatusOK, body: body}, nil
+	})
 	if err != nil {
 		errorJSON(w, 500, "internal error")
 		return
 	}
-	a.putPublicHistoryCache(cacheKey, body, now)
-	writeCachedJSONBytes(w, "public, max-age=30", body)
+	if res.status == http.StatusNotFound {
+		http.NotFound(w, r)
+		return
+	}
+	writeCachedJSONBytes(w, "public, max-age=30", res.body)
 }
 
 func (a *App) publicServerPings(w http.ResponseWriter, r *http.Request) {
@@ -794,6 +891,10 @@ func (a *App) publicServerPings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	publicID := r.PathValue("publicId")
+	if !validPublicID(publicID) {
+		http.NotFound(w, r)
+		return
+	}
 	now := a.nowMonitorUTC()
 	cacheKey := fmt.Sprintf("pings:%s:%s", publicID, rangeKey)
 	if cached, hit := a.getPublicHistoryCache(cacheKey, now); hit {
@@ -801,72 +902,92 @@ func (a *App) publicServerPings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	srv, found, err := a.resolvePublicServer(publicID)
+	res, err := a.doPublicFlight(cacheKey, func() (publicFlightResult, error) {
+		recheckNow := a.nowMonitorUTC()
+		a.statusCacheMu.RLock()
+		if cached, hit := a.getPublicHistoryCacheLocked(cacheKey, recheckNow); hit {
+			a.statusCacheMu.RUnlock()
+			return publicFlightResult{status: http.StatusOK, body: cached}, nil
+		}
+		gen := a.statusCacheGen
+		a.statusCacheMu.RUnlock()
+
+		a.statusHistoryBuilds.Add(1)
+		if hook := a.statusBuildHook; hook != nil {
+			hook(cacheKey)
+		}
+
+		srv, found, err := a.resolvePublicServer(publicID)
+		if err != nil {
+			return publicFlightResult{}, err
+		}
+		if !found {
+			return publicFlightResult{status: http.StatusNotFound}, nil
+		}
+
+		out := []PublicPingTaskSeries{}
+		if !shared.NoAgentManaged(srv) {
+			tasks, err := a.cachedPingTasks()
+			if err != nil {
+				return publicFlightResult{}, err
+			}
+			dur, _ := pingRangeDuration(rangeKey)
+			for _, task := range tasks {
+				if len(task.ServerIDs) > 0 && !slices.Contains(task.ServerIDs, srv.ID) {
+					continue
+				}
+				recs, err := a.Store.PingRecords(task.ID, srv.ID, rangeKey, recheckNow, maxPublicMonitorPoints)
+				if err != nil {
+					return publicFlightResult{}, err
+				}
+				if dur > 0 {
+					live := a.currentMinutePingRecords(task.ID, srv.ID, recheckNow.Add(-dur))
+					if len(live) > 0 {
+						seen := make(map[int64]bool, len(recs))
+						for _, rec := range recs {
+							seen[rec.At.UnixMilli()] = true
+						}
+						for _, rec := range live {
+							if !seen[rec.At.UnixMilli()] {
+								recs = append(recs, rec)
+							}
+						}
+						recs = downsampleSlice(recs, maxPublicMonitorPoints)
+					}
+				}
+				points := make([]PublicPingPoint, 0, len(recs))
+				for _, rec := range recs {
+					points = append(points, PublicPingPoint{
+						At:    rec.At,
+						MsAvg: rec.MsAvg,
+						MsMax: rec.MsMax,
+						Sent:  rec.Sent,
+						Lost:  rec.Lost,
+					})
+				}
+				out = append(out, PublicPingTaskSeries{
+					ID:              a.Store.Fingerprint("status-page-ping", task.ID),
+					Name:            task.Name,
+					IntervalSeconds: task.IntervalSeconds,
+					Records:         points,
+				})
+			}
+		}
+
+		body, err := json.Marshal(out)
+		if err != nil {
+			return publicFlightResult{}, err
+		}
+		a.putPublicHistoryCache(cacheKey, body, recheckNow, gen)
+		return publicFlightResult{status: http.StatusOK, body: body}, nil
+	})
 	if err != nil {
 		errorJSON(w, 500, "internal error")
 		return
 	}
-	if !found {
+	if res.status == http.StatusNotFound {
 		http.NotFound(w, r)
 		return
 	}
-
-	out := []PublicPingTaskSeries{}
-	if !shared.NoAgentManaged(srv) {
-		tasks, err := a.cachedPingTasks()
-		if err != nil {
-			errorJSON(w, 500, "internal error")
-			return
-		}
-		dur, _ := pingRangeDuration(rangeKey)
-		for _, task := range tasks {
-			if len(task.ServerIDs) > 0 && !slices.Contains(task.ServerIDs, srv.ID) {
-				continue
-			}
-			recs, err := a.Store.PingRecords(task.ID, srv.ID, rangeKey, now, maxPublicMonitorPoints)
-			if err != nil {
-				errorJSON(w, 500, "internal error")
-				return
-			}
-			if dur > 0 {
-				live := a.currentMinutePingRecords(task.ID, srv.ID, now.Add(-dur))
-				if len(live) > 0 {
-					seen := make(map[int64]bool, len(recs))
-					for _, rec := range recs {
-						seen[rec.At.UnixMilli()] = true
-					}
-					for _, rec := range live {
-						if !seen[rec.At.UnixMilli()] {
-							recs = append(recs, rec)
-						}
-					}
-					recs = downsampleSlice(recs, maxPublicMonitorPoints)
-				}
-			}
-			points := make([]PublicPingPoint, 0, len(recs))
-			for _, rec := range recs {
-				points = append(points, PublicPingPoint{
-					At:    rec.At,
-					MsAvg: rec.MsAvg,
-					MsMax: rec.MsMax,
-					Sent:  rec.Sent,
-					Lost:  rec.Lost,
-				})
-			}
-			out = append(out, PublicPingTaskSeries{
-				ID:              a.Store.Fingerprint("status-page-ping", task.ID),
-				Name:            task.Name,
-				IntervalSeconds: task.IntervalSeconds,
-				Records:         points,
-			})
-		}
-	}
-
-	body, err := json.Marshal(out)
-	if err != nil {
-		errorJSON(w, 500, "internal error")
-		return
-	}
-	a.putPublicHistoryCache(cacheKey, body, now)
-	writeCachedJSONBytes(w, "public, max-age=30", body)
+	writeCachedJSONBytes(w, "public, max-age=30", res.body)
 }

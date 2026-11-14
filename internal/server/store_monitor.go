@@ -105,6 +105,15 @@ func (s *Store) RollupMonitorHours(now time.Time) error {
 	return s.RollupMonitorHourRange(hourStart.UnixMilli(), hourEnd.UnixMilli())
 }
 
+// RollupMonitorHoursStartup idempotently summarizes the last 72 completed hours
+// (matching minute-bucket retention) on process startup so panel downtime longer
+// than 3 hours does not leave gaps in 7d/30d hourly charts.
+func (s *Store) RollupMonitorHoursStartup(now time.Time) error {
+	hourEnd := now.UTC().Truncate(time.Hour)
+	hourStart := hourEnd.Add(-72 * time.Hour)
+	return s.RollupMonitorHourRange(hourStart.UnixMilli(), hourEnd.UnixMilli())
+}
+
 func (s *Store) RollupMonitorHourRange(fromMs, toMs int64) error {
 	if toMs <= fromMs {
 		return nil
