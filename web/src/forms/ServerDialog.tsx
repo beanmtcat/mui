@@ -1,14 +1,82 @@
-import { useState } from "react";
-import { canHostNodes, mutation, roleLabels, type InstallGuide, type Server } from "../api";
+import { useMemo, useState } from "react";
+import {
+  canHostNodes,
+  mutation,
+  roleLabels,
+  type BillingCycle,
+  type InstallGuide,
+  type Server,
+  type TrafficLimitType,
+} from "../api";
 import { useApp } from "../app/context";
-import { manualFirewall, roleOrder, supportsGitHubUpgrade, type ServerForm } from "../app/helpers";
+import { setError } from "../app/feedback";
+import {
+  billingCycleLabels,
+  manualFirewall,
+  roleOrder,
+  supportsGitHubUpgrade,
+  trafficLimitTypeLabels,
+  type ServerForm,
+} from "../app/helpers";
 import { Advanced, Field, HelpTip, SubmitButton, useBusy } from "../app/ui";
 import { Dialog } from "./Dialog";
 
+const GB_BYTES = 1024 ** 3;
+const TB_BYTES = 1024 ** 4;
+const MAX_TRAFFIC_LIMIT_BYTES = 2 ** 53;
+
+type BillingDrafts = {
+  price: string;
+  billingCycleDays: string;
+  trafficLimit: string;
+  trafficLimitUnit: "GB" | "TB";
+  trafficResetDay: string;
+  sortWeight: string;
+};
+
+function formatUnitValue(bytesVal: number, unitBytes: number): string {
+  const raw = bytesVal / unitBytes;
+  if (Math.abs(raw - Math.round(raw)) < 1e-6) return String(Math.round(raw));
+  return String(Number(raw.toFixed(2)));
+}
+
+function draftsFromServer(s: ServerForm): BillingDrafts {
+  const limit = s.trafficLimit ?? 0;
+  let trafficLimit = "";
+  let trafficLimitUnit: "GB" | "TB" = "GB";
+  if (limit > 0) {
+    const tbVal = limit / TB_BYTES;
+    if (limit >= TB_BYTES && Math.abs(tbVal * 100 - Math.round(tbVal * 100)) < 1e-4) {
+      trafficLimitUnit = "TB";
+      trafficLimit = formatUnitValue(limit, TB_BYTES);
+    } else {
+      trafficLimitUnit = "GB";
+      trafficLimit = formatUnitValue(limit, GB_BYTES);
+    }
+  }
+  return {
+    price: s.price && s.price > 0 ? String(s.price) : "",
+    billingCycleDays: s.billingCycleDays && s.billingCycleDays > 0 ? String(s.billingCycleDays) : "30",
+    trafficLimit,
+    trafficLimitUnit,
+    trafficResetDay: s.trafficResetDay && s.trafficResetDay > 0 ? String(s.trafficResetDay) : "",
+    sortWeight: s.sortWeight ? String(s.sortWeight) : "",
+  };
+}
+
 export default function ServerDialog({ initial }: { initial: ServerForm }) {
   const { servers, nodes, operations, agentReleases, coreReleases, refreshing, refresh, act, closeModal, goTo, setOfflineServer, showInstall } = useApp();
+  const initialDrafts = useMemo(() => draftsFromServer(initial), [initial]);
   const [serverForm, setServerForm] = useState(initial);
+  const [drafts, setDrafts] = useState<BillingDrafts>(initialDrafts);
   const { busy, run } = useBusy();
+  const existingGroups = useMemo(
+    () =>
+      [...new Set(servers.map((s) => s.group?.trim()).filter((g): g is string => !!g))].sort((a, b) =>
+        a.localeCompare(b, "zh-Hans-CN"),
+      ),
+    [servers],
+  );
   const selectedFormServer = servers.find((s) => s.id === serverForm.id);
   const serverManagementChanged = !!selectedFormServer && (selectedFormServer.managementMode === "offline") !== (serverForm.managementMode === "offline");
   const serverProxyEnabled = !["offline", "external"].includes(serverForm.managementMode || "online");
@@ -26,10 +94,115 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
     ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status));
   const submitServer = (e: React.FormEvent) => {
     e.preventDefault();
+
+    const priceRaw = drafts.price.trim();
+    let price = 0;
+    if (priceRaw !== "") {
+      if (!/^\d+(?:\.\d{1,2})?$/.test(priceRaw)) {
+        setError("价格需为非负数字，且最多保留两位小数");
+        return;
+      }
+      price = Number(priceRaw);
+      if (!Number.isFinite(price) || price < 0 || price > 1_000_000) {
+        setError("价格需在 0–1000000 之间");
+        return;
+      }
+    }
+
+    const currency = (serverForm.currency ?? "").trim() || "$";
+    if ([...currency].length > 8) {
+      setError("货币符号或代码不能超过 8 个字符");
+      return;
+    }
+
+    const billingCycle = (serverForm.billingCycle || "") as BillingCycle;
+    let billingCycleDays = 0;
+    if (billingCycle === "days") {
+      const daysRaw = drafts.billingCycleDays.trim();
+      if (!/^\d+$/.test(daysRaw)) {
+        setError("自定义计费周期天数需填写 1–3650 之间的整数");
+        return;
+      }
+      billingCycleDays = Number.parseInt(daysRaw, 10);
+      if (billingCycleDays < 1 || billingCycleDays > 3650) {
+        setError("自定义计费周期天数需在 1–3650 之间");
+        return;
+      }
+    }
+
+    const limitRaw = drafts.trafficLimit.trim();
+    let trafficLimit = 0;
+    if (limitRaw !== "" && limitRaw !== "0") {
+      if (!/^\d+(?:\.\d{1,4})?$/.test(limitRaw)) {
+        setError("流量限额请填写有效数字（最多 4 位小数）");
+        return;
+      }
+      const unitMul = drafts.trafficLimitUnit === "TB" ? TB_BYTES : GB_BYTES;
+      const computed = Math.round(Number(limitRaw) * unitMul);
+      if (!Number.isFinite(computed) || computed < 0 || computed > MAX_TRAFFIC_LIMIT_BYTES) {
+        setError("流量限额超出有效范围");
+        return;
+      }
+      trafficLimit = computed;
+    }
+
+    const resetRaw = drafts.trafficResetDay.trim();
+    let trafficResetDay = 0;
+    if (resetRaw !== "") {
+      if (!/^\d+$/.test(resetRaw)) {
+        setError("流量重置日需填写 0–31 之间的整数");
+        return;
+      }
+      trafficResetDay = Number.parseInt(resetRaw, 10);
+      if (trafficResetDay < 0 || trafficResetDay > 31) {
+        setError("流量重置日需在 0–31 之间");
+        return;
+      }
+    }
+
+    const group = (serverForm.group ?? "").trim();
+    if ([...group].length > 40) {
+      setError("分组名不能超过 40 个字符");
+      return;
+    }
+
+    const weightRaw = drafts.sortWeight.trim();
+    let sortWeight = 0;
+    if (weightRaw !== "") {
+      if (!/^-?\d+$/.test(weightRaw)) {
+        setError("排序权重需填写 -9999 至 9999 之间的整数");
+        return;
+      }
+      sortWeight = Number.parseInt(weightRaw, 10);
+      if (sortWeight < -9999 || sortWeight > 9999) {
+        setError("排序权重需在 -9999 至 9999 之间");
+        return;
+      }
+    }
+
+    const payload: ServerForm = {
+      ...serverForm,
+      price,
+      currency,
+      billingCycle,
+      billingCycleDays,
+      autoRenew: !!serverForm.autoRenew,
+      trafficLimit,
+      trafficLimitType: (serverForm.trafficLimitType || "sum") as TrafficLimitType,
+      trafficResetDay,
+      group,
+      sortWeight,
+      alertMuted: !!serverForm.alertMuted,
+      cycleTraffic: undefined,
+    };
+
     void run(async () => {
     const ok = await act(async () => {
-      if (serverForm.id) {
-        const saved = await mutation<Server>("/api/servers/" + serverForm.id, "PATCH", serverForm);
+      if (payload.id) {
+        const saved = await mutation<Server>("/api/servers/" + payload.id, "PATCH", {
+          ...payload,
+          initialExpiresAt: initial.expiresAt ?? null,
+        });
         if (serverManagementChanged) {
           closeModal();
           if (saved.managementMode === "offline") { setOfflineServer(saved); return; }
@@ -40,20 +213,29 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
         const result = await mutation<InstallGuide & { server: Server }>(
           "/api/servers",
           "POST",
-          serverForm,
+          payload,
         );
         closeModal();
-        if (serverForm.managementMode === "offline") { setOfflineServer(result.server); return; }
-        if (serverForm.managementMode === "external") { goTo("nodes", result.server.id, {}); return; }
-        showInstall(result, serverForm.name || "新服务器", "online", "amd64");
+        if (payload.managementMode === "offline") { setOfflineServer(result.server); return; }
+        if (payload.managementMode === "external") { goTo("nodes", result.server.id, {}); return; }
+        showInstall(result, payload.name || "新服务器", "online", "amd64");
         return;
       }
-    }, serverManagementChanged ? "管理方式已保存；请按迁移指南在目标机完成切换" : serverForm.managementMode === "external" ? "外部节点服务器已保存；请录入卖家提供的节点" : serverFormCoreMissing ? "服务器类型已保存；尚未安装 sing-box，请在服务器列表安装后创建节点" : "服务器已保存");
-    if (ok && serverForm.id) closeModal();
+    }, serverManagementChanged ? "管理方式已保存；请按迁移指南在目标机完成切换" : payload.managementMode === "external" ? "外部节点服务器已保存；请录入卖家提供的节点" : serverFormCoreMissing ? "服务器类型已保存；尚未安装 sing-box，请在服务器列表安装后创建节点" : "服务器已保存");
+    if (ok && payload.id) closeModal();
     });
   };
   const external = serverForm.managementMode === "external";
-  return <Dialog title={serverForm.id ? "编辑服务器" : "新建服务器"} value={serverForm} initial={initial} busy={busy}>
+  const hasBillingInitial = !!(
+    initial.expiresAt ||
+    (initial.price && initial.price > 0) ||
+    initial.billingCycle ||
+    initial.autoRenew ||
+    (initial.trafficLimit && initial.trafficLimit > 0) ||
+    (initial.trafficResetDay && initial.trafficResetDay > 0)
+  );
+  const hasOrganizeInitial = !!(initial.group || initial.sortWeight || initial.alertMuted);
+  return <Dialog title={serverForm.id ? "编辑服务器" : "新建服务器"} value={{ serverForm, drafts }} initial={{ serverForm: initial, drafts: initialDrafts }} busy={busy}>
               <form className="serverForm" onSubmit={submitServer}>
                 <section className="serverFormSection" aria-labelledby="server-basic-title">
                   <h3 id="server-basic-title">基本信息</h3>
@@ -95,7 +277,6 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
                             roles: external ? ["exit"] : offline ? (roles.length ? roles : ["entry"]) : serverForm.roles?.length ? serverForm.roles : ["exit"],
                             outboundInterface: external ? "" : serverForm.outboundInterface,
                             autoSyncPublicIp: external ? false : serverForm.autoSyncPublicIp,
-                            komariToken: external ? "" : serverForm.komariToken,
                           });
                         }}>
                           <option value="online" disabled={!!serverForm.id && serverForm.managementMode === "external"}>在线 Agent（连接面板）</option>
@@ -204,7 +385,7 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
                     </div>}
                   </div>
                 </Advanced>}
-                {!external && <Advanced title="Agent 代理与 Komari 监控" open={!!initial.agentProxyNodeId || !!initial.komariTokenSet}>
+                {!external && <Advanced title="Agent 连接代理（SOCKS5）" open={!!initial.agentProxyNodeId}>
                   <div className="formGrid">
                     {serverForm.managementMode !== "external" && <div className="serverFormWide">
                       <Field label="Agent 连接面板的 SOCKS5 节点" help="代理用于 Agent 接入、心跳、任务与下载，与节点“允许直连”无关。候选节点须已启用、配置已生效，且其服务器已启用 UFW、没有防火墙冲突。面板按所选本机来源 IP 自动放行；经过 NAT 时请填写实际出口 IP。所有在线服务器均可使用代理，需 Agent 0.6.10 或更高版本。">
@@ -230,14 +411,162 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
                         </select>
                       </Field>}
                     </div>}
-                    {serverForm.managementMode !== "external" && <div className="serverFormWide">
-                      <Field label="Komari Agent token" help="从 Komari 面板取得此服务器的 Agent token。安装后由 MUI 面板自动下发；没有 token 就不会启动 Komari 监控。编辑时留空会保留原 token。">
-                        <input type="password" autoComplete="off" placeholder={serverForm.komariTokenSet ? "已配置；留空保持不变" : "选填，留空不启动 Komari"} value={serverForm.komariToken || ""} onChange={(e) => setServerForm({ ...serverForm, komariToken: e.target.value || undefined })} />
-                      </Field>
-                      <div className="serverFieldHelp">{serverForm.komariTokenSet ? "已配置 token" : "未配置 token"}{serverForm.komariTokenSet && <button type="button" className="ghost" onClick={() => setServerForm({ ...serverForm, komariToken: "", komariTokenSet: false })}>清除 token</button>}</div>
-                    </div>}
                   </div>
                 </Advanced>}
+                <Advanced title="计费与流量" open={hasBillingInitial}>
+                  <div className="formGrid">
+                    <Field label="到期日" help="用于监控卡片与服务器列表展示、流量周期锚点及 Telegram 到期提醒。留空表示不限期。">
+                      <input
+                        type="date"
+                        value={serverForm.expiresAt ? serverForm.expiresAt.slice(0, 10) : ""}
+                        onChange={(e) =>
+                          setServerForm({
+                            ...serverForm,
+                            expiresAt: e.target.value ? `${e.target.value}T00:00:00Z` : undefined,
+                          })
+                        }
+                      />
+                    </Field>
+                    <Field label="计费周期">
+                      <select
+                        aria-label="计费周期"
+                        value={serverForm.billingCycle || ""}
+                        onChange={(e) =>
+                          setServerForm({
+                            ...serverForm,
+                            billingCycle: e.target.value as BillingCycle,
+                          })
+                        }
+                      >
+                        <option value="">未设置</option>
+                        {(Object.entries(billingCycleLabels) as [Exclude<BillingCycle, "">, string][]).map(([key, label]) => (
+                          <option key={key} value={key}>{label}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    {serverForm.billingCycle === "days" && (
+                      <Field label="自定义周期天数（1–3650） *">
+                        <input
+                          required
+                          inputMode="numeric"
+                          placeholder="例如 30"
+                          value={drafts.billingCycleDays}
+                          onChange={(e) => setDrafts({ ...drafts, billingCycleDays: e.target.value })}
+                        />
+                      </Field>
+                    )}
+                    <Field label="周期价格" help="每个计费周期的费用，最多两位小数；留空或 0 表示未填写。">
+                      <input
+                        inputMode="decimal"
+                        placeholder="留空或 0 表示未填"
+                        value={drafts.price}
+                        onChange={(e) => setDrafts({ ...drafts, price: e.target.value })}
+                      />
+                    </Field>
+                    <Field label="货币符号或代码" help="最多 8 个字符，留空默认使用 $（例如 $、¥、€、HKD）。">
+                      <input
+                        maxLength={8}
+                        placeholder="默认 $"
+                        value={serverForm.currency ?? "$"}
+                        onChange={(e) => setServerForm({ ...serverForm, currency: e.target.value })}
+                      />
+                    </Field>
+                    <div className="serverToggleRow serverFormWide">
+                      <label className="check">
+                        <input
+                          type="checkbox"
+                          checked={!!serverForm.autoRenew}
+                          onChange={(e) => setServerForm({ ...serverForm, autoRenew: e.target.checked })}
+                        />
+                        到期后自动顺延一个计费周期
+                      </label>
+                      <HelpTip label="自动续期规则" text="需同时填写到期日与计费周期。在线管理服务器还要求最近 24 小时内有上报（长期离线视为可能已退订，不自动续期）；离线管理与外部节点到期直接顺延。开启后在到期前 3 天提醒“即将自动续期”，续期后发送通知。" />
+                    </div>
+                    <Field label="周期流量限额" help="按采样网卡流量统计，留空或 0 表示不限流量。仅用于展示与告警，超限不会自动停机。">
+                      <div className="inputWithUnit">
+                        <input
+                          inputMode="decimal"
+                          placeholder="留空或 0 表示不限"
+                          value={drafts.trafficLimit}
+                          onChange={(e) => setDrafts({ ...drafts, trafficLimit: e.target.value })}
+                        />
+                        <select
+                          aria-label="流量限额单位"
+                          value={drafts.trafficLimitUnit}
+                          onChange={(e) =>
+                            setDrafts({ ...drafts, trafficLimitUnit: e.target.value as "GB" | "TB" })
+                          }
+                        >
+                          <option value="GB">GB</option>
+                          <option value="TB">TB</option>
+                        </select>
+                      </div>
+                    </Field>
+                    <Field label="流量计费方向">
+                      <select
+                        aria-label="流量计费方向"
+                        value={serverForm.trafficLimitType || "sum"}
+                        onChange={(e) =>
+                          setServerForm({
+                            ...serverForm,
+                            trafficLimitType: e.target.value as TrafficLimitType,
+                          })
+                        }
+                      >
+                        {(Object.entries(trafficLimitTypeLabels) as [TrafficLimitType, string][]).map(([key, label]) => (
+                          <option key={key} value={key}>{label}</option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Field label="每月流量重置日（0–31）" help="1–31 表示每月对应日期 0 点重置（当月无该日时取月末）；0 或留空表示跟随到期日的“几号”（未填到期日时按 1 号）。">
+                      <input
+                        inputMode="numeric"
+                        placeholder="0 表示跟随到期日"
+                        value={drafts.trafficResetDay}
+                        onChange={(e) => setDrafts({ ...drafts, trafficResetDay: e.target.value })}
+                      />
+                    </Field>
+                  </div>
+                </Advanced>
+                <Advanced title="整理" open={hasOrganizeInitial}>
+                  <div className="formGrid">
+                    <Field label="分组名" help="监控页与服务器列表按分组归类显示；留空归入“未分组”（最多 40 字符）。">
+                      <input
+                        maxLength={40}
+                        list="server-group-options"
+                        placeholder="例如：主力线路 / 备用落地"
+                        value={serverForm.group || ""}
+                        onChange={(e) => setServerForm({ ...serverForm, group: e.target.value })}
+                      />
+                      {existingGroups.length > 0 && (
+                        <datalist id="server-group-options">
+                          {existingGroups.map((g) => (
+                            <option key={g} value={g} />
+                          ))}
+                        </datalist>
+                      )}
+                    </Field>
+                    <Field label="排序权重（-9999–9999）" help="同一分组内按权重从大到小排列，相同时按名称排序；默认 0。">
+                      <input
+                        inputMode="numeric"
+                        placeholder="默认 0（数值大的在前）"
+                        value={drafts.sortWeight}
+                        onChange={(e) => setDrafts({ ...drafts, sortWeight: e.target.value })}
+                      />
+                    </Field>
+                    <div className="serverToggleRow serverFormWide">
+                      <label className="check">
+                        <input
+                          type="checkbox"
+                          checked={!!serverForm.alertMuted}
+                          onChange={(e) => setServerForm({ ...serverForm, alertMuted: e.target.checked })}
+                        />
+                        静音离线与资源告警
+                      </label>
+                      <HelpTip label="静音离线与资源告警" text="开启后不再发送该服务器的离线恢复及 CPU / 内存 / 磁盘高占用告警；到期提醒与流量限额告警不受影响。" />
+                    </div>
+                  </div>
+                </Advanced>
                 <Advanced title="其他信息：服务商、地区、标签、备注" open={!!(initial.provider || initial.region || initial.city || initial.tags || initial.notes)}>
                   <div className="formGrid">
                     <Field label="服务商">

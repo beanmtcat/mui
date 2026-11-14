@@ -61,6 +61,7 @@ type HostStatus struct {
 	SnellFixedPort        bool `json:"snellFixedPort"`
 	AgentProxySupport     bool `json:"agentProxySupport"`
 	SnellV6               bool `json:"snellV6"`
+	HostMonitor           bool `json:"hostMonitor,omitempty"`
 	MultiUserStats        bool `json:"multiUserStats"`
 	NodeFirewallPolicies  bool `json:"nodeFirewallPolicies"`
 	NodeDomainBlock       bool `json:"nodeDomainBlock"`

@@ -145,6 +145,7 @@ func (a *App) certificateByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
+	_ = a.Store.DeleteCertAlertStates(id)
 	a.auditRequest(r, "certificate.delete", id, c.Domain)
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }

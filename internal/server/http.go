@@ -64,6 +64,29 @@ type App struct {
 	releaseKeyB64 string
 	expirySyncMu  sync.Mutex
 	expirySyncAt  atomic.Int64
+	startedAt     time.Time
+	tgMu          sync.Mutex
+	tgQueue       []telegramNotice
+	tgDropped     uint64
+	tgRunning     bool
+	tgStop        chan struct{}
+	tgIdle        chan struct{}
+	tgSentTimes   []time.Time
+	tgClient      *http.Client
+	alertEvalMu     sync.Mutex
+	resourceSince   map[string]time.Time
+	monitorMu       sync.RWMutex
+	latestSamples   map[string]latestMonitorSample
+	minuteAccumMu   sync.Mutex
+	minuteAccums    map[string]*monitorMinuteAccum
+	pingAccumMu     sync.Mutex
+	pingAccums      map[string]*pingMinuteAccum
+	pingTasksMu     sync.RWMutex
+	pingTasksLoaded bool
+	pingTasksCache  []MonitorPingTask
+	monitorNow      func() time.Time
+	monitorErrMu    sync.Mutex
+	monitorErrLast  map[string]time.Time
 }
 
 func NewApp(s *Store, publicURL string) (*App, error) {
@@ -102,7 +125,33 @@ func NewApp(s *Store, publicURL string) (*App, error) {
 	if binDir == "" {
 		binDir = "bin"
 	}
-	app := &App{Store: s, PublicURL: publicURLs[0].String(), publicURLs: publicURLs, agentBinDir: binDir, rates: map[string]rateBucket{}, logins: make(chan struct{}, 4), downloads: make(chan struct{}, 4), serverLocks: map[string]*sync.Mutex{}, nonces: map[string]map[string]time.Time{}, downloadsByIP: map[string]int{}}
+	app := &App{
+		Store:         s,
+		PublicURL:     publicURLs[0].String(),
+		publicURLs:    publicURLs,
+		agentBinDir:   binDir,
+		rates:         map[string]rateBucket{},
+		logins:        make(chan struct{}, 4),
+		downloads:     make(chan struct{}, 4),
+		serverLocks:   map[string]*sync.Mutex{},
+		nonces:        map[string]map[string]time.Time{},
+		downloadsByIP: map[string]int{},
+		startedAt:     time.Now(),
+		tgStop:        make(chan struct{}),
+		tgClient: &http.Client{
+			Timeout: 10 * time.Second,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
+		resourceSince: map[string]time.Time{},
+		latestSamples: map[string]latestMonitorSample{},
+		minuteAccums:  map[string]*monitorMinuteAccum{},
+		pingAccums:    map[string]*pingMinuteAccum{},
+	}
+	if reset {
+		app.notifySecurityEvent("管理员凭据已重置", "", "MUI_ADMIN_RESET 已生效，密码已重置且双因素认证已清除")
+	}
 	if version := strings.TrimSpace(os.Getenv("MUI_AGENT_RELEASE_VERSION")); version != "" {
 		if _, err := shared.GitHubReleaseArchive(version, "amd64"); err != nil {
 			return nil, fmt.Errorf("MUI_AGENT_RELEASE_VERSION: %w", err)
@@ -168,8 +217,16 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/totp/enable", a.require(a.totpEnable))
 	mux.HandleFunc("POST /api/totp/disable", a.require(a.totpDisable))
 	mux.HandleFunc("POST /api/password", a.require(a.changePassword))
-	mux.HandleFunc("GET /api/settings/komari", a.require(a.komariSetting))
-	mux.HandleFunc("PUT /api/settings/komari", a.require(a.komariSetting))
+	mux.HandleFunc("GET /api/settings/telegram", a.require(a.telegramSetting))
+	mux.HandleFunc("PUT /api/settings/telegram", a.require(a.telegramSetting))
+	mux.HandleFunc("POST /api/settings/telegram/test", a.require(a.telegramTest))
+	mux.HandleFunc("GET /api/monitor", a.require(a.monitorOverview))
+	mux.HandleFunc("GET /api/monitor/{serverId}/records", a.require(a.monitorServerRecords))
+	mux.HandleFunc("GET /api/ping-tasks", a.require(a.pingTasks))
+	mux.HandleFunc("POST /api/ping-tasks", a.require(a.pingTasks))
+	mux.HandleFunc("PATCH /api/ping-tasks/{id}", a.require(a.pingTaskByID))
+	mux.HandleFunc("DELETE /api/ping-tasks/{id}", a.require(a.pingTaskByID))
+	mux.HandleFunc("GET /api/ping-tasks/{id}/records", a.require(a.pingTaskRecords))
 	mux.HandleFunc("GET /api/settings/surge-profile", a.require(a.surgeProfileSetting))
 	mux.HandleFunc("PUT /api/settings/surge-profile", a.require(a.surgeProfileSetting))
 	mux.HandleFunc("GET /api/surge-templates", a.require(a.surgeTemplates))
@@ -184,6 +241,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/servers", a.require(a.servers))
 	mux.HandleFunc("PATCH /api/servers/{id}", a.require(a.serverByID))
 	mux.HandleFunc("DELETE /api/servers/{id}", a.require(a.serverByID))
+	mux.HandleFunc("POST /api/servers/{id}/renew", a.require(a.renewServer))
 	mux.HandleFunc("POST /api/servers/{id}/offline/export", a.require(a.offlineExport))
 	mux.HandleFunc("POST /api/servers/{id}/enrollment", a.require(a.enrollment))
 	mux.HandleFunc("POST /api/servers/{id}/agent/upgrade", a.require(a.agentUpgrade))
@@ -247,6 +305,7 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /s/{token}", a.subscriptionDownload)
 	mux.HandleFunc("POST /agent/enroll", a.agentEnroll)
 	mux.HandleFunc("GET /agent/komari", a.agentAuth(a.agentKomari))
+	mux.HandleFunc("POST /agent/monitor", a.agentAuth(a.agentMonitor))
 	mux.HandleFunc("GET /agent/observed-ipv4", a.agentAuth(a.agentObservedIPv4))
 	mux.HandleFunc("GET /agent/job", a.agentAuth(a.agentJob))
 	mux.HandleFunc("POST /agent/report", a.agentAuth(a.agentReport))

@@ -392,19 +392,104 @@ form.totpBox {
 .totpBox input {
   width: 220px;
 }
-.komariSettingsForm {
+.telegramSettingsCard {
+  margin: 0 0 24px;
+  padding-bottom: 20px;
+  border-bottom: 1px solid var(--line);
+}
+.telegramSettingsCard > h2 + p {
+  margin-bottom: 12px;
+}
+.telegramSettingsForm {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  margin: 12px 0 24px;
+  gap: 14px;
 }
-.komariSettingsForm label,
-.komariSettingsForm small {
-  grid-column: 1 / -1;
+.telegramMasterSwitch {
+  font-weight: 600;
 }
-.komariSettingsForm input {
+.telegramFieldsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+.telegramField {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.telegramField input {
   width: 100%;
   min-width: 0;
+}
+.telegramFieldWide {
+  grid-column: 1 / -1;
+}
+.telegramFieldHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.telegramLinkBtn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font-size: 12px;
+  cursor: pointer;
+}
+.telegramEventsBox {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-subtle, var(--bg));
+}
+.telegramEventsBox legend {
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.telegramEventRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 12px;
+}
+.telegramInlineThreshold {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.telegramInlineThreshold input {
+  width: 62px;
+  padding: 3px 6px;
+}
+.telegramReportLabel {
+  font-size: 13.5px;
+  color: var(--text);
+}
+.telegramReportChecks {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 14px;
+}
+.telegramActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+@media (max-width: 560px) {
+  .telegramFieldsGrid {
+    grid-template-columns: 1fr;
+  }
 }
 .surgeProfileForm {
   display: grid;

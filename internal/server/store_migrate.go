@@ -304,6 +304,26 @@ ARM64 服务器将 amd64 换成 arm64。已是当前构建、Agent 不支持自�
 	{
 		`CREATE INDEX IF NOT EXISTS mui_idx_ops_server_claimed ON mui_operations(server_id,claimed_at)`,
 	},
+	{
+		`CREATE TABLE IF NOT EXISTS mui_alert_state (key TEXT PRIMARY KEY, status TEXT NOT NULL, since_ms BIGINT NOT NULL, updated_ms BIGINT NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS mui_idx_alert_state_updated ON mui_alert_state(updated_ms)`,
+	},
+	{
+		`CREATE TABLE IF NOT EXISTS mui_monitor_hosts (server_id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_ms BIGINT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS mui_monitor_minutes (server_id TEXT NOT NULL, at_ms BIGINT NOT NULL, cpu REAL NOT NULL, load1 REAL NOT NULL, ram_used BIGINT NOT NULL, ram_total BIGINT NOT NULL, swap_used BIGINT NOT NULL, disk_used BIGINT NOT NULL, disk_total BIGINT NOT NULL, net_up BIGINT NOT NULL, net_down BIGINT NOT NULL, net_up_peak BIGINT NOT NULL, net_down_peak BIGINT NOT NULL, total_up BIGINT NOT NULL, total_down BIGINT NOT NULL, tcp INTEGER NOT NULL, udp INTEGER NOT NULL, process INTEGER NOT NULL, PRIMARY KEY(server_id, at_ms))`,
+		`CREATE INDEX IF NOT EXISTS mui_idx_monitor_minutes_at ON mui_monitor_minutes(at_ms)`,
+		`CREATE TABLE IF NOT EXISTS mui_monitor_hours (server_id TEXT NOT NULL, at_ms BIGINT NOT NULL, cpu REAL NOT NULL, load1 REAL NOT NULL, ram_used BIGINT NOT NULL, ram_total BIGINT NOT NULL, swap_used BIGINT NOT NULL, disk_used BIGINT NOT NULL, disk_total BIGINT NOT NULL, net_up BIGINT NOT NULL, net_down BIGINT NOT NULL, net_up_peak BIGINT NOT NULL, net_down_peak BIGINT NOT NULL, total_up BIGINT NOT NULL, total_down BIGINT NOT NULL, tcp INTEGER NOT NULL, udp INTEGER NOT NULL, process INTEGER NOT NULL, PRIMARY KEY(server_id, at_ms))`,
+		`CREATE INDEX IF NOT EXISTS mui_idx_monitor_hours_at ON mui_monitor_hours(at_ms)`,
+		`CREATE TABLE IF NOT EXISTS mui_ping_tasks (id TEXT PRIMARY KEY, data TEXT NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS mui_ping_minutes (task_id TEXT NOT NULL, server_id TEXT NOT NULL, at_ms BIGINT NOT NULL, ms_avg INTEGER NOT NULL, ms_max INTEGER NOT NULL, sent INTEGER NOT NULL, lost INTEGER NOT NULL, PRIMARY KEY(task_id, server_id, at_ms))`,
+		`CREATE INDEX IF NOT EXISTS mui_idx_ping_minutes_at ON mui_ping_minutes(at_ms)`,
+		`DROP TABLE IF EXISTS mui_komari_tokens`,
+		`DELETE FROM mui_settings WHERE key='komari_endpoint'`,
+	},
+	{
+		`CREATE TABLE IF NOT EXISTS mui_server_cycle_traffic (server_id TEXT NOT NULL, cycle_start_ms BIGINT NOT NULL, rx BIGINT NOT NULL, tx BIGINT NOT NULL, PRIMARY KEY(server_id, cycle_start_ms))`,
+		`CREATE INDEX IF NOT EXISTS mui_idx_server_cycle_traffic_start ON mui_server_cycle_traffic(cycle_start_ms)`,
+	},
 }
 
 var dataMigrations = map[int64]func(*sql.Tx, string) error{

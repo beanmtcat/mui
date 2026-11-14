@@ -200,6 +200,7 @@ func (a *App) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: "mui_session", Value: token, Path: "/", HttpOnly: true, Secure: r.TLS != nil || strings.HasPrefix(a.publicURLForRequest(r), "https://"), SameSite: http.SameSiteStrictMode, Expires: expiry})
+	a.notifySecurityEvent("管理员登录成功", a.clientIP(r), "")
 	writeJSON(w, 200, map[string]any{"ok": true, "totpEnabled": totp != ""})
 }
 
@@ -260,6 +261,7 @@ func (a *App) changePassword(w http.ResponseWriter, r *http.Request) {
 	c, _ := r.Cookie("mui_session")
 	_, _ = a.Store.DB.Exec(`DELETE FROM mui_sessions WHERE token_hash<>$1`, Hash(c.Value))
 	a.auditRequest(r, "admin.password", "admin", "")
+	a.notifySecurityEvent("管理员密码已修改", a.clientIP(r), "")
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -281,6 +283,7 @@ func (a *App) totpDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.auditRequest(r, "admin.totp.disable", "admin", "")
+	a.notifySecurityEvent("TOTP 双因素认证已关闭", a.clientIP(r), "")
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }
 
@@ -313,6 +316,7 @@ func (a *App) checkTOTP(r *http.Request, secret, code string) bool {
 	if failures >= 5 {
 		failures, locked = 0, time.Now().Add(5*time.Minute)
 		a.auditRequest(r, "admin.totp.lock", "admin", "5 consecutive wrong codes")
+		a.notifySecurityEvent("TOTP 验证连续失败已锁定", a.clientIP(r), "连续 5 次验证码错误，已锁定 5 分钟")
 	}
 	if err := a.Store.SetTOTPState(lastStep, failures, locked); err != nil {
 		log.Printf("totp state: %v", err)

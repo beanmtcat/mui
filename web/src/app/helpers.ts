@@ -1,13 +1,13 @@
 import {
-  type Certificate, type FirewallRule, type ForwardRule, type Node, type NodeTemplate,
-  type Role, type Route, type Server, roleLabels,
+  type BillingCycle, type Certificate, type FirewallRule, type ForwardRule, type Node, type NodeTemplate,
+  type Role, type Route, type Server, type TrafficLimitType, roleLabels,
 } from "../api";
 
 export type Tab =
-  | "dashboard" | "servers" | "globe" | "nodes" | "templates" | "certificates" | "firewall" | "forwards" | "routes"
+  | "dashboard" | "servers" | "monitor" | "globe" | "nodes" | "templates" | "certificates" | "firewall" | "forwards" | "routes"
   | "subscriptions" | "surge-templates" | "customers" | "accesses" | "connections" | "operations" | "audit" | "help" | "settings";
 export type TemplateForm = Partial<NodeTemplate> & { password?: string; shadowTlsPassword?: string };
-export type ServerForm = Partial<Server> & { komariToken?: string };
+export type ServerForm = Partial<Server>;
 export type NodeForm = Partial<Node> & { password?: string; shadowTlsPassword?: string };
 export type RuleForm = Partial<FirewallRule> & { replaceHostRule?: string };
 export type CertificateForm = Partial<Certificate>;
@@ -31,6 +31,17 @@ export const emptyServer: Partial<Server> = {
   ipv6: "",
   autoSyncPublicIp: false,
   domain: "",
+  price: 0,
+  currency: "$",
+  billingCycle: "",
+  billingCycleDays: 0,
+  autoRenew: false,
+  trafficLimit: 0,
+  trafficLimitType: "sum",
+  trafficResetDay: 0,
+  group: "",
+  sortWeight: 0,
+  alertMuted: false,
 };
 export const googleBlockedDomains = [
   "google.com", "google.co.jp", "google.com.hk", "google.cn", "googleapis.com", "gstatic.com", "googleusercontent.com",
@@ -244,3 +255,185 @@ export const parseTargets = (text: string): ForwardRule["targets"] =>
     const m = line.match(/^\[(.+)\]:(\d+)$/) || line.match(/^([^:]+):(\d+)$/);
     return m ? { host: m[1], port: Number(m[2]) } : { host: line, port: 0 };
   });
+
+const zhCollator = new Intl.Collator("zh-Hans-CN", { numeric: true, sensitivity: "base" });
+
+export const UNGROUPED_LABEL = "未分组";
+export const UNGROUPED_FILTER = "__ungrouped__";
+
+export const billingCycleLabels: Record<Exclude<BillingCycle, "">, string> = {
+  month: "月付",
+  quarter: "季付",
+  halfyear: "半年付",
+  year: "年付",
+  "2year": "两年付",
+  "3year": "三年付",
+  days: "按天自定义",
+};
+
+export const trafficLimitTypeLabels: Record<TrafficLimitType, string> = {
+  sum: "双向合计（上行 + 下行）",
+  up: "仅上行",
+  down: "仅下行",
+  max: "双向取大者",
+  min: "双向取小者",
+};
+
+export const trafficLimitTypeShortLabels: Record<TrafficLimitType, string> = {
+  sum: "上行+下行",
+  up: "仅上行",
+  down: "仅下行",
+  max: "较大方向",
+  min: "较小方向",
+};
+
+export function formatBillingCycle(server: Pick<Server, "billingCycle" | "billingCycleDays">): string {
+  const c = server.billingCycle || "";
+  if (!c) return "";
+  if (c === "days") return server.billingCycleDays ? `每 ${server.billingCycleDays} 天` : "按天";
+  return billingCycleLabels[c] || c;
+}
+
+export function serverGroupName(server: Pick<Server, "group">): string {
+  return server.group?.trim() || UNGROUPED_LABEL;
+}
+
+export function serverGroupFilterOptions(servers: Server[]): { value: string; label: string }[] {
+  const named = new Set<string>();
+  let hasUngrouped = false;
+  for (const s of servers) {
+    const g = s.group?.trim() || "";
+    if (!g || g === UNGROUPED_LABEL) {
+      hasUngrouped = true;
+    } else {
+      named.add(g);
+    }
+  }
+  const out = [...named].sort((a, b) => zhCollator.compare(a, b)).map((g) => ({ value: g, label: g }));
+  if (hasUngrouped) {
+    out.push({ value: UNGROUPED_FILTER, label: UNGROUPED_LABEL });
+  }
+  return out;
+}
+
+export function matchesServerGroupFilter(server: Pick<Server, "group">, filter: string): boolean {
+  if (!filter) return true;
+  const g = server.group?.trim() || "";
+  if (filter === UNGROUPED_FILTER) return !g || g === UNGROUPED_LABEL;
+  return g === filter;
+}
+
+export function compareServerDefault(a: Server, b: Server): number {
+  const wa = a.sortWeight ?? 0;
+  const wb = b.sortWeight ?? 0;
+  if (wb !== wa) return wb - wa;
+  return zhCollator.compare(a.name || "", b.name || "");
+}
+
+export function groupAndSortServers(
+  servers: Server[],
+  customSort?: (rows: Server[]) => Server[],
+): { group: string; items: Server[] }[] {
+  const map = new Map<string, Server[]>();
+  for (const s of servers) {
+    const g = serverGroupName(s);
+    const list = map.get(g);
+    if (list) list.push(s);
+    else map.set(g, [s]);
+  }
+  const groups = [...map.keys()].sort((a, b) => {
+    if (a === UNGROUPED_LABEL) return b === UNGROUPED_LABEL ? 0 : 1;
+    if (b === UNGROUPED_LABEL) return -1;
+    return zhCollator.compare(a, b);
+  });
+  return groups.map((group) => {
+    const raw = map.get(group) || [];
+    const items = customSort ? customSort(raw) : [...raw].sort(compareServerDefault);
+    return { group, items };
+  });
+}
+
+export function formatServerExpiry(expiresAt: string | undefined): {
+  dateStr: string;
+  remainText: string;
+  fullText: string;
+  tone: "neutral" | "warn" | "bad";
+} | null {
+  if (!expiresAt) return null;
+  const exp = new Date(expiresAt);
+  if (Number.isNaN(exp.getTime())) return null;
+  const dateStr = expiresAt.slice(0, 10);
+  const diffMs = exp.getTime() - Date.now();
+  if (diffMs <= 0) {
+    const daysAgo = Math.floor(-diffMs / 86400000);
+    const remainText = daysAgo > 0 ? `已过期 ${daysAgo} 天` : "已过期";
+    return {
+      dateStr,
+      remainText,
+      fullText: `${dateStr} · ${remainText}`,
+      tone: "bad",
+    };
+  }
+  const remainDays = Math.max(1, Math.ceil(diffMs / 86400000));
+  const remainText = `剩 ${remainDays} 天`;
+  return {
+    dateStr,
+    remainText,
+    fullText: `到期 ${dateStr} · ${remainText}`,
+    tone: diffMs <= 7 * 86400000 ? "warn" : "neutral",
+  };
+}
+
+export function cycleTrafficTone(used: number, limit: number, threshold?: number): "" | "warning" | "danger" {
+  if (limit <= 0) return "";
+  const pct = (used / limit) * 100;
+  if (pct >= 100) return "danger";
+  const effectiveThreshold = typeof threshold === "number" && threshold >= 50 && threshold <= 100 ? threshold : 80;
+  if (pct >= effectiveThreshold) return "warning";
+  return "";
+}
+
+export function formatMonthlyCostSummary(servers: Server[]): string {
+  const totals = new Map<string, number>();
+  for (const s of servers) {
+    if (s.status === "revoked") continue;
+    const price = s.price ?? 0;
+    if (!(price > 0) || !s.billingCycle) continue;
+    let monthly = 0;
+    switch (s.billingCycle) {
+      case "month":
+        monthly = price;
+        break;
+      case "quarter":
+        monthly = price / 3;
+        break;
+      case "halfyear":
+        monthly = price / 6;
+        break;
+      case "year":
+        monthly = price / 12;
+        break;
+      case "2year":
+        monthly = price / 24;
+        break;
+      case "3year":
+        monthly = price / 36;
+        break;
+      case "days": {
+        const d = s.billingCycleDays ?? 0;
+        if (d > 0) monthly = (price * 30) / d;
+        break;
+      }
+    }
+    if (monthly > 0) {
+      const cur = (s.currency || "$").trim() || "$";
+      totals.set(cur, (totals.get(cur) || 0) + monthly);
+    }
+  }
+  if (totals.size === 0) return "";
+  const parts = [...totals.entries()].map(([cur, amount]) => {
+    const sep = /^[A-Za-z]+$/.test(cur) ? " " : "";
+    return `${cur}${sep}${amount.toFixed(2)}`;
+  });
+  return `每月约 ${parts.join(" · ")}`;
+}

@@ -10,9 +10,22 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"mui/internal/shared"
 )
+
+func validateServerPublicFields(publicName, publicNote string) (string, string, error) {
+	name := strings.TrimSpace(publicName)
+	if utf8.RuneCountInString(name) > 80 {
+		return "", "", errors.New("公开名称不能超过 80 个字符")
+	}
+	note := strings.TrimSpace(publicNote)
+	if utf8.RuneCountInString(note) > 200 {
+		return "", "", errors.New("公开备注不能超过 200 个字符")
+	}
+	return name, note, nil
+}
 
 func validServerID(id string) bool {
 	if len(id) == 0 || len(id) > 64 {
@@ -56,31 +69,27 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
-		komariTokens, err := a.Store.KomariTokenFlags()
+		cycleMap, err := a.Store.CycleTrafficMap(list, a.nowMonitorUTC())
 		if err != nil {
 			errorJSON(w, 500, err.Error())
 			return
 		}
 		for i := range list {
 			list[i].Status = serverStatus(list[i])
-			list[i].KomariTokenSet = komariTokens[list[i].ID]
+			ct := cycleMap[list[i].ID]
+			list[i].CycleTraffic = &ct
 		}
 		paginateList(w, r, list, func(s shared.Server) string { return s.ID })
 		return
 	}
-	var input serverInput
-	if !readJSON(w, r, &input) {
+	var in shared.Server
+	if !readJSON(w, r, &in) {
 		return
 	}
-	in := input.Server
-	komariToken := ""
-	if input.KomariToken != nil {
-		var err error
-		komariToken, err = validateKomariToken(*input.KomariToken)
-		if err != nil {
-			errorJSON(w, 400, err.Error())
-			return
-		}
+	publicName, publicNote, err := validateServerPublicFields(in.PublicName, in.PublicNote)
+	if err != nil {
+		errorJSON(w, 400, err.Error())
+		return
 	}
 	if !shared.ValidFirewallMode(in.FirewallMode) {
 		errorJSON(w, 400, "防火墙管理模式无效")
@@ -98,9 +107,14 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		ID: ID(), Name: in.Name, Roles: roles,
 		Country: strings.ToUpper(in.Country), Region: in.Region, City: in.City,
 		Provider: in.Provider, Tags: in.Tags, Notes: in.Notes,
+		PublicNote: publicNote, PublicVisible: in.PublicVisible, PublicName: publicName,
 		IPv4: in.IPv4, IPv6: in.IPv6, Domain: in.Domain, AutoSyncPublicIP: in.AutoSyncPublicIP, InternalAddress: strings.TrimSpace(in.InternalAddress), OutboundInterface: strings.TrimSpace(in.OutboundInterface),
 		Status: "pending", UFWStatus: "unknown",
 		FirewallMode: in.FirewallMode, ManagementMode: in.ManagementMode, AgentProxyNodeID: in.AgentProxyNodeID, AgentProxyInternal: in.AgentProxyInternal, AgentProxySourceMode: in.AgentProxySourceMode,
+	}
+	if err = applyServerBillingFields(&srv, in, nil, nil); err != nil {
+		errorJSON(w, 400, err.Error())
+		return
 	}
 	if err = shared.ValidateOutboundInterface(srv.OutboundInterface); err != nil {
 		errorJSON(w, 400, err.Error())
@@ -122,10 +136,6 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, err.Error())
 		return
 	}
-	if shared.ExternalManaged(srv) && komariToken != "" {
-		errorJSON(w, 400, "外部节点服务器不运行 Komari Agent")
-		return
-	}
 	if err := a.validateAgentProxySelection(srv); err != nil {
 		errorJSON(w, 409, err.Error())
 		return
@@ -139,14 +149,6 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		errorJSON(w, 500, err.Error())
 		return
-	}
-	if komariToken != "" {
-		if err := a.Store.SetKomariToken(srv.ID, komariToken); err != nil {
-			_, _ = a.Store.DB.Exec(`DELETE FROM mui_servers WHERE id=$1`, srv.ID)
-			errorJSON(w, 500, err.Error())
-			return
-		}
-		srv.KomariTokenSet = true
 	}
 	a.auditRequest(r, "server.create", srv.ID, srv.Name)
 	if srv.AgentProxyNodeID != "" {
@@ -217,20 +219,31 @@ func (a *App) purgeServer(id string) error {
 			return err
 		}
 	}
+	if err = a.Store.DeleteServerMonitorTx(tx, id); err != nil {
+		return err
+	}
 	for _, stmt := range []string{
 		`DELETE FROM mui_nodes WHERE server_id=$1`, `DELETE FROM mui_firewall_rules WHERE server_id=$1`, `DELETE FROM mui_forwards WHERE server_id=$1`,
-		`DELETE FROM mui_operations WHERE server_id=$1`, `DELETE FROM mui_server_traffic WHERE server_id=$1`, `DELETE FROM mui_server_totals WHERE server_id=$1`, `DELETE FROM mui_server_applied WHERE server_id=$1`,
+		`DELETE FROM mui_operations WHERE server_id=$1`, `DELETE FROM mui_server_traffic WHERE server_id=$1`, `DELETE FROM mui_server_totals WHERE server_id=$1`, `DELETE FROM mui_server_cycle_traffic WHERE server_id=$1`, `DELETE FROM mui_server_applied WHERE server_id=$1`,
 		`DELETE FROM mui_connection_ips WHERE server_id=$1`, `DELETE FROM mui_entry_connection_ips WHERE server_id=$1`,
-		`DELETE FROM mui_komari_tokens WHERE server_id=$1`, `DELETE FROM mui_servers WHERE id=$1`,
+		`DELETE FROM mui_servers WHERE id=$1`,
 	} {
 		if _, err = tx.Exec(stmt, id); err != nil {
 			return err
 		}
 	}
+	if err = a.Store.DeleteServerAlertStatesTx(tx, id); err != nil {
+		return err
+	}
 	if err = a.dropFromSubscriptionsTx(tx, ids); err != nil {
 		return err
 	}
-	return tx.Commit()
+	if err = tx.Commit(); err != nil {
+		return err
+	}
+	a.clearServerResourcePending(id)
+	a.clearServerMonitorState(id)
+	return nil
 }
 
 // dropFromSubscriptionsTx is dropFromSubscriptions inside an existing
@@ -385,19 +398,18 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]bool{"ok": true})
 		return
 	}
-	var input serverInput
-	if !readJSON(w, r, &input) {
+	var patchIn struct {
+		shared.Server
+		InitialExpiresAt optionalTimeField `json:"initialExpiresAt"`
+	}
+	if !readJSON(w, r, &patchIn) {
 		return
 	}
-	in := input.Server
-	var komariToken *string
-	if input.KomariToken != nil {
-		clean, err := validateKomariToken(*input.KomariToken)
-		if err != nil {
-			errorJSON(w, 400, err.Error())
-			return
-		}
-		komariToken = &clean
+	in := patchIn.Server
+	publicName, publicNote, err := validateServerPublicFields(in.PublicName, in.PublicNote)
+	if err != nil {
+		errorJSON(w, 400, err.Error())
+		return
 	}
 	if in.ManagementMode == "" {
 		in.ManagementMode = old.ManagementMode
@@ -487,10 +499,6 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, err.Error())
 		return
 	}
-	if shared.ExternalManaged(old) && komariToken != nil && *komariToken != "" {
-		errorJSON(w, 400, "外部节点服务器不运行 Komari Agent")
-		return
-	}
 	old.InternalAddress = in.InternalAddress
 	old.Country = strings.ToUpper(in.Country)
 	old.Region = in.Region
@@ -498,6 +506,13 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 	old.Provider = in.Provider
 	old.Tags = in.Tags
 	old.Notes = in.Notes
+	if err := applyServerBillingFields(&old, in, &before, &patchIn.InitialExpiresAt); err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
+	old.PublicNote = publicNote
+	old.PublicVisible = in.PublicVisible
+	old.PublicName = publicName
 	old.IPv4 = in.IPv4
 	old.IPv6 = in.IPv6
 	old.Domain = in.Domain
@@ -551,19 +566,6 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
-	if komariToken != nil {
-		if err := a.Store.SetKomariToken(id, *komariToken); err != nil {
-			errorJSON(w, 500, err.Error())
-			return
-		}
-		a.auditRequest(r, "server.komari-token", id, map[bool]string{true: "已设置", false: "已清除"}[*komariToken != ""])
-	}
-	flags, err := a.Store.KomariTokenFlags()
-	if err != nil {
-		errorJSON(w, 500, err.Error())
-		return
-	}
-	old.KomariTokenSet = flags[id]
 	if outboundChanged {
 		if err = a.markOutboundChangePending(before, old); err != nil {
 			errorJSON(w, 500, err.Error())
@@ -580,6 +582,19 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 	// The document write is complete; release before reconciling routes.
 	unlock()
 	unlock = nil
+	now := a.nowMonitorUTC()
+	loc := a.Store.timeLocation()
+	if before.ExpiresAt != nil && (old.ExpiresAt == nil || !before.ExpiresAt.Equal(*old.ExpiresAt)) {
+		_ = a.Store.DeleteServerExpiryStatesForDate(id, formatExpiryDate(*before.ExpiresAt, loc))
+	}
+	oldCycleStart, _ := serverTrafficCycleBounds(before, now, loc)
+	newCycleStart, _ := serverTrafficCycleBounds(old, now, loc)
+	if !oldCycleStart.Equal(newCycleStart) {
+		if err = a.Store.RecalcServerCurrentCycleTraffic(old, now); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+	}
 	// An external server's address is the egress address of nodes that
 	// send their traffic through its SOCKS5 nodes.
 	if shared.ExternalManaged(old) && (before.Domain != old.Domain || before.IPv4 != old.IPv4 || before.IPv6 != old.IPv6) {
@@ -602,5 +617,10 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.auditRequest(r, "server.update", id, old.Name)
+	old.Status = serverStatus(old)
+	if cycleMap, err := a.Store.CycleTrafficMap([]shared.Server{old}, now); err == nil {
+		ct := cycleMap[old.ID]
+		old.CycleTraffic = &ct
+	}
 	writeJSON(w, 200, old)
 }

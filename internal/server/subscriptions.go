@@ -206,6 +206,7 @@ func (a *App) subscriptionByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_, _ = a.Store.DB.Exec(`DELETE FROM mui_subscription_expiry_applied WHERE subscription_id=$1`, id)
+		_ = a.Store.DeleteSubscriptionAlertStates(id)
 		if err = a.queueSubscriptionsApply(*old); err != nil {
 			errorJSON(w, 500, err.Error())
 			return

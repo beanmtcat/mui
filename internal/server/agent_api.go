@@ -612,6 +612,7 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		server.ShadowTLSAuth = in.ShadowTLSAuth
 		server.SnellFixedPort = in.SnellFixedPort
 		server.SnellV6 = in.SnellV6 && shared.VersionAtLeast(in.AgentVersion, "0.6.11")
+		server.HostMonitor = in.HostMonitor
 		server.OutboundBindingSupport = in.OutboundBindingSupport && shared.VersionAtLeast(in.AgentVersion, "0.6.12")
 		server.AgentProxySupport = in.AgentProxySupport
 		server.ReleaseKeyPinned = in.ReleaseKeyPinned
@@ -798,6 +799,12 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			errorJSON(w, 500, err.Error())
 			return
+		}
+		if in.JobStatus == "failed" {
+			failedOp := op
+			failedOp.Status = in.JobStatus
+			failedOp.Error = in.JobError
+			a.notifyApplyFailed(server, failedOp)
 		}
 		if op.Kind == "core.upgrade" && in.JobStatus == "success" && !shared.CanHostNodes(server) {
 			// Transit already supports nodes. Other roles become an exit when

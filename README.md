@@ -80,22 +80,22 @@ CREATE DATABASE mui WITH OWNER mui ENCODING 'UTF8';
 1. 复制 `deploy/.env.example` 为 `deploy/.env`，填写 `MUI_PUBLIC_URL`（对外的 `https://` 地址），以及已有数据库的 `MUI_DB_HOST`、`MUI_DB_PORT`、`MUI_DB_NAME`、`MUI_DB_USER`、`MUI_DB_PASSWORD` 和 `MUI_DB_SSLMODE`。在数据库中提前创建库和用户（见上文 SQL）；独立生成 `MUI_SECRET` 和管理员密码。`MUI_SECRET` 必须稳定保存，丢失后数据库中的节点密钥与证书私钥无法解密。
    数据库地址必须从容器内可访问：宿主机 PostgreSQL 可填 `host.docker.internal`（Compose 已配置 Linux 宿主机映射），其他服务器填其内网 IP 或域名。`127.0.0.1` 在容器内指后端容器自身。PostgreSQL 需监听对应网卡并允许该客户端连接；不使用数据库 TLS 的可信内网实例可将 `MUI_DB_SSLMODE` 设为 `disable`。
 2. 保持 `MUI_BIND=127.0.0.1:8086`。在已有外层 Nginx 的面板域名 HTTPS `server` 块中加入 `deploy/nginx/mui-edge.location.conf` 的转发配置（已有 `location /` 时替换该块），检查 `nginx -t` 后重载外层 Nginx。证书及 HTTPS 跳转继续由外层管理；内层不配置证书。远程 Agent 访问外部 HTTPS 地址。外层默认与前端容器在同一台主机；若在另一台主机或容器，调整上游地址和 `MUI_BIND`，并将内层入口限制为仅外层可访问。
-3. 在有 Docker Buildx 的构建机运行 `deploy/build-agent.sh amd64` 和/或 `deploy/build-agent.sh arm64`。脚本默认构建 Agent 0.6.30 和 sing-box v1.14.4；第二个参数指定 sing-box 的 `vX.Y.Z` 版本，第三个参数指定 Agent 的 `X.Y.Z` 正式版本（如 `deploy/build-agent.sh amd64 v1.14.4 0.6.30`）。构建脚本要求 Git 工作区干净、提交中的 Agent 版本与指定版本一致，并使用已修复 CVE-2026-111943 的 Go 1.26.10 编译 Agent 与 sing-box。脚本构建带 `with_v2ray_api`、`with_clash_api` 的核心，同时构建 Agent，并生成 `SHA256SUMS`。默认的 sing-box v1.14.4 构建会应用 ShadowTLS v3 大响应分帧补丁；指定其他 sing-box 版本时不应用该补丁。构建后可用 `deploy/test-shadowtls-transfer.sh bin/amd64/sing-box` 在无外网、无宿主机端口的容器中验证默认 2 MiB 传输；设置 `MUI_SHADOWTLS_TEST_BYTES=268435456` 可验证 256 MiB 传输及 SHA-256。默认本地发布模式把所需架构的整个 `bin/<架构>/` 目录放到**面板服务器**的仓库 `bin/` 下；GitHub 直下模式见下节。
+3. 在有 Docker Buildx 的构建机运行 `deploy/build-agent.sh amd64` 和/或 `deploy/build-agent.sh arm64`。脚本默认构建 Agent 0.6.31 和 sing-box v1.14.4；第二个参数指定 sing-box 的 `vX.Y.Z` 版本，第三个参数指定 Agent 的 `X.Y.Z` 正式版本（如 `deploy/build-agent.sh amd64 v1.14.4 0.6.31`）。构建脚本要求 Git 工作区干净、提交中的 Agent 版本与指定版本一致，并使用已修复 CVE-2026-111943 的 Go 1.26.10 编译 Agent 与 sing-box。脚本构建带 `with_v2ray_api`、`with_clash_api` 的核心，同时构建 Agent，并生成 `SHA256SUMS`。默认的 sing-box v1.14.4 构建会应用 ShadowTLS v3 大响应分帧补丁；指定其他 sing-box 版本时不应用该补丁。构建后可用 `deploy/test-shadowtls-transfer.sh bin/amd64/sing-box` 在无外网、无宿主机端口的容器中验证默认 2 MiB 传输；设置 `MUI_SHADOWTLS_TEST_BYTES=268435456` 可验证 256 MiB 传输及 SHA-256。默认本地发布模式把所需架构的整个 `bin/<架构>/` 目录放到**面板服务器**的仓库 `bin/` 下；GitHub 直下模式见下节。
 4. 在 `deploy` 目录运行 `docker compose --env-file .env -f compose.yaml up -d --build`。内层 Nginx 提供页面及接口代理，Go 容器只读挂载 `../bin`，通过 Nginx 的 `/download/` 路径提供安装脚本和构建产物。当前 Compose 使用已有的外部网络 `docker_default`，启动前需确认网络存在。用 `docker network inspect docker_default --format '{{json .IPAM.Config}}'` 查看真实网段和网关；`MUI_PROXY_SUBNET` 仅作为 Go 的默认可信代理范围，填写实际网段或单独设置 `MUI_TRUSTED_PROXIES`，修改它不会创建或更改外部网络。`MUI_EDGE_PROXY_CIDR` 则填写外层 Nginx 的实际来源地址。
 5. 目标机支持 Ubuntu 22.04/24.04/26.04、Debian 11/12/13（systemd），以及 Alpine 3.19+（OpenRC），需要 OpenSSH、`curl`、`sha256sum` 和 `ss`；GitHub 直下模式还需要 `tar`。Debian 11 从 Agent 0.6.20 起支持；0.6.19 的发行版检查仍会拒绝它。Debian 11 已结束官方 LTS 安全更新，建议升级至 Debian 12/13；若仍使用 Debian 11，应自行安排 Extended LTS。Alpine 依赖安装、服务管理及小内存机器优化见 [Agent 运维说明](docs/agent-operations.md)。UFW 托管时需安装 UFW（`apt-get install ufw`）；手动管理无需 UFW，安装 iproute2 提供 `ss`。Agent 0.6.3 起同时核对实际 SSH TCP 监听、SSH socket 和 `sshd -T` 配置，无法确认实际监听时拒绝初始化 UFW。LXC 内按容器真实监听端口放行，不能将宿主机映射端口当作容器端口。面板新建服务器时选择类型：带落地类型的下载并安装 Agent 与 sing-box；只做入口、线路、中转的只下载 Agent，不创建 sing-box 账户或服务。在目标机执行显示的一次性接入命令；命令先从面板获取小型安装脚本，再通过标准输入传递一次性接入 token；token 不会放进子进程参数，不需要手动设置环境变量。构建文件按已配置的发布模式从面板或 GitHub 下载，按 `SHA256SUMS` 和已配置的发布签名校验后安装。令牌 10 分钟有效；超时可重新生成。面板的 `MUI_PUBLIC_URL` 在面板服务器的 `.env` 中配置，必须是目标机可访问的 HTTPS 地址。
 6. Agent 上线后，UFW 托管服务器在面板执行“初始化 UFW”；手动管理服务器跳过此步，自行配置宿主机或安全组放行。启用 UFW 会按默认策略拒绝 SSH 以外的入站连接；机器上若有别的对外服务，初始化后立即在防火墙页为它们添加允许规则。若机器上 firewalld、nftables、netfilter-persistent 或 shorewall 正在运行，Agent 会拒绝写入 UFW 并在面板提示冲突。AnyTLS 先上传对应域名的 PEM 证书链和私钥。端口从云安全组放行后才能从公网访问。
 
 ### 从 GitHub Release 直接下载 Agent
 
-设置 `MUI_AGENT_RELEASE_VERSION=0.6.30` 后，在线接入命令仍从**当前面板**获取 `/download/install.sh`，脚本按第七个参数指定的版本让**目标服务器直接**从 GitHub Release 下载对应架构的压缩包并验证签名、哈希。Agent 0.6.19 起的一键升级也从 GitHub 下载。面板只读取 Release 中独立的 `SHA256SUMS` 和 `SHA256SUMS.sig`，先验签再显示可用构建，不再下载整份归档，也不向目标服务器提供二进制；`/download/<架构>/...` 在此模式下返回 404。接入和任务通信仍走面板。
+设置 `MUI_AGENT_RELEASE_VERSION=0.6.31` 后，在线接入命令仍从**当前面板**获取 `/download/install.sh`，脚本按第七个参数指定的版本让**目标服务器直接**从 GitHub Release 下载对应架构的压缩包并验证签名、哈希。Agent 0.6.19 起的一键升级也从 GitHub 下载。面板只读取 Release 中独立的 `SHA256SUMS` 和 `SHA256SUMS.sig`，先验签再显示可用构建，不再下载整份归档，也不向目标服务器提供二进制；`/download/<架构>/...` 在此模式下返回 404。接入和任务通信仍走面板。
 
 目标服务器必须能访问 GitHub Release；访问不了时，为该服务器配置 Agent SOCKS5 代理，或使用“手工安装”把同一 Release 的归档上传到服务器。面板请求最多等待 20 秒，后台读取最多运行 5 分钟；成功后缓存哈希，失败后五分钟内复用错误。旧的 `v0.6.18`、`v0.6.19`、`v0.6.20` 标签指向未包含 GitHub 分发代码的提交，不应再用于在线接入。
 
 发布顺序：
 
-1. 在包含安装脚本和 Agent 0.6.30 代码的**干净提交**上构建并签名 amd64、arm64：`./deploy/build-agent.sh amd64 v1.14.4 0.6.30` 和 `./deploy/build-agent.sh arm64 v1.14.4 0.6.30`。脚本同时导出每个架构的签名清单供面板查询；归档内也保留同一份清单。已固定发布公钥的 Agent 必须继续使用同一私钥。
-2. 运行 `./deploy/release-agent.sh 0.6.30`；脚本检查工作区干净、提交内的 Agent 版本号和标签相同，再创建标签与 GitHub Release。确认两个归档均可下载，且标签指向构建所用的提交。
-3. 然后把面板服务器 `deploy/.env` 中的 `MUI_AGENT_RELEASE_VERSION` 改为 `0.6.30`，确认 `MUI_RELEASE_PUBLIC_KEY` 与签名私钥匹配，再发布面板。版本号必须与 Release 标签一致；无需 `--with-agent`。未升级到支持 GitHub 下载的旧 Agent 需用新接入命令重装一次。
+1. 在包含安装脚本和 Agent 0.6.31 代码的**干净提交**上构建并签名 amd64、arm64：`./deploy/build-agent.sh amd64 v1.14.4 0.6.31` 和 `./deploy/build-agent.sh arm64 v1.14.4 0.6.31`。脚本同时导出每个架构的签名清单供面板查询；归档内也保留同一份清单。已固定发布公钥的 Agent 必须继续使用同一私钥。
+2. 运行 `./deploy/release-agent.sh 0.6.31`；脚本检查工作区干净、提交内的 Agent 版本号和标签相同，再创建标签与 GitHub Release。确认两个归档均可下载，且标签指向构建所用的提交。
+3. 然后把面板服务器 `deploy/.env` 中的 `MUI_AGENT_RELEASE_VERSION` 改为 `0.6.31`，确认 `MUI_RELEASE_PUBLIC_KEY` 与签名私钥匹配，再发布面板。版本号必须与 Release 标签一致；无需 `--with-agent`。未升级到支持 GitHub 下载的旧 Agent 需用新接入命令重装一次。
 
 版本号固定到一个 Release，不会自动跟随 `latest`。发布后不要重新打包或替换归档，否则已缓存的摘要和服务器下载的文件可能不一致。
 
@@ -204,7 +204,7 @@ Go 后端可直接通过 `go run ./cmd/server` 或编译后的二进制运行，
 
 Agent 独立安装并运行 `mui-agent-helper.service`（root，仅接受本机 Agent 的白名单操作）和 `mui-agent.service`（账户 `mui-agent`），无需 sing-box 或转发进程。添加第一条启用的转发规则后，Agent 才创建并启动 `mui-forward.service`（账户 `mui-forward`）；最后一条规则停用或删除后，服务会停止并禁用。落地服务器另安装 `mui-sing-box.service`（账户 `mui-core`）；中转服务器建节点时可按需安装该核心。排查时可用 `journalctl -u mui-agent -u mui-agent-helper -f`，有转发时再加 `-u mui-forward`，落地服务器再加 `-u mui-sing-box`。Agent 配置在 `/etc/mui-agent`，核心配置与证书在 `/etc/mui-core`，转发配置在 `/etc/mui-forward`，统计缓存在 `/var/lib/mui-agent`。已有 PostgreSQL 的备份与恢复见下文“备份与恢复”。
 
-同一 `mui-agent` 进程还可向 Komari 面板上报监控数据并执行 TCP Ping，无需另起 `komari-agent`。在左侧“设置”填写全局 Komari 地址，在各服务器配置中填写对应 token；Agent 安装后自动领取，没有 token 就不启动 Komari 上报。安全范围见 [Komari 接入说明](docs/komari-agent.md)。
+同一 `mui-agent` 进程内置主机监控上报与公网 TCP Ping 延迟监测，直接汇报给 MUI 面板（不再需要单独部署外部监控服务）。监控循环与配置任务轮询相互独立；TCP Ping 目标只允许公网地址。
 
 在线中转服务器也可创建节点：先在服务器列表或新建节点弹窗点击“安装 sing-box”，成功后保留中转类型，节点支持订阅并可作为链路终点。纯转发中转接入时仍只安装 Agent。入口、线路服务器点击“安装 sing-box 并设为落地”后会添加落地类型。有节点时必须保留中转或落地类型，已安装的 sing-box 不会自动卸载。
 
@@ -230,7 +230,7 @@ Agent **0.6.15** 起（修复 0.6.14 的所有来源规则冲突），UFW 托管
 | `MUI_DB_URL` | 可选完整连接 URL，优先于上述分项配置；未配置任何 PostgreSQL 参数时使用 SQLite `data/mui.db` |
 | `MUI_PUBLIC_URL` | 对外 HTTPS 地址，支持逗号分隔多个；第一个为默认，链接随当前已配置域名生成，见“多域名访问” |
 | `MUI_AGENT_BIN_DIR` | 安装文件目录，默认 `bin`；按 `amd64`、`arm64` 子目录存放三个构建产物 |
-| `MUI_AGENT_RELEASE_VERSION` | 设置如 `0.6.30` 后启用 GitHub Release 直下；要求 `MUI_RELEASE_PUBLIC_KEY`，目标服务器直接下载对应版本的归档，面板不再提供二进制下载 |
+| `MUI_AGENT_RELEASE_VERSION` | 设置如 `0.6.31` 后启用 GitHub Release 直下；要求 `MUI_RELEASE_PUBLIC_KEY`，目标服务器直接下载对应版本的归档，面板不再提供二进制下载 |
 | `MUI_LISTEN` | Go 后端监听地址，生产容器为 `:8087`；本地开发使用 `127.0.0.1:8080` |
 | `MUI_BIND` | Nginx 前端 HTTP 的宿主机端口映射，默认 `127.0.0.1:8086` → Nginx 容器 `:8086`，供已有外层 Nginx 转发 |
 | `MUI_BACKEND_URL` | Nginx 的 Go 上游地址，默认 `http://mui-service:8087`；可指向另一台服务器，不加末尾斜线 |
@@ -241,7 +241,7 @@ Agent **0.6.15** 起（修复 0.6.14 的所有来源规则冲突），UFW 托管
 | `MUI_TLS_CERT` / `MUI_TLS_KEY` | Go 二进制直接运行时可选的后端 HTTPS 证书；标准部署的公网 TLS 由已有外层 Nginx 提供 |
 | `MUI_TRUSTED_PROXIES` | 逗号分隔的反向代理 IP 或 CIDR；仅来自这些地址的 `X-Forwarded-For` 会被采信 |
 | `MUI_RELEASE_PUBLIC_KEY` | 发布签名公钥（见下文“发布签名”）。设置后接入命令会让 Agent 固定该公钥，面板也只提供带有效签名的构建 |
-| `MUI_TRAFFIC_RETENTION_DAYS` | 原始流量采样、订阅访问与节点连接 IP 保留天数，默认 90（最少 32），`0` 为永久保留；累计流量不受影响 |
+| `MUI_TRAFFIC_RETENTION_DAYS` | 原始流量采样、主机监控按小时记录、订阅访问与节点连接 IP 保留天数，默认 90（最少 32），`0` 为永久保留；累计流量不受影响 |
 
 Agent 与面板通过 HTTPS 加随机 256 位 Agent 令牌鉴权；接入令牌仅使用一次。面板数据路径 `/api`、订阅 `/s/{token}`、Agent `/agent`，安装文件 `/download` 为公开只读路径且不包含接入令牌。不要将面板直接暴露为明文 HTTP。
 

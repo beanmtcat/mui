@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -180,6 +181,9 @@ func (s *Store) SaveUserTraffic(serverID string, points []shared.UserTrafficPoin
 }
 
 func (s *Store) SaveServerTraffic(serverID string, points []shared.ServerTrafficPoint) error {
+	unlock := s.lockCycleTraffic(serverID)
+	defer unlock()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -187,6 +191,18 @@ func (s *Store) SaveServerTraffic(serverID string, points []shared.ServerTraffic
 		return err
 	}
 	defer tx.Rollback()
+
+	var srv shared.Server
+	var rawSrv string
+	if scanErr := tx.QueryRowContext(ctx, `SELECT data FROM mui_servers WHERE id=$1`, serverID).Scan(&rawSrv); scanErr == nil {
+		_ = json.Unmarshal([]byte(rawSrv), &srv)
+	} else if !errors.Is(scanErr, sql.ErrNoRows) {
+		return scanErr
+	}
+	loc := s.timeLocation()
+	cycleDelta := map[int64][2]int64{}
+	var cycleOrder []int64
+
 	for _, p := range points {
 		if p.BootID == "" || len(p.BootID) > 128 || p.Interface == "" || len(p.Interface) > 128 || p.Sequence <= 0 || p.Rx < 0 || p.Tx < 0 || p.At.IsZero() {
 			continue
@@ -199,6 +215,24 @@ func (s *Store) SaveServerTraffic(serverID string, points []shared.ServerTraffic
 			continue
 		}
 		if _, err = tx.ExecContext(ctx, `INSERT INTO mui_server_totals(server_id,rx,tx) VALUES($1,$2,$3) ON CONFLICT(server_id) DO UPDATE SET rx=mui_server_totals.rx+excluded.rx,tx=mui_server_totals.tx+excluded.tx`, serverID, p.Rx, p.Tx); err != nil {
+			return err
+		}
+		cycleStart, _ := serverTrafficCycleBounds(srv, p.At, loc)
+		startMs := cycleStart.UTC().UnixMilli()
+		cur, exists := cycleDelta[startMs]
+		if !exists {
+			cycleOrder = append(cycleOrder, startMs)
+		}
+		cycleDelta[startMs] = [2]int64{cur[0] + p.Rx, cur[1] + p.Tx}
+	}
+
+	for _, startMs := range cycleOrder {
+		delta := cycleDelta[startMs]
+		if _, err = tx.ExecContext(
+			ctx,
+			`INSERT INTO mui_server_cycle_traffic(server_id,cycle_start_ms,rx,tx) VALUES($1,$2,$3,$4) ON CONFLICT(server_id,cycle_start_ms) DO UPDATE SET rx=mui_server_cycle_traffic.rx+excluded.rx,tx=mui_server_cycle_traffic.tx+excluded.tx`,
+			serverID, startMs, delta[0], delta[1],
+		); err != nil {
 			return err
 		}
 	}

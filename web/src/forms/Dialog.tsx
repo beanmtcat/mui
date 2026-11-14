@@ -14,9 +14,9 @@ export function ModalFeedback() {
   </div>);
 }
 
-export function Dialog({ title, value, initial, busy, children }: { title: string; value: unknown; initial: unknown; busy: boolean; children: React.ReactNode }) {
+export function Dialog({ title, value, initial, busy, onClose, children }: { title: string; value: unknown; initial: unknown; busy: boolean; onClose?: () => void; children: React.ReactNode }) {
   const { closeModal, setConfirmation, protect } = useApp();
-  return protect(<ModalShell title={title} dirty={JSON.stringify(value) !== JSON.stringify(initial)} busy={busy} onClose={closeModal} onConfirm={setConfirmation} feedback={<ModalFeedback />}>
+  return protect(<ModalShell title={title} dirty={JSON.stringify(value) !== JSON.stringify(initial)} busy={busy} onClose={onClose ?? closeModal} onConfirm={setConfirmation} feedback={<ModalFeedback />}>
     {children}
   </ModalShell>);
 }

@@ -88,6 +88,38 @@
   white-space: nowrap;
   font-size: 12px;
 }
+.serverCycleTraffic {
+  display: grid;
+  gap: 3px;
+  min-width: 140px;
+}
+.serverCycleBar {
+  height: 5px;
+}
+.serverMetaPills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+.serverGroupRow td {
+  padding: 7px 14px;
+  background: var(--surface-subtle);
+  border-bottom: 1px solid var(--line);
+}
+tbody tr.serverGroupRow:hover td {
+  background: var(--surface-subtle);
+}
+.serverGroupBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.serverGroupBar span {
+  font-size: 12px;
+  color: var(--muted);
+}
 table {
   width: 100%;
   border-collapse: collapse;
@@ -267,6 +299,44 @@ main > .filters {
   background: var(--bad-bg);
   color: var(--bad);
 }
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border: 1px solid var(--idle-border);
+  border-radius: 999px;
+  background: var(--idle-bg);
+  color: var(--idle);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.45;
+  white-space: nowrap;
+}
+.pill.good {
+  border-color: var(--good-border);
+  background: var(--good-bg);
+  color: var(--good);
+}
+.pill.warn {
+  border-color: var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn);
+}
+.pill.bad {
+  border-color: var(--bad-border);
+  background: var(--bad-bg);
+  color: var(--bad);
+}
+.pill.accent {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.pill.neutral {
+  border-color: var(--idle-border);
+  background: var(--idle-bg);
+  color: var(--idle);
+}
 
 /* Row action menu */
 .actionMenu > button::after {
@@ -418,7 +488,7 @@ td .menuList button {
 /* The actions stay reachable while a wide table scrolls sideways. */
 @media (min-width: 761px) {
   .cardTable th:last-child,
-  .cardTable td:last-child {
+  .cardTable tbody tr:not(.serverGroupRow) td:last-child {
     position: sticky;
     right: 0;
     background: var(--surface);
@@ -427,11 +497,11 @@ td .menuList button {
   .cardTable th:last-child {
     background: var(--surface-subtle);
   }
-  .cardTable tbody tr:hover td:last-child {
+  .cardTable tbody tr:not(.serverGroupRow):hover td:last-child {
     background: var(--surface-hover);
   }
   /* Sticky cells stack by row, so an open menu must lift its own cell. */
-  .cardTable td:last-child:has(.menuList) {
+  .cardTable tbody tr:not(.serverGroupRow) td:last-child:has(.menuList) {
     z-index: 6;
   }
 }
@@ -490,6 +560,17 @@ td .menuList button {
     display: block;
   }
   .cardTable td.selectCell::before {
+    content: none;
+  }
+  .cardTable tbody tr.serverGroupRow {
+    padding: 6px 16px;
+    background: var(--surface-subtle);
+  }
+  .cardTable tbody tr.serverGroupRow td {
+    display: block;
+    padding: 0;
+  }
+  .cardTable tbody tr.serverGroupRow td::before {
     content: none;
   }
   .batchBar {

@@ -64,6 +64,7 @@ func (s *Store) Server(id string) (shared.Server, error) {
 }
 
 func (s *Store) PutServer(v shared.Server) error {
+	v.CycleTraffic = nil
 	_, err := s.DB.Exec(`UPDATE mui_servers SET data=$1,revision=$2 WHERE id=$3`, Marshal(v), v.Revision, v.ID)
 	return err
 }
@@ -72,6 +73,7 @@ func (s *Store) PutServer(v shared.Server) error {
 // the server's role changes. Save the new role and revoke that one-time guide
 // in the same statement.
 func (s *Store) PutServerAndInvalidateEnrollment(v shared.Server) error {
+	v.CycleTraffic = nil
 	_, err := s.DB.Exec(`UPDATE mui_servers SET data=$1,revision=$2,enroll_hash='',enroll_expires=0 WHERE id=$3`, Marshal(v), v.Revision, v.ID)
 	return err
 }

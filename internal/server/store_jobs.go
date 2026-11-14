@@ -215,11 +215,16 @@ func (s *Store) CompleteUpgradeByBuild(serverID, build, digest string) error {
 }
 
 func (s *Store) ExpireUpgrades() error {
+	_, err := s.expireUpgrades()
+	return err
+}
+
+func (s *Store) expireUpgrades() ([]shared.Operation, error) {
 	rows, err := s.DB.Query(`SELECT data FROM mui_operations WHERE claimed_at=-1 AND state<>'' ORDER BY id DESC`)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	var expired []string
+	var expired []shared.Operation
 	for rows.Next() {
 		var raw string
 		if err = rows.Scan(&raw); err != nil {
@@ -227,7 +232,7 @@ func (s *Store) ExpireUpgrades() error {
 		}
 		var op shared.Operation
 		if json.Unmarshal([]byte(raw), &op) == nil && op.Kind == "agent.upgrade" && op.Status == "activating" && time.Since(op.UpdatedAt) > 5*time.Minute {
-			expired = append(expired, op.ID)
+			expired = append(expired, op)
 		}
 	}
 	if err == nil {
@@ -235,14 +240,19 @@ func (s *Store) ExpireUpgrades() error {
 	}
 	rows.Close()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for _, id := range expired {
-		if err = s.FinishJob(id, "failed", "升级后 5 分钟内未收到新版 Agent 上报；请检查目标服务器服务状态"); err != nil {
-			return err
+	const msg = "升级后 5 分钟内未收到新版 Agent 上报；请检查目标服务器服务状态"
+	var finished []shared.Operation
+	for _, op := range expired {
+		if err = s.FinishJob(op.ID, "failed", msg); err != nil {
+			return finished, err
 		}
+		op.Status = "failed"
+		op.Error = msg
+		finished = append(finished, op)
 	}
-	return nil
+	return finished, nil
 }
 
 // PruneOperations deletes terminal operations (claimed_at=-1 and state='')

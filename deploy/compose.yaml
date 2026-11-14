@@ -29,6 +29,7 @@ services:
       MUI_RELEASE_PUBLIC_KEY: ${MUI_RELEASE_PUBLIC_KEY:-}
       MUI_AGENT_RELEASE_VERSION: ${MUI_AGENT_RELEASE_VERSION:-}
       MUI_TRAFFIC_RETENTION_DAYS: ${MUI_TRAFFIC_RETENTION_DAYS:-90}
+      TZ: ${TZ:-Asia/Shanghai}
       MUI_LISTEN: :8087
     # Allow Linux containers to reach a PostgreSQL instance on the host.
     extra_hosts:

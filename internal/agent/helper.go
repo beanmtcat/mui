@@ -287,7 +287,7 @@ func QueryHostStatus() HostStatus {
 }
 
 func hostStatus() HostStatus {
-	status := HostStatus{UFW: UFWStatus(), Conflict: firewallConflict(), NodeDomainBlock: true, NodeSOCKSOutbound: true, ManualFirewallSupport: true, Supported: true, AgentSelfUpdate: true, ForwardSupport: true, ForwardTCPUDP: true, ShadowTLSAuth: true, SnellFixedPort: true, SnellV6: true, AgentProxySupport: true, OutboundBindingSupport: true, MultiUserStats: true, NodeFirewallPolicies: true, CoreSelfUpdate: true, ReleaseKeyPinned: fileExists(ReleaseKeyPath)}
+	status := HostStatus{UFW: UFWStatus(), Conflict: firewallConflict(), NodeDomainBlock: true, NodeSOCKSOutbound: true, ManualFirewallSupport: true, Supported: true, AgentSelfUpdate: true, ForwardSupport: true, ForwardTCPUDP: true, ShadowTLSAuth: true, SnellFixedPort: true, SnellV6: true, HostMonitor: true, AgentProxySupport: true, OutboundBindingSupport: true, MultiUserStats: true, NodeFirewallPolicies: true, CoreSelfUpdate: true, ReleaseKeyPinned: fileExists(ReleaseKeyPath)}
 	if file, err := os.Open(ForwardStats); err == nil {
 		var traffic []shared.ForwardTrafficPoint
 		_ = json.NewDecoder(io.LimitReader(file, 1<<20)).Decode(&traffic)

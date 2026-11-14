@@ -30,6 +30,9 @@ type Store struct {
 	key             []byte
 	driver          string
 	surgeTemplateMu sync.Mutex
+	cycleLocksMu    sync.Mutex
+	cycleLocks      map[string]*sync.Mutex
+	timeLoc         *time.Location
 }
 
 // checkSecretStrength requires length plus character-class diversity. The key

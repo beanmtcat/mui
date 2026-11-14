@@ -26,9 +26,6 @@ type Server struct {
 	IPv4     string   `json:"ipv4"`
 	IPv6     string   `json:"ipv6"`
 	Domain   string   `json:"domain"`
-	// Set only on administrator responses; the token itself lives encrypted
-	// outside the server document and is never returned to the browser.
-	KomariTokenSet bool `json:"komariTokenSet,omitempty"`
 	// AutoSyncPublicIP updates configured addresses from local public interfaces.
 	// A panel-observed NAT IPv4 may update an existing IPv4 only when it
 	// matched the previously detected address; it never fills an empty IPv4.
@@ -63,7 +60,25 @@ type Server struct {
 	ShadowTLSAuth                bool       `json:"shadowTlsAuth"`
 	SnellFixedPort               bool       `json:"snellFixedPort"`
 	SnellV6                      bool       `json:"snellV6"`
-	ReleaseKeyPinned             bool       `json:"releaseKeyPinned"`
+	HostMonitor                  bool                 `json:"hostMonitor,omitempty"`
+	ReleaseKeyPinned             bool                 `json:"releaseKeyPinned"`
+	ExpiresAt                    *time.Time           `json:"expiresAt,omitempty"`
+	BillingAnchorDay             int                  `json:"billingAnchorDay,omitempty"`
+	Price                        float64              `json:"price,omitempty"`
+	Currency                     string               `json:"currency,omitempty"`
+	BillingCycle                 string               `json:"billingCycle,omitempty"`
+	BillingCycleDays             int                  `json:"billingCycleDays,omitempty"`
+	AutoRenew                    bool                 `json:"autoRenew,omitempty"`
+	TrafficLimit                 int64                `json:"trafficLimit,omitempty"`
+	TrafficLimitType             string               `json:"trafficLimitType,omitempty"`
+	TrafficResetDay              int                  `json:"trafficResetDay,omitempty"`
+	Group                        string               `json:"group,omitempty"`
+	SortWeight                   int                  `json:"sortWeight,omitempty"`
+	AlertMuted                   bool                 `json:"alertMuted,omitempty"`
+	CycleTraffic                 *CycleTrafficSummary `json:"cycleTraffic,omitempty"`
+	PublicNote                   string               `json:"publicNote,omitempty"`
+	PublicVisible                bool                 `json:"publicVisible,omitempty"`
+	PublicName                   string               `json:"publicName,omitempty"`
 	AppliedRevision              int64      `json:"appliedRevision"`
 	CoreVersion                  string     `json:"coreVersion"`
 	CoreBuild                    string     `json:"coreBuild"`
@@ -574,6 +589,7 @@ type AgentReport struct {
 	ShadowTLSAuth          bool                     `json:"shadowTlsAuth,omitempty"`
 	SnellFixedPort         bool                     `json:"snellFixedPort,omitempty"`
 	SnellV6                bool                     `json:"snellV6,omitempty"`
+	HostMonitor            bool                     `json:"hostMonitor,omitempty"`
 	AgentProxySupport      bool                     `json:"agentProxySupport,omitempty"`
 	ReleaseKeyPinned       bool                     `json:"releaseKeyPinned,omitempty"`
 	CoreVersion            string                   `json:"coreVersion,omitempty"`
@@ -597,4 +613,71 @@ type AgentReport struct {
 	FirewallConflict string     `json:"firewallConflict,omitempty"`
 	UFWRules         []string   `json:"ufwRules,omitempty"`
 	AgentTime        *time.Time `json:"agentTime,omitempty"`
+}
+
+type MonitorSample struct {
+	At           time.Time `json:"at"`
+	CPU          float64   `json:"cpu"`
+	Load1        float64   `json:"load1"`
+	Load5        float64   `json:"load5"`
+	Load15       float64   `json:"load15"`
+	RAMUsed      int64     `json:"ramUsed"`
+	RAMTotal     int64     `json:"ramTotal"`
+	SwapUsed     int64     `json:"swapUsed"`
+	SwapTotal    int64     `json:"swapTotal"`
+	DiskUsed     int64     `json:"diskUsed"`
+	DiskTotal    int64     `json:"diskTotal"`
+	NetUp        int64     `json:"netUp"`
+	NetDown      int64     `json:"netDown"`
+	NetTotalUp   int64     `json:"netTotalUp"`
+	NetTotalDown int64     `json:"netTotalDown"`
+	TCP          int       `json:"tcp"`
+	UDP          int       `json:"udp"`
+	Process      int       `json:"process"`
+	Uptime       int64     `json:"uptime"`
+}
+
+type MonitorHost struct {
+	CPUName          string `json:"cpuName"`
+	CPUCores         int    `json:"cpuCores"`
+	CPUPhysicalCores int    `json:"cpuPhysicalCores"`
+	Arch             string `json:"arch"`
+	OS               string `json:"os"`
+	Kernel           string `json:"kernel"`
+	Virtualization   string `json:"virtualization"`
+	MemTotal         int64  `json:"memTotal"`
+	SwapTotal        int64  `json:"swapTotal"`
+	DiskTotal        int64  `json:"diskTotal"`
+}
+
+type PingTask struct {
+	ID              string `json:"id"`
+	Target          string `json:"target"`
+	IntervalSeconds int    `json:"intervalSeconds"`
+}
+
+type PingResult struct {
+	TaskID string    `json:"taskId"`
+	At     time.Time `json:"at"`
+	Ms     int       `json:"ms"`
+}
+
+type MonitorRequest struct {
+	Sample MonitorSample `json:"sample"`
+	Host   *MonitorHost  `json:"host,omitempty"`
+	Pings  []PingResult  `json:"pings,omitempty"`
+}
+
+type MonitorResponse struct {
+	Pings []PingTask `json:"pings"`
+}
+
+type CycleTrafficSummary struct {
+	StartAt time.Time `json:"startAt"`
+	ResetAt time.Time `json:"resetAt"`
+	Rx      int64     `json:"rx"`
+	Tx      int64     `json:"tx"`
+	Used    int64     `json:"used"`
+	Limit   int64     `json:"limit"`
+	Type    string    `json:"type"`
 }

@@ -1,6 +1,6 @@
 # Third-party notices
 
-The `mui-agent` binary includes code from `github.com/komari-monitor/komari-agent` (monitoring and protocol packages), pinned in `go.mod`.
+The `mui-agent` binary includes code from `github.com/komari-monitor/komari-agent/monitoring/unit`, pinned in `go.mod`.
 
 MIT License
 

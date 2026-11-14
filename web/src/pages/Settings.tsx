@@ -1,37 +1,20 @@
-import { lazy, Suspense, useEffect, useState } from "react";
-import { api, mutation } from "../api";
+import { lazy, Suspense, useState } from "react";
+import { mutation } from "../api";
 import { useApp } from "../app/context";
-import { setError } from "../app/feedback";
 import { MemoMaskedValue as MaskedValue } from "../components/secrets";
+import TelegramSettingsCard from "../components/TelegramSettings";
 
 const QRCode = lazy(() => import("../components/QRCode"));
 
 export default function Settings() {
-  const { totpEnabled, setTotpEnabled, refreshTick, expiring, act, copy, protect } = useApp();
-  const [komariEndpoint, setKomariEndpoint] = useState(""),
-    [passwordForm, setPasswordForm] = useState({ current: "", next: "" }),
+  const { totpEnabled, setTotpEnabled, expiring, act, copy, protect } = useApp();
+  const [passwordForm, setPasswordForm] = useState({ current: "", next: "" }),
     [totpOff, setTotpOff] = useState({ password: "", code: "" }),
     [code, setCode] = useState(""),
     [totpSetup, setTotpSetup] = useState<{ secret: string; uri: string } | null>(null);
-  useEffect(() => {
-    api<{ endpoint: string }>("/api/settings/komari").then((v) => setKomariEndpoint(v.endpoint)).catch((e) => setError((e as Error).message));
-  }, [refreshTick]);
   return protect(
           <section className="panel settings">
-            <h2>Komari 监控</h2>
-            <p>所有服务器共用一个 Komari 面板地址；每台服务器的 Agent token 在服务器配置中填写。</p>
-            <form className="komariSettingsForm" onSubmit={(e) => {
-              e.preventDefault();
-              void act(async () => {
-                const saved = await mutation<{ endpoint: string }>("/api/settings/komari", "PUT", { endpoint: komariEndpoint });
-                setKomariEndpoint(saved.endpoint);
-              }, "Komari 面板地址已保存");
-            }}>
-              <label htmlFor="komari-endpoint">Komari 面板地址</label>
-              <input id="komari-endpoint" type="url" placeholder="https://komari.example.com" value={komariEndpoint} onChange={(e) => setKomariEndpoint(e.target.value)} />
-              <small>留空会停用 Komari 上报；有地址但服务器未填写 token 时，该服务器也不会启动 Komari 监控。配置变更会自动下发。</small>
-              <button className="primary">保存 Komari 地址</button>
-            </form>
+            <TelegramSettingsCard />
             <h2>账户安全</h2>
             <p>建议启用动态验证码以保护管理面板。</p>
             {expiring.length > 0 && (

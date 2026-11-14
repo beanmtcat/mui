@@ -5,7 +5,7 @@ import type { Tab } from "./helpers";
 // and its filters, so a reload or the browser's back button restores them.
 // Example: #nodes?server=abc&q=tokyo&sort=name
 export const tabIds = new Set<string>([
-  "dashboard", "servers", "globe", "nodes", "templates", "certificates", "firewall", "forwards", "routes",
+  "dashboard", "servers", "monitor", "globe", "nodes", "templates", "certificates", "firewall", "forwards", "routes",
   "subscriptions", "surge-templates", "customers", "accesses", "connections", "operations", "audit", "help", "settings",
 ]);
 

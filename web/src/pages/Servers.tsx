@@ -1,29 +1,65 @@
-import { useMemo } from "react";
+import { Fragment, useCallback, useMemo } from "react";
 import { bytes, canHostNodes, mutation, type InstallGuide, type Server } from "../api";
 import { useApp } from "../app/context";
-import { countryFlag, manualFirewall, rolesText, serverFilterValues, supportsGitHubUpgrade } from "../app/helpers";
+import {
+  countryFlag,
+  cycleTrafficTone,
+  formatBillingCycle,
+  formatServerExpiry,
+  groupAndSortServers,
+  manualFirewall,
+  matchesServerGroupFilter,
+  rolesText,
+  serverFilterValues,
+  serverGroupFilterOptions,
+  supportsGitHubUpgrade,
+  trafficLimitTypeShortLabels,
+} from "../app/helpers";
 import { ActionMenu, Empty, HelpTip, parseSort, SortHeader, sortRows, Status, TableWrap, useSelection } from "../app/ui";
 import { useUrlParam } from "../app/url";
 
 export default function Servers() {
-  const { servers, nodes, forwards, operations, agentReleases, coreReleases, upgradingAgentIDs, updatingAgentIDs, serverWarnings, goTo, act, copy, runBatch, setConfirmation, setAgentDownloads, setOfflineServer, openServer, showInstall, deleteServer, matches, protect } = useApp();
-  const [q, setQ] = useUrlParam("q"), [country, setCountry] = useUrlParam("country"), [provider, setProvider] = useUrlParam("provider"),
+  const { servers, nodes, forwards, operations, agentReleases, coreReleases, upgradingAgentIDs, updatingAgentIDs, serverWarnings, trafficLimitThreshold, goTo, act, copy, runBatch, setConfirmation, setAgentDownloads, setOfflineServer, openServer, showInstall, deleteServer, matches, protect } = useApp();
+  const [q, setQ] = useUrlParam("q"), [groupFilter, setGroupFilter] = useUrlParam("group"),
+    [country, setCountry] = useUrlParam("country"), [provider, setProvider] = useUrlParam("provider"),
     [region, setRegion] = useUrlParam("region"), [city, setCity] = useUrlParam("city"), [status, setStatus] = useUrlParam("status"), [sortValue, setSort] = useUrlParam("sort");
-  const sort = parseSort(sortValue, setSort, "name");
+  const sort = parseSort(sortValue, setSort, "");
   const filters = [
     ["国家代码", "country", country, setCountry], ["服务商", "provider", provider, setProvider],
     ["地区", "region", region, setRegion], ["城市", "city", city, setCity],
   ] as const;
-  const filtered = !!(q || country || provider || region || city || status);
-  const visibleServers = useMemo(() => sortRows(servers.filter((s) =>
-    matches(q, s.name, s.ipv4, s.ipv6, s.domain, s.internalAddress, s.provider, s.tags, s.notes) &&
-    (!country || s.country?.trim() === country) && (!provider || s.provider?.trim() === provider) &&
-    (!region || s.region?.trim() === region) && (!city || s.city?.trim() === city) && (!status || s.status === status),
-  ), sort, {
-    name: (s) => s.name, country: (s) => s.country, address: (s) => s.domain || s.ipv4 || s.ipv6 || "", status: (s) => s.status,
-    traffic: (s) => (s.networkRx || 0) + (s.networkTx || 0), nodes: (s) => nodes.filter((n) => n.serverId === s.id).length,
-    forwards: (s) => forwards.filter((f) => f.serverId === s.id && !f.deleting).length,
-  }), [servers, nodes, forwards, q, country, provider, region, city, status, sort.key, sort.descending, matches]);
+  const groupOptions = useMemo(() => serverGroupFilterOptions(servers), [servers]);
+  const filtered = !!(q || groupFilter || country || provider || region || city || status);
+  const groupedServers = useMemo(() => {
+    const base = servers.filter((s) =>
+      matches(q, s.name, s.group, s.ipv4, s.ipv6, s.domain, s.internalAddress, s.provider, s.tags, s.notes) &&
+      matchesServerGroupFilter(s, groupFilter) &&
+      (!country || s.country?.trim() === country) && (!provider || s.provider?.trim() === provider) &&
+      (!region || s.region?.trim() === region) && (!city || s.city?.trim() === city) && (!status || s.status === status),
+    );
+    const sortGetters: Record<string, (s: Server) => string | number> = {
+      name: (s) => s.name,
+      country: (s) => s.country,
+      address: (s) => s.domain || s.ipv4 || s.ipv6 || "",
+      status: (s) => s.status,
+      traffic: (s) => s.cycleTraffic ? s.cycleTraffic.rx + s.cycleTraffic.tx : (s.networkRx || 0) + (s.networkTx || 0),
+      nodes: (s) => nodes.filter((n) => n.serverId === s.id).length,
+      forwards: (s) => forwards.filter((f) => f.serverId === s.id && !f.deleting).length,
+    };
+    return groupAndSortServers(base, sort.key ? (rows) => sortRows(rows, sort, sortGetters) : undefined);
+  }, [servers, nodes, forwards, q, groupFilter, country, provider, region, city, status, sort.key, sort.descending, matches]);
+  const visibleServers = useMemo(() => groupedServers.flatMap((g) => g.items), [groupedServers]);
+  const confirmRenew = useCallback((s: Server) => {
+    const cycleText = formatBillingCycle(s);
+    setConfirmation({
+      title: "续期服务器",
+      message: `确认将「${s.name}」的到期日顺延一个周期${cycleText ? `（${cycleText}）` : ""}吗？`,
+      confirmLabel: "确认续期",
+      onConfirm: () => {
+        void act(() => mutation<Server>(`/api/servers/${encodeURIComponent(s.id)}/renew`, "POST"), "服务器已续期一个周期");
+      },
+    });
+  }, [act, setConfirmation]);
   const selection = useSelection(visibleServers.map((s) => s.id));
   const picked = servers.filter((s) => selection.has(s.id));
   const upgrading = (s: Server) => operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status));
@@ -55,7 +91,11 @@ export default function Servers() {
               </div>
             </div>
             <div className="filters serverFilters">
-              <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索名称、地址、服务商或备注" aria-label="搜索服务器" />
+              <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索名称、分组、地址、服务商或备注" aria-label="搜索服务器" />
+              <select aria-label="按分组筛选服务器" value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
+                <option value="">全部分组</option>
+                {groupOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+              </select>
               {filters.map(([label, field, value, set]) => (
                 <select key={field} aria-label={`按${label}筛选服务器`} value={value} onChange={(e) => set(e.target.value)}>
                   <option value="">全部{label}</option>
@@ -69,7 +109,7 @@ export default function Servers() {
                 <option value="pending">等待接入</option>
                 <option value="revoked">已吊销</option>
               </select>
-              {filtered && <button type="button" className="ghost" onClick={() => { setQ(""); setCountry(""); setProvider(""); setRegion(""); setCity(""); setStatus(""); }}>清空筛选</button>}
+              {filtered && <button type="button" className="ghost" onClick={() => { setQ(""); setGroupFilter(""); setCountry(""); setProvider(""); setRegion(""); setCity(""); setStatus(""); }}>清空筛选</button>}
               {filtered && <span className="hint" role="status">{q && `已定位：${q} · `}显示 {visibleServers.length} / {servers.length} 台</span>}
             </div>
             {selection.selected.length > 0 && <div className="batchBar" role="toolbar" aria-label="批量操作">
@@ -89,19 +129,48 @@ export default function Servers() {
                     <SortHeader sort={sort} id="address" label="公网地址" />
                     <SortHeader sort={sort} id="status" label="Agent" />
                     <th>UFW</th>
-                    <SortHeader sort={sort} id="traffic" label="整机累计流量" title="Agent 开始采样后的默认网卡累计收发量，包含系统流量、SSH、程序下载和 Agent 通信；不是节点或订阅用量。" />
+                    <SortHeader sort={sort} id="traffic" label="本周期 / 累计流量" title="当前流量周期用量（有限额时展示进度条）及 Agent 采样累计网卡收发量。" />
                     <SortHeader sort={sort} id="nodes" label="节点" />
                     <SortHeader sort={sort} id="forwards" label="转发" title="包含停用和链路自动生成的转发规则；不包含正在删除的规则。" />
                     <th>操作</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleServers.map((s) => (
+                  {groupedServers.map(({ group, items }) => (
+                    <Fragment key={group}>
+                      <tr className="serverGroupRow">
+                        <td colSpan={10}>
+                          <div className="serverGroupBar">
+                            <strong>{group}</strong>
+                            <span>{items.length} 台</span>
+                          </div>
+                        </td>
+                      </tr>
+                      {items.map((s) => {
+                        const expiry = formatServerExpiry(s.expiresAt);
+                        const ct = s.cycleTraffic;
+                        const cycleLimit = ct?.limit ?? s.trafficLimit ?? 0;
+                        const cycleUsed = ct?.used ?? 0;
+                        const cycleRx = ct?.rx ?? 0;
+                        const cycleTx = ct?.tx ?? 0;
+                        const cycleType = ct?.type ?? s.trafficLimitType ?? "sum";
+                        const cyclePctRaw = cycleLimit > 0 ? (cycleUsed / cycleLimit) * 100 : 0;
+                        const cyclePctWidth = Math.max(0, Math.min(100, cyclePctRaw));
+                        const cycleTone = cycleTrafficTone(cycleUsed, cycleLimit, trafficLimitThreshold);
+                        const noNicTraffic = s.managementMode === "offline" || s.managementMode === "external";
+                        return (
                     <tr key={s.id}>
                       <td className="selectCell"><input type="checkbox" aria-label={`选择 ${s.name}`} checked={selection.has(s.id)} onChange={() => selection.toggle(s.id)} /></td>
                       <td>
                         <span className="serverNameLine"><strong title={s.name}>{s.name}</strong>{serverWarnings(s).length > 0 && <HelpTip label={`${s.name} 的 ${serverWarnings(s).length} 项提醒`} text={serverWarnings(s).join("\n")} warning />}</span>
                         <small>{s.managementMode === "external" ? "卖家节点" : s.managementMode === "offline" ? "离线管理" : s.os || "待接入"}{s.arch && ` · ${s.arch}`}</small>
+                        {(expiry || (s.autoRenew && s.billingCycle) || s.alertMuted) && (
+                          <div className="serverMetaPills">
+                            {expiry && <span className={`pill ${expiry.tone}`}>{expiry.fullText}</span>}
+                            {s.autoRenew && s.billingCycle && <span className="pill accent">自动续期</span>}
+                            {s.alertMuted && <span className="pill neutral" title="已静音离线与资源高占用告警">静音</span>}
+                          </div>
+                        )}
                       </td>
                       <td>
                         <span className="serverCountry">{countryFlag(s.country) && <span className="serverFlag" aria-hidden="true">{countryFlag(s.country)}</span>}{s.country}</span>
@@ -135,8 +204,38 @@ export default function Servers() {
                           <Status value={manualFirewall(s) ? "manual" : s.firewallConflict ? "conflict" : s.ufwStatus} />
                         </button>
                       </td>
-                      <td className="serverTraffic" title="↓ 网卡接收，↑ 网卡发送。包含本机所有经过默认网卡的流量。">
-                        {s.managementMode === "offline" || s.managementMode === "external" ? "—" : <span>↓ {bytes(s.networkRx || 0)}<br />↑ {bytes(s.networkTx || 0)}</span>}
+                      <td
+                        className="serverTraffic"
+                        title={[
+                          ct && `本周期：${ct.startAt.slice(0, 10)} 至 ${ct.resetAt.slice(0, 10)}（↑ ${bytes(cycleTx)} · ↓ ${bytes(cycleRx)}）`,
+                          !noNicTraffic && `整机累计：↓ ${bytes(s.networkRx || 0)} · ↑ ${bytes(s.networkTx || 0)}`,
+                        ].filter(Boolean).join("\n") || undefined}
+                      >
+                        {noNicTraffic && cycleLimit <= 0 ? (
+                          "—"
+                        ) : cycleLimit > 0 ? (
+                          <div className="serverCycleTraffic">
+                            <span className={cycleTone === "danger" ? "dangerText" : ""}>
+                              {bytes(cycleUsed)} / {bytes(cycleLimit)} ({cyclePctRaw.toFixed(0)}%)
+                            </span>
+                            <div className="monitorProgress serverCycleBar">
+                              <div
+                                className={`monitorProgressFill ${cycleTone}`}
+                                style={{ width: `${cyclePctWidth}%` }}
+                              />
+                            </div>
+                            <small>
+                              {noNicTraffic
+                                ? trafficLimitTypeShortLabels[cycleType]
+                                : `累计 ↓ ${bytes(s.networkRx || 0)} · ↑ ${bytes(s.networkTx || 0)}`}
+                            </small>
+                          </div>
+                        ) : (
+                          <div className="serverCycleTraffic">
+                            <span>本周期 {bytes(cycleRx + cycleTx)}</span>
+                            <small>↑ {bytes(cycleTx)} · ↓ {bytes(cycleRx)}</small>
+                          </div>
+                        )}
                       </td>
                       <td><button type="button" className="serverListLink" title={`查看「${s.name}」的节点`} aria-label={`查看「${s.name}」的节点`} onClick={() => {
                         goTo("nodes", s.id, {});
@@ -147,6 +246,15 @@ export default function Servers() {
                       <td>
                         <div className="actions">
                           <button onClick={() => openServer(s)}>编辑</button>
+                          {!!s.billingCycle && (
+                            <button
+                              disabled={!s.expiresAt || s.status === "revoked"}
+                              title={!s.expiresAt ? "请先在服务器设置中填写到期日" : s.status === "revoked" ? "凭据已吊销，无法续期" : undefined}
+                              onClick={() => confirmRenew(s)}
+                            >
+                              续期一个周期
+                            </button>
+                          )}
                           {s.managementMode === "offline" && <button onClick={() => setOfflineServer(s)}>离线配置</button>}
                           <ActionMenu>
                           {s.managementMode !== "offline" && s.managementMode !== "external" && <>
@@ -248,6 +356,9 @@ if [ "$(id -u)" -eq 0 ]; then sh "$mui_uninstall"; else sudo sh "$mui_uninstall"
                         </div>
                       </td>
                     </tr>
+                        );
+                      })}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>

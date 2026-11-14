@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   api, list, mutation, bytes, canHostNodes,
   type Certificate, type ConnectionIP, type Customer, type FirewallRule, type ForwardRule, type InstallGuide,
-  type Node, type NodeTemplate, type Operation, type Route, type Server, type Subscription, type SurgeTemplate,
+  type Node, type NodeTemplate, type Operation, type Route, type Server, type Subscription, type SurgeTemplate, type TelegramSettings,
 } from "../api";
 import { MemoSecretField as SecretField, MemoSecretTextarea as SecretTextarea, MemoMaskedValue as MaskedValue } from "../components/secrets";
 import CertificateFileField from "../components/CertificateFileField";
@@ -68,7 +68,8 @@ export function useAppState() {
     [customers, setCustomers] = useState<Customer[]>([]),
     [operations, setOperations] = useState<Operation[]>([]),
     [agentReleases, setAgentReleases] = useState<Record<string, string>>({}),
-    [coreReleases, setCoreReleases] = useState<Record<string, string>>({});
+    [coreReleases, setCoreReleases] = useState<Record<string, string>>({}),
+    [trafficLimitThreshold, setTrafficLimitThreshold] = useState(80);
   // Every list and picker of servers shows them by name, so "-2" comes before "-10".
   const servers = useMemo(() => [...serverRecords].sort((a, b) => collator.compare(a.name, b.name)), [serverRecords]);
   const [refreshTick, setRefreshTick] = useState(0),
@@ -155,6 +156,12 @@ export function useAppState() {
         load<Customer>("/api/customers", setCustomers),
         api<Record<string, string>>("/api/agent/release").then(setAgentReleases).catch(() => setAgentReleases({})),
         api<Record<string, string>>("/api/core/release").then(setCoreReleases).catch(() => setCoreReleases({})),
+        api<TelegramSettings>("/api/settings/telegram")
+          .then((v) => {
+            const th = v?.events?.trafficLimit?.threshold;
+            setTrafficLimitThreshold(typeof th === "number" && th >= 50 && th <= 100 ? th : 80);
+          })
+          .catch(() => setTrafficLimitThreshold(80)),
         ...(withTraffic ? [loadDashboardTraffic(recordFailure)] : []),
       ]);
       if (!withTraffic && tabRef.current === "dashboard") {
@@ -615,7 +622,7 @@ export function useAppState() {
 
   return useMemo(() => ({
     refreshing, screenshotMode, setScreenshotMode, theme, setTheme, authed, setAuthed, totpEnabled, setTotpEnabled, tab, currentServerId,
-    servers, nodes, templates, certificates, rules, forwards, routes, subs, surgeTemplates, surgeTemplatesStatus, customers, operations, agentReleases, coreReleases,
+    servers, nodes, templates, certificates, rules, forwards, routes, subs, surgeTemplates, surgeTemplatesStatus, customers, operations, agentReleases, coreReleases, trafficLimitThreshold,
     refreshTick, pollTick, modal, confirmation, setConfirmation, batch, setBatch,
     installInfo, setInstallInfo, installMethod, setInstallMethod, installArch, setInstallArch, issued, setIssued, preview, setPreview,
     trafficNode, setTrafficNode, trafficSub, setTrafficSub, agentDownloads, setAgentDownloads, offlineServer, setOfflineServer,
@@ -626,7 +633,7 @@ export function useAppState() {
     onlySharedSubNodes, routePath, restartNotice, surgeImportHelp, protect, redactScreenshot, expiring,
   }), [
     refreshing, screenshotMode, theme, authed, totpEnabled, tab, currentServerId,
-    servers, nodes, templates, certificates, rules, forwards, routes, subs, surgeTemplates, surgeTemplatesStatus, customers, operations, agentReleases, coreReleases,
+    servers, nodes, templates, certificates, rules, forwards, routes, subs, surgeTemplates, surgeTemplatesStatus, customers, operations, agentReleases, coreReleases, trafficLimitThreshold,
     refreshTick, pollTick, modal, confirmation, batch,
     installInfo, installMethod, installArch, issued, preview,
     trafficNode, trafficSub, agentDownloads, offlineServer,

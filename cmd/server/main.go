@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 	"time"
+	_ "time/tzdata"
 
 	"mui/internal/server"
 )
@@ -18,6 +20,14 @@ func main() {
 	if err := resolveSecretFiles(); err != nil {
 		log.Fatal(err)
 	}
+	if tz := strings.TrimSpace(os.Getenv("TZ")); tz != "" {
+		loc, err := time.LoadLocation(tz)
+		if err != nil {
+			log.Fatalf("invalid TZ %q: %v", tz, err)
+		}
+		time.Local = loc
+	}
+	log.Printf("timezone: %s", time.Local.String())
 	dsn, err := databaseDSN()
 	if err != nil {
 		log.Fatal(err)
@@ -63,21 +73,61 @@ func main() {
 				if err := store.PruneOperations(cutoff); err != nil {
 					log.Println("operations pruning:", err)
 				}
+				if err := store.PruneAlertState(cutoff); err != nil {
+					log.Println("alert state pruning:", err)
+				}
+				if err := store.PruneMonitorHours(cutoff); err != nil {
+					log.Println("monitor hours pruning:", err)
+				}
 			}
-			if err := store.PruneSessions(time.Now()); err != nil {
+			now := time.Now()
+			if err := store.PruneMonitorMinutes(now.UTC().Truncate(time.Hour).Add(-72 * time.Hour)); err != nil {
+				log.Println("monitor minutes pruning:", err)
+			}
+			if err := store.PrunePingMinutes(now.Add(-7 * 24 * time.Hour)); err != nil {
+				log.Println("ping minutes pruning:", err)
+			}
+			if err := store.PruneServerCycleTraffic(now); err != nil {
+				log.Println("server cycle traffic pruning:", err)
+			}
+			if err := store.PruneSessions(now); err != nil {
 				log.Println("session pruning:", err)
 			}
 			time.Sleep(6 * time.Hour)
 		}
 	}()
-	// Unconfirmed upgrades must not wait for an administrator to open the
-	// operations page: expire them in the background.
+	// One-time idempotent backfill of current cycle traffic on first startup after upgrade.
+	go func() {
+		if err := store.EnsureCycleTrafficBackfill(time.Now()); err != nil {
+			log.Println("cycle traffic backfill:", err)
+		}
+	}()
+	// Roll up completed minute buckets into hourly monitor history.
 	go func() {
 		for {
-			if err := store.ExpireUpgrades(); err != nil {
+			if err := store.RollupMonitorHours(time.Now()); err != nil {
+				log.Println("monitor hourly rollup:", err)
+			}
+			time.Sleep(time.Hour)
+		}
+	}()
+	// Unconfirmed upgrades must not wait for an administrator to open the
+	// operations page: expire them in the background. Also flush completed
+	// monitor minute buckets so servers that go silent still persist their last minute.
+	go func() {
+		for {
+			app.FlushMonitorBuckets(time.Now())
+			if err := app.ExpireUpgrades(); err != nil {
 				log.Println("expire upgrades:", err)
 			}
 			time.Sleep(time.Minute)
+		}
+	}()
+	// Stateful Telegram alerts (server offline/recovery, certificate & subscription expiry).
+	go func() {
+		for {
+			app.EvaluateAlerts()
+			time.Sleep(30 * time.Second)
 		}
 	}()
 	// Certificate expiry alerts, on the pruning schedule.

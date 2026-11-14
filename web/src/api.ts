@@ -15,6 +15,17 @@ export type InstallGuide = {
   standaloneInstall: OfflineInstallGuide;
 };
 export const roleLabels: Record<Role, string> = { entry: "入口", line: "线路", transit: "中转", exit: "落地" };
+export type BillingCycle = "" | "month" | "quarter" | "halfyear" | "year" | "2year" | "3year" | "days";
+export type TrafficLimitType = "sum" | "up" | "down" | "max" | "min";
+export type CycleTrafficSummary = {
+  startAt: string;
+  resetAt: string;
+  rx: number;
+  tx: number;
+  used: number;
+  limit: number;
+  type: TrafficLimitType;
+};
 export type Server = {
   managementMode?: "online" | "offline" | "external";
   managementMigrationFrom?: "online" | "offline";
@@ -44,7 +55,22 @@ export type Server = {
   ipv6: string;
   autoSyncPublicIp?: boolean;
   domain: string;
-	komariTokenSet?: boolean;
+  expiresAt?: string;
+  price?: number;
+  currency?: string;
+  billingCycle?: BillingCycle;
+  billingCycleDays?: number;
+  autoRenew?: boolean;
+  trafficLimit?: number;
+  trafficLimitType?: TrafficLimitType;
+  trafficResetDay?: number;
+  group?: string;
+  sortWeight?: number;
+  alertMuted?: boolean;
+  cycleTraffic?: CycleTrafficSummary;
+  publicNote?: string;
+  publicVisible?: boolean;
+  publicName?: string;
   status: string;
   os: string;
   arch: string;
@@ -58,6 +84,7 @@ export type Server = {
   shadowTlsAuth?: boolean;
   snellFixedPort?: boolean;
   snellV6?: boolean;
+  hostMonitor?: boolean;
   releaseKeyPinned?: boolean;
   appliedRevision: number;
   coreVersion: string;
@@ -221,6 +248,26 @@ export type Route = {
   edgeLatencies?: { fromServerId: string; toServerId: string; tcpMs: number; ok: boolean; at: string }[];
 };
 export type AuditEntry = { id: string; at: string; action: string; target: string; detail: string; ip: string };
+export type TelegramEvents = {
+  serverOffline: { enabled: boolean; offlineMinutes: number };
+  applyFailed: { enabled: boolean };
+  certExpiring: { enabled: boolean };
+  subscriptionExpiring: { enabled: boolean };
+  serverExpiring: { enabled: boolean };
+  serverRenewed: { enabled: boolean };
+  resource: { enabled: boolean; minutes: number; threshold: number };
+  trafficLimit: { enabled: boolean; threshold: number };
+  trafficReport: { daily: boolean; weekly: boolean; monthly: boolean };
+  security: { enabled: boolean };
+};
+export type TelegramSettings = {
+  enabled: boolean;
+  botTokenSet: boolean;
+  chatId: string;
+  threadId: number;
+  apiBase: string;
+  events: TelegramEvents;
+};
 export type Customer = { id: string; name: string; notes: string; createdAt: string };
 export type SubscriptionAccess = { id: string; subscriptionId: string; customerId: string; ip: string; at: string; userAgent?: string; client?: string };
 export type ConnectionIP = { serverId: string; nodeId: string; ip: string; clientIp?: string; peerIp?: string; routeId?: string; sourceKind?: "entry" | "direct" | "relay" | "agent" | "unknown"; lastSeen: string; cursor: string };
@@ -234,6 +281,81 @@ export type Operation = {
   targetBuild?: string;
   createdAt: string;
   updatedAt: string;
+};
+export type MonitorSample = {
+  at: string;
+  cpu: number;
+  load1: number;
+  load5: number;
+  load15: number;
+  ramUsed: number;
+  ramTotal: number;
+  swapUsed: number;
+  swapTotal: number;
+  diskUsed: number;
+  diskTotal: number;
+  netUp: number;
+  netDown: number;
+  netTotalUp: number;
+  netTotalDown: number;
+  tcp: number;
+  udp: number;
+  process: number;
+  uptime: number;
+};
+export type MonitorHost = {
+  cpuName: string;
+  cpuCores: number;
+  cpuPhysicalCores: number;
+  arch: string;
+  os: string;
+  kernel: string;
+  virtualization: string;
+  memTotal: number;
+  swapTotal: number;
+  diskTotal: number;
+};
+export type MonitorOverviewItem = {
+  serverId: string;
+  online: boolean;
+  hostMonitor: boolean;
+  sample?: MonitorSample;
+  host?: MonitorHost;
+  cycleTraffic?: CycleTrafficSummary;
+};
+export type MonitorRecord = {
+  at: string;
+  cpu: number;
+  load1: number;
+  ramUsed: number;
+  ramTotal: number;
+  swapUsed: number;
+  diskUsed: number;
+  diskTotal: number;
+  netUp: number;
+  netDown: number;
+  netUpPeak: number;
+  netDownPeak: number;
+  totalUp: number;
+  totalDown: number;
+  tcp: number;
+  udp: number;
+  process: number;
+};
+export type PingTask = {
+  id: string;
+  name: string;
+  target: string;
+  intervalSeconds: number;
+  serverIds: string[];
+};
+export type PingMinuteRecord = {
+  serverId: string;
+  at: string;
+  msAvg: number;
+  msMax: number;
+  sent: number;
+  lost: number;
 };
 export async function api<T>(
   path: string,

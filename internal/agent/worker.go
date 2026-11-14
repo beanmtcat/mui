@@ -86,9 +86,9 @@ func Run(ctx context.Context) error {
 		return err
 	}
 	defer func() { client.CloseIdleConnections() }()
-	komariCtx, stopKomari := context.WithCancel(ctx)
-	defer stopKomari()
-	go runKomariManager(komariCtx, c)
+	monitorCtx, stopMonitor := context.WithCancel(ctx)
+	defer stopMonitor()
+	go runMonitorLoop(monitorCtx, c)
 	latencyCtx, stopLatency := context.WithCancel(ctx)
 	defer stopLatency()
 	latencies := &routeLatencySampler{}
@@ -98,7 +98,7 @@ func Run(ctx context.Context) error {
 		var response *serverStatusError
 		if errors.As(err, &response) && response.Status == http.StatusGone {
 			revoked = true
-			stopKomari()
+			stopMonitor()
 			stopLatency()
 		}
 	}
@@ -297,7 +297,7 @@ func Run(ctx context.Context) error {
 			}
 			now := time.Now()
 			report := shared.AgentReport{OS: osRelease(), Arch: runtime.GOARCH, AgentVersion: Version, AgentBuild: build, BuildDigest: build,
-				ManualFirewallSupport: host.ManualFirewallSupport, AgentSelfUpdate: host.AgentSelfUpdate, NodeFirewallPolicies: host.NodeFirewallPolicies, NodeDomainBlock: host.NodeDomainBlock, NodeSOCKSOutbound: host.NodeSOCKSOutbound, MultiUserStats: host.MultiUserStats, ForwardSupport: host.ForwardSupport, ForwardTCPUDP: host.ForwardTCPUDP, ShadowTLSAuth: host.ShadowTLSAuth, SnellFixedPort: host.SnellFixedPort, SnellV6: host.SnellV6, AgentProxySupport: host.AgentProxySupport, OutboundBindingSupport: host.OutboundBindingSupport, ReleaseKeyPinned: host.ReleaseKeyPinned,
+				ManualFirewallSupport: host.ManualFirewallSupport, AgentSelfUpdate: host.AgentSelfUpdate, NodeFirewallPolicies: host.NodeFirewallPolicies, NodeDomainBlock: host.NodeDomainBlock, NodeSOCKSOutbound: host.NodeSOCKSOutbound, MultiUserStats: host.MultiUserStats, ForwardSupport: host.ForwardSupport, ForwardTCPUDP: host.ForwardTCPUDP, ShadowTLSAuth: host.ShadowTLSAuth, SnellFixedPort: host.SnellFixedPort, SnellV6: host.SnellV6, HostMonitor: host.HostMonitor, AgentProxySupport: host.AgentProxySupport, OutboundBindingSupport: host.OutboundBindingSupport, ReleaseKeyPinned: host.ReleaseKeyPinned,
 				CoreVersion: coreVersions.get(), CoreBuild: coreBuild, CoreDigest: coreBuild, CoreSelfUpdate: host.CoreSelfUpdate,
 				UFWStatus: host.UFW, StatsStatus: statsStatus, Traffic: state.Pending[:batchSize], UserTraffic: state.UserPending[:userBatch], ForwardTraffic: host.ForwardTraffic, ServerTraffic: state.NetworkPending[:networkBatch], Connections: pendingConnections, ForwardConnections: host.ForwardConnections, RouteLatencies: latencies.snapshot(),
 				IPv4: ipv4, ObservedIPv4: cachedObservedIPv4, IPv6: ipv6, AgentTime: &now, HostReported: true, SSHPorts: host.SSHPorts, FirewallConflict: host.Conflict, UFWRules: host.Rules}

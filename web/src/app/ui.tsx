@@ -15,6 +15,7 @@ export function Icon({ name }: { name: IconName }) {
     dice: <><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="8" cy="8" r="1" fill="currentColor" stroke="none" /><circle cx="16" cy="8" r="1" fill="currentColor" stroke="none" /><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" /><circle cx="8" cy="16" r="1" fill="currentColor" stroke="none" /><circle cx="16" cy="16" r="1" fill="currentColor" stroke="none" /></>,
     dashboard: <><rect x="3" y="3" width="8" height="8" rx="1" /><rect x="13" y="3" width="8" height="5" rx="1" /><rect x="13" y="10" width="8" height="11" rx="1" /><rect x="3" y="13" width="8" height="8" rx="1" /></>,
     servers: <><rect x="3" y="3" width="18" height="8" rx="2" /><rect x="3" y="13" width="18" height="8" rx="2" /><path d="M7 7h.01M7 17h.01M11 7h7M11 17h7" /></>,
+    monitor: <><rect x="3" y="4" width="18" height="13" rx="2" /><path d="M7 11h2.5l1.8-3.5 2.4 6 1.8-2.5H17M8 21h8M12 17v4" /></>,
     globe: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c-3 2.5-4.5 5.5-4.5 9s1.5 6.5 4.5 9M12 3c3 2.5 4.5 5.5 4.5 9s-1.5 6.5-4.5 9" /></>,
     nodes: <><circle cx="5" cy="12" r="2" /><circle cx="19" cy="5" r="2" /><circle cx="19" cy="19" r="2" /><path d="m7 11 10-5M7 13l10 5" /></>,
     templates: <><rect x="5" y="3" width="14" height="18" rx="2" /><path d="M9 8h6M9 12h6M9 16h4" /></>,
@@ -393,7 +394,7 @@ export function TableWrap({ children, cards = true }: { children: React.ReactNod
         heading.querySelectorAll(".helpTip").forEach((tip) => tip.remove());
         return heading.textContent?.trim() || "";
       });
-      table.querySelectorAll("tbody tr").forEach((row) => {
+      table.querySelectorAll("tbody tr:not(.serverGroupRow)").forEach((row) => {
         Array.from(row.children).forEach((cell, index) => {
           const label = headings[index] || "";
           if (cell.getAttribute("data-label") !== label) cell.setAttribute("data-label", label);
