@@ -38,7 +38,7 @@ export function StatusApp() {
   );
 
   const { records, pings, loadingDetail } = usePublicHistory(
-    selectedServer,
+    selectedServer ? selectedServer.id : "",
     pageState,
     range,
     data?.showPing,

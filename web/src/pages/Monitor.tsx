@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api,
   mutation,
@@ -161,50 +161,117 @@ export default function Monitor() {
     () => onlineManagedServers.find((s) => s.id === selectedId) || null,
     [onlineManagedServers, selectedId],
   );
+  const activeServerId = selectedServer ? selectedServer.id : "";
 
   const serverPingTasks = useMemo(() => {
-    if (!selectedServer) return [];
+    if (!activeServerId) return [];
     return pingTasks.filter(
-      (t) => t.serverIds.length === 0 || t.serverIds.includes(selectedServer.id),
+      (t) => t.serverIds.length === 0 || t.serverIds.includes(activeServerId),
     );
-  }, [pingTasks, selectedServer]);
+  }, [pingTasks, activeServerId]);
 
-  const loadDetailHistory = useCallback(async () => {
-    if (!selectedServer) return;
-    setLoadingRecords(true);
-    try {
-      const pingRange = range === "30d" ? "7d" : range;
-      const [hist, ...pingLists] = await Promise.all([
-        api<MonitorRecord[]>(
-          `/api/monitor/${encodeURIComponent(selectedServer.id)}/records?range=${range}`,
-        ),
-        ...serverPingTasks.map((t) =>
-          api<PingMinuteRecord[]>(
-            `/api/ping-tasks/${encodeURIComponent(t.id)}/records?serverId=${encodeURIComponent(selectedServer.id)}&range=${pingRange}`,
+  const pingTaskIdsKey = useMemo(
+    () => serverPingTasks.map((t) => t.id).join(","),
+    [serverPingTasks],
+  );
+
+  const historyControllerRef = useRef<AbortController | null>(null);
+  const historyReqSeqRef = useRef(0);
+  const prevHistoryTargetRef = useRef("");
+  const hasLoadedHistoryRef = useRef(false);
+
+  const loadDetailHistory = useCallback(
+    async (isBackground = false) => {
+      if (!activeServerId) return;
+      historyControllerRef.current?.abort();
+      const controller = new AbortController();
+      historyControllerRef.current = controller;
+      const seq = ++historyReqSeqRef.current;
+
+      if (!isBackground && !hasLoadedHistoryRef.current) {
+        setLoadingRecords(true);
+      }
+      try {
+        const pingRange = range === "30d" ? "7d" : range;
+        const taskIds = pingTaskIdsKey ? pingTaskIdsKey.split(",") : [];
+        const [hist, ...pingLists] = await Promise.all([
+          api<MonitorRecord[]>(
+            `/api/monitor/${encodeURIComponent(activeServerId)}/records?range=${range}`,
+            { signal: controller.signal },
           ),
-        ),
-      ]);
-      setRecords(hist);
-      const nextMap: Record<string, PingMinuteRecord[]> = {};
-      serverPingTasks.forEach((t, i) => {
-        nextMap[t.id] = pingLists[i] || [];
-      });
-      setPingRecordsMap(nextMap);
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setLoadingRecords(false);
-    }
-  }, [selectedServer, range, serverPingTasks]);
+          ...taskIds.map((taskId) =>
+            api<PingMinuteRecord[]>(
+              `/api/ping-tasks/${encodeURIComponent(taskId)}/records?serverId=${encodeURIComponent(activeServerId)}&range=${pingRange}`,
+              { signal: controller.signal },
+            ),
+          ),
+        ]);
+        if (controller.signal.aborted || seq !== historyReqSeqRef.current) {
+          return;
+        }
+        hasLoadedHistoryRef.current = true;
+        setRecords(hist);
+        const nextMap: Record<string, PingMinuteRecord[]> = {};
+        taskIds.forEach((taskId, i) => {
+          nextMap[taskId] = pingLists[i] || [];
+        });
+        setPingRecordsMap(nextMap);
+      } catch (e) {
+        if (controller.signal.aborted || seq !== historyReqSeqRef.current) {
+          return;
+        }
+        setError((e as Error).message);
+      } finally {
+        if (!controller.signal.aborted && seq === historyReqSeqRef.current) {
+          setLoadingRecords(false);
+        }
+      }
+    },
+    [activeServerId, range, pingTaskIdsKey],
+  );
 
   useEffect(() => {
-    if (!selectedServer) {
+    if (!activeServerId) {
+      historyControllerRef.current?.abort();
+      historyControllerRef.current = null;
+      historyReqSeqRef.current += 1;
+      prevHistoryTargetRef.current = "";
+      hasLoadedHistoryRef.current = false;
       setRecords([]);
       setPingRecordsMap({});
+      setLoadingRecords(false);
       return;
     }
-    void loadDetailHistory();
-  }, [loadDetailHistory, selectedServer]);
+    const targetKey = `${activeServerId}\n${range}`;
+    const targetChanged = prevHistoryTargetRef.current !== targetKey;
+    if (targetChanged) {
+      prevHistoryTargetRef.current = targetKey;
+      hasLoadedHistoryRef.current = false;
+      setRecords([]);
+      setPingRecordsMap({});
+      setLoadingRecords(true);
+    }
+    void loadDetailHistory(!targetChanged && hasLoadedHistoryRef.current);
+
+    const id = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        void loadDetailHistory(true);
+      }
+    }, 30_000);
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void loadDetailHistory(true);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      historyControllerRef.current?.abort();
+      historyControllerRef.current = null;
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [activeServerId, range, pingTaskIdsKey, loadDetailHistory]);
 
   const onlineCount = onlineManagedServers.filter(
     (s) => overviewByServer.get(s.id)?.online ?? s.status === "online",
@@ -329,7 +396,7 @@ export default function Monitor() {
               className="ghost"
               onClick={() => {
                 void fetchOverview();
-                if (selectedServer) void loadDetailHistory();
+                if (activeServerId) void loadDetailHistory(true);
               }}
             >
               立即刷新
@@ -607,7 +674,7 @@ export default function Monitor() {
           onClose={() => setPingDialog(null)}
           onSaved={async () => {
             await fetchPingTasks();
-            if (selectedServer) await loadDetailHistory();
+            if (activeServerId) await loadDetailHistory(true);
           }}
         />
       )}
