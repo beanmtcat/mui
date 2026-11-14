@@ -8,20 +8,23 @@ config="$script_dir/publish.env"
 service=all
 init_env=
 with_agent=0
+with_status_cli=0
 
 usage() {
   cat <<'HELP'
 用法：deploy/publish.sh [选项]
   --config FILE         SSH 发布配置，默认 deploy/publish.env
-  --service NAME        all（默认）、backend 或 frontend
+  --service NAME        all（默认）、backend、frontend 或 status
   --init-env FILE        首次上传生产 .env；远程已存在时拒绝覆盖
   --with-agent          同步本地 bin/ 下已构建的 Agent/sing-box 发布文件
+  --with-status         随 --service all 一并构建并启动公开状态页容器 mui-status
   -h, --help            显示帮助
 
 首次：cp deploy/publish.env.example deploy/publish.env，填写 SSH 主机和目录。
       deploy/publish.sh --init-env deploy/.env
 更新：deploy/publish.sh
       deploy/publish.sh --service frontend
+      deploy/publish.sh --service status
 HELP
 }
 die() { printf '发布失败：%s\n' "$*" >&2; exit 1; }
@@ -32,11 +35,12 @@ while [[ $# -gt 0 ]]; do
       case "$1" in --config) config=$2;; --service) service=$2;; --init-env) init_env=$2;; esac
       shift 2;;
     --with-agent) with_agent=1; shift;;
+    --with-status) with_status_cli=1; shift;;
     -h|--help) usage; exit 0;;
     *) die "未知选项：$1（使用 --help 查看用法）";;
   esac
 done
-case "$service" in all|backend|frontend) ;; *) die '--service 只能是 all/backend/frontend';; esac
+case "$service" in all|backend|frontend|status) ;; *) die '--service 只能是 all/backend/frontend/status';; esac
 [[ -f "$config" ]] || die "请复制 deploy/publish.env.example 为 $config 并填写配置"
 # Bash expands an unquoted ~/ assignment on this machine when sourcing the
 # configuration. Reject it before it silently becomes a path on the remote host.
@@ -56,6 +60,9 @@ SSH_KEY=${SSH_KEY:-}
 COMPOSE_PROJECT=${COMPOSE_PROJECT:-mui}
 COMPOSE_FILES=${COMPOSE_FILES:-compose.yaml}
 HEALTH_TIMEOUT=${HEALTH_TIMEOUT:-120}
+WITH_STATUS=${WITH_STATUS:-0}
+if [[ "$with_status_cli" == 1 ]]; then WITH_STATUS=1; fi
+[[ "$WITH_STATUS" == 0 || "$WITH_STATUS" == 1 ]] || die 'WITH_STATUS 只能是 0 或 1'
 [[ "$SSH_HOST" != -* && "$SSH_HOST" != *[$'\r\n\t ']* ]] || die 'SSH_HOST 应为 SSH 配置别名或 user@host'
 [[ "$SSH_PORT" =~ ^[0-9]+$ && ${#SSH_PORT} -le 5 && 10#$SSH_PORT -ge 1 && 10#$SSH_PORT -le 65535 ]] || die 'SSH_PORT 无效'
 [[ "$HEALTH_TIMEOUT" =~ ^[0-9]+$ && ${#HEALTH_TIMEOUT} -le 5 && 10#$HEALTH_TIMEOUT -ge 1 ]] || die 'HEALTH_TIMEOUT 必须是 1–99999 秒'
@@ -64,7 +71,7 @@ while [[ "$REMOTE_DIR" == */ ]]; do REMOTE_DIR=${REMOTE_DIR%/}; done
 [[ -n "$REMOTE_DIR" && "$REMOTE_DIR" != */../* && "$REMOTE_DIR" != */.. && "$REMOTE_DIR" != */./* && "$REMOTE_DIR" != */. ]] || die 'REMOTE_DIR 不能是根目录或含 .、.. 段'
 [[ "$COMPOSE_PROJECT" =~ ^[a-z0-9][a-z0-9_-]*$ ]] || die 'COMPOSE_PROJECT 只能包含小写字母、数字、短横线和下划线'
 [[ -z "$init_env" || -f "$init_env" ]] || die "生产配置文件不存在：$init_env"
-[[ "$with_agent" == 0 || "$service" != frontend ]] || die '--with-agent 需要同时发布后端'
+[[ "$with_agent" == 0 || "$service" == all || "$service" == backend ]] || die '--with-agent 需要同时发布后端'
 for command in ssh tar; do command -v "$command" >/dev/null || die "本机缺少 $command"; done
 ssh_args=(-p "$SSH_PORT" -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=15 -o ServerAliveCountMax=3)
 if [[ -n "$SSH_KEY" ]]; then
@@ -90,13 +97,17 @@ done
 if [[ "$COMPOSE_FILES" == *compose.web.yaml* && "$service" != frontend ]]; then
   die 'compose.web.yaml 应使用 --service frontend'
 fi
+if [[ ("$service" == status || "$WITH_STATUS" == 1) && "$COMPOSE_FILES" != *compose.yaml* ]]; then
+  die '发布公开状态页需要 compose.yaml'
+fi
 # Explicit allowlist: no Git metadata, local .env, SSH/signing keys, TLS keys,
 # database files, node_modules or build caches can enter the source archive.
 files=(go.mod go.sum THIRD_PARTY_NOTICES.md .dockerignore cmd internal web/src web/package.json web/package-lock.json
-  web/tsconfig.json web/vite.config.ts web/index.html deploy/Mui.Dockerfile deploy/Web.Dockerfile
-  deploy/Agent.Dockerfile deploy/build-agent.sh deploy/compose.yaml deploy/compose.web.yaml
-  deploy/compose.backend.yaml deploy/nginx deploy/.env.example deploy/web.env.example
-  deploy/publish.sh deploy/publish.env.example)
+  web/tsconfig.json web/vite.config.ts web/index.html status-web/src status-web/scripts status-web/package.json
+  status-web/package-lock.json status-web/tsconfig.json status-web/vite.config.ts status-web/index.html
+  deploy/Mui.Dockerfile deploy/Web.Dockerfile deploy/Status.Dockerfile deploy/Agent.Dockerfile deploy/build-agent.sh
+  deploy/compose.yaml deploy/compose.web.yaml deploy/compose.backend.yaml deploy/nginx deploy/.env.example
+  deploy/web.env.example deploy/publish.sh deploy/publish.env.example)
 if [[ "$with_agent" == 1 ]]; then
   release_key=${MUI_RELEASE_KEY:-"$script_dir/.secrets/release.key"}
   if [[ -n "${MUI_RELEASE_KEY:-}" && ! -f "$release_key" ]]; then
@@ -171,11 +182,11 @@ COPYFILE_DISABLE=1 tar ${tar_flags[@]+"${tar_flags[@]}"} -czf - -C "$repo_dir" "
 if [[ -n "$init_env" ]]; then
   ssh "${ssh_args[@]}" "$SSH_HOST" "umask 077; cat > $(quote "$stage/.publish-env")" < "$init_env"
 fi
-remote "$REMOTE_DIR" "$stage" "$service" "$COMPOSE_PROJECT" "$HEALTH_TIMEOUT" "$with_agent" "${compose_files[@]}" <<'PUBLISH'
+remote "$REMOTE_DIR" "$stage" "$service" "$COMPOSE_PROJECT" "$HEALTH_TIMEOUT" "$with_agent" "$WITH_STATUS" "${compose_files[@]}" <<'PUBLISH'
 set -euo pipefail
 umask 077
-root=$1; stage=$2; service=$3; project=$4; timeout=$5; with_agent=$6
-shift 6
+root=$1; stage=$2; service=$3; project=$4; timeout=$5; with_agent=$6; with_status=$7
+shift 7
 exec 9>"$root/.publish.lock"
 flock -n 9 || { echo '另一场发布正在进行，请稍后重试' >&2; exit 1; }
 if [[ -f "$stage/.publish-env" ]]; then
@@ -204,7 +215,13 @@ fi
 # Build sources first; running containers are untouched if validation/build fails.
 compose=(docker compose --project-name "$project" --env-file "$root/deploy/.env")
 for file in "$@"; do compose+=(-f "$release/deploy/$file"); done
-case "$service" in all) services=(mui-service mui-web);; backend) services=(mui-service);; frontend) services=(mui-web);; esac
+if [[ "$service" == status || ("$service" == all && "$with_status" == 1) ]]; then compose+=(--profile status); fi
+case "$service" in
+  all) services=(mui-service mui-web); [[ "$with_status" == 1 ]] && services+=(mui-status);;
+  backend) services=(mui-service);;
+  frontend) services=(mui-web);;
+  status) services=(mui-status);;
+esac
 "${compose[@]}" config --quiet
 # The target host resolves package registries through its host network. Newer
 # Compose invokes Bake, which requires network.host to be granted explicitly.
@@ -229,11 +246,14 @@ fi
 chmod 755 "$root/bin"
 ln -s -- "$root/bin" "$release/bin"
 "${compose[@]}" up -d --no-build --no-deps --wait --wait-timeout "$timeout" "${services[@]}"
-if [[ "$service" != backend ]]; then
+if [[ "$service" == all || "$service" == frontend ]]; then
   # Check the real API through inner Nginx too; /nginx-health checks static serving only.
   # SSH feeds this Bash program over stdin. Do not let Compose consume the
   # remaining program while forwarding stdin into the health-check process.
   "${compose[@]}" exec -T mui-web wget -T 10 -q -O /dev/null http://127.0.0.1:8086/healthz </dev/null
+fi
+if [[ "$service" == status || ("$service" == all && "$with_status" == 1) ]]; then
+  "${compose[@]}" exec -T mui-status wget -T 10 -q -O /dev/null http://127.0.0.1:8089/healthz </dev/null
 fi
 "${compose[@]}" ps "${services[@]}"
 previous_name=

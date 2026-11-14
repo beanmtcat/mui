@@ -283,6 +283,7 @@ func (a *App) revokeAgent(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
+	a.invalidatePublicStatusSnapshot()
 	a.auditRequest(r, "agent.revoke", id, "")
 	writeJSON(w, 200, map[string]bool{"ok": true})
 }

@@ -406,6 +406,7 @@ func (a *App) autoRenewOneServer(id string, now time.Time, loc *time.Location) {
 		}
 	}
 
+	a.invalidatePublicStatusSnapshot()
 	a.Store.Audit("server.renew", cur.ID, fmt.Sprintf("自动续期：%s -> %s", oldExpDate, newExpDate))
 
 	var msg strings.Builder
@@ -487,6 +488,7 @@ func (a *App) renewServer(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	a.invalidatePublicStatusSnapshot()
 	a.auditRequest(r, "server.renew", cur.ID, fmt.Sprintf("%s -> %s", oldExpDate, newExpDate))
 	cur.Status = serverStatus(cur)
 	if cycleMap, err := a.Store.CycleTrafficMap([]shared.Server{cur}, now); err == nil {

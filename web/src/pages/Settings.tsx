@@ -2,6 +2,7 @@ import { lazy, Suspense, useState } from "react";
 import { mutation } from "../api";
 import { useApp } from "../app/context";
 import { MemoMaskedValue as MaskedValue } from "../components/secrets";
+import StatusPageSettingsCard from "../components/StatusPageSettings";
 import TelegramSettingsCard from "../components/TelegramSettings";
 
 const QRCode = lazy(() => import("../components/QRCode"));
@@ -15,6 +16,7 @@ export default function Settings() {
   return protect(
           <section className="panel settings">
             <TelegramSettingsCard />
+            <StatusPageSettingsCard />
             <h2>账户安全</h2>
             <p>建议启用动态验证码以保护管理面板。</p>
             {expiring.length > 0 && (

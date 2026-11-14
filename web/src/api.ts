@@ -268,6 +268,15 @@ export type TelegramSettings = {
   apiBase: string;
   events: TelegramEvents;
 };
+export type StatusPageSettings = {
+  enabled: boolean;
+  title: string;
+  description: string;
+  showTraffic: boolean;
+  showPing: boolean;
+  listenConfigured: boolean;
+  statusUrl: string;
+};
 export type Customer = { id: string; name: string; notes: string; createdAt: string };
 export type SubscriptionAccess = { id: string; subscriptionId: string; customerId: string; ip: string; at: string; userAgent?: string; client?: string };
 export type ConnectionIP = { serverId: string; nodeId: string; ip: string; clientIp?: string; peerIp?: string; routeId?: string; sourceKind?: "entry" | "direct" | "relay" | "agent" | "unknown"; lastSeen: string; cursor: string };

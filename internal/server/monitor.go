@@ -295,6 +295,7 @@ func (a *App) invalidatePingTasksCache() {
 	a.pingTasksLoaded = false
 	a.pingTasksCache = nil
 	a.pingTasksMu.Unlock()
+	a.invalidatePublicStatusSnapshot()
 }
 
 func (a *App) cachedPingTasks() ([]MonitorPingTask, error) {

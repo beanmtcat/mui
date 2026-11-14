@@ -5,6 +5,9 @@ data
 bin
 web/node_modules
 web/dist
+status-web/node_modules
+status-web/dist
+status-web/*.tsbuildinfo
 *.db
 deploy/tls
 deploy/.env

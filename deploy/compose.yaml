@@ -31,6 +31,8 @@ services:
       MUI_TRAFFIC_RETENTION_DAYS: ${MUI_TRAFFIC_RETENTION_DAYS:-90}
       TZ: ${TZ:-Asia/Shanghai}
       MUI_LISTEN: :8087
+      MUI_STATUS_LISTEN: ${MUI_STATUS_LISTEN:-}
+      MUI_STATUS_URL: ${MUI_STATUS_URL:-}
     # Allow Linux containers to reach a PostgreSQL instance on the host.
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -81,6 +83,42 @@ services:
         condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8086/nginx-health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+  mui-status:
+    image: mui-status:latest
+    container_name: mui-status
+    profiles:
+      - status
+    build:
+      context: ..
+      dockerfile: deploy/Status.Dockerfile
+      network: host
+    restart: unless-stopped
+    environment:
+      MUI_STATUS_BACKEND_URL: ${MUI_STATUS_BACKEND_URL:-http://mui-service:8088}
+      MUI_DNS_RESOLVER: ${MUI_DNS_RESOLVER:-127.0.0.11}
+      MUI_EDGE_PROXY_CIDR: ${MUI_EDGE_PROXY_CIDR:-172.30.17.1/32}
+    ports:
+      - ${MUI_STATUS_BIND:-127.0.0.1:8089}:8089
+    networks:
+      - default
+    depends_on:
+      mui-service:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8089/nginx-health"]
       interval: 10s
       timeout: 3s
       retries: 5

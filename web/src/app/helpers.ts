@@ -42,6 +42,9 @@ export const emptyServer: Partial<Server> = {
   group: "",
   sortWeight: 0,
   alertMuted: false,
+  publicVisible: false,
+  publicName: "",
+  publicNote: "",
 };
 export const googleBlockedDomains = [
   "google.com", "google.co.jp", "google.com.hk", "google.cn", "googleapis.com", "gstatic.com", "googleusercontent.com",

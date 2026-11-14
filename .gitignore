@@ -2,6 +2,8 @@
 data/
 web/node_modules/
 web/dist/
+status-web/node_modules/
+status-web/dist/
 bin/
 dist/release/
 .cache/
@@ -9,6 +11,7 @@ dist/release/
 *.sqlite
 *.sqlite3
 web/*.tsbuildinfo
+status-web/*.tsbuildinfo
 deploy/tls/*
 !deploy/tls/.gitkeep
 .claude

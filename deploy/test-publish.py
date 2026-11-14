@@ -108,6 +108,9 @@ else: raise SystemExit(subprocess.call(['/bin/mv',*args]))
         self.assertFalse(list(release.rglob("publish.env")))
         self.assertFalse((release / ".git").exists())
         self.assertFalse((release / "web/node_modules").exists())
+        self.assertFalse((release / "status-web/node_modules").exists())
+        self.assertFalse((release / "status-web/dist").exists())
+        self.assertTrue((release / "status-web/package.json").is_file())
         self.assertFalse((release / "deploy/tls").exists())
         self.assertTrue((release / "deploy/compose.yaml").is_file())
         self.assertEqual((release / "bin").resolve(), (self.remote / "bin").resolve())
@@ -203,15 +206,17 @@ else: raise SystemExit(subprocess.call(['/bin/mv',*args]))
     def agent_fixture(self, corrupt=False):
         source = self.base / "source"
         files = ("go.mod", "go.sum", "THIRD_PARTY_NOTICES.md", ".dockerignore", "web/package.json", "web/package-lock.json",
-                 "web/tsconfig.json", "web/vite.config.ts", "web/index.html", "deploy/Mui.Dockerfile",
-                 "deploy/Web.Dockerfile", "deploy/Agent.Dockerfile", "deploy/build-agent.sh",
+                 "web/tsconfig.json", "web/vite.config.ts", "web/index.html", "status-web/package.json",
+                 "status-web/package-lock.json", "status-web/tsconfig.json", "status-web/vite.config.ts",
+                 "status-web/index.html", "deploy/Mui.Dockerfile", "deploy/Web.Dockerfile",
+                 "deploy/Status.Dockerfile", "deploy/Agent.Dockerfile", "deploy/build-agent.sh",
                  "deploy/compose.yaml", "deploy/compose.web.yaml", "deploy/compose.backend.yaml",
                  "deploy/.env.example", "deploy/web.env.example", "deploy/publish.env.example")
         for name in files:
             path = source / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("fixture")
-        for name in ("cmd", "internal", "web/src", "deploy/nginx"):
+        for name in ("cmd", "internal", "web/src", "status-web/src", "status-web/scripts", "deploy/nginx"):
             (source / name).mkdir(parents=True, exist_ok=True)
         self.script = source / "deploy/publish.sh"
         self.script.write_bytes(SCRIPT.read_bytes())
@@ -302,6 +307,33 @@ assert pathlib.Path(args[3]).read_text() == 'private-fixture-key'
     def test_reported_directory_matches_the_target(self):
         result = self.run_publish("--init-env", str(self.production))
         self.assertIn("远程发布目录：" + str(self.remote), result.stdout)
+
+    def test_status_only_service_builds_and_probes_mui_status(self):
+        self.initialize()
+        self.log.unlink()
+        self.run_publish("--service", "status")
+        for call in self.calls():
+            if "build" in call or ("up" in call and "--help" not in call):
+                self.assertIn("--profile", call)
+                self.assertIn("status", call)
+                self.assertEqual(call[-1], "mui-status")
+                self.assertNotIn("mui-web", call)
+                self.assertNotIn("mui-service", call)
+        self.assertTrue(any("exec" in call and "mui-status" in call and call[-1] == "http://127.0.0.1:8089/healthz"
+                            for call in self.calls()))
+        self.assertFalse(any("exec" in call and "mui-web" in call for call in self.calls()))
+
+    def test_all_with_status_builds_and_probes_three_services(self):
+        with self.config.open("a") as stream:
+            stream.write("WITH_STATUS=1\n")
+        self.run_publish("--init-env", str(self.production))
+        builds = [call for call in self.calls() if "build" in call]
+        self.assertIn("--profile", builds[-1])
+        self.assertEqual(builds[-1][-3:], ["mui-service", "mui-web", "mui-status"])
+        self.assertTrue(any("exec" in call and "mui-web" in call and call[-1] == "http://127.0.0.1:8086/healthz"
+                            for call in self.calls()))
+        self.assertTrue(any("exec" in call and "mui-status" in call and call[-1] == "http://127.0.0.1:8089/healthz"
+                            for call in self.calls()))
 
 
 if __name__ == "__main__":

@@ -150,6 +150,7 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
+	a.invalidatePublicStatusSnapshot()
 	a.auditRequest(r, "server.create", srv.ID, srv.Name)
 	if srv.AgentProxyNodeID != "" {
 		if err = a.syncRoutes(); err != nil {
@@ -243,6 +244,7 @@ func (a *App) purgeServer(id string) error {
 	}
 	a.clearServerResourcePending(id)
 	a.clearServerMonitorState(id)
+	a.invalidatePublicStatusSnapshot()
 	return nil
 }
 
@@ -616,6 +618,7 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 500, err.Error())
 		return
 	}
+	a.invalidatePublicStatusSnapshot()
 	a.auditRequest(r, "server.update", id, old.Name)
 	old.Status = serverStatus(old)
 	if cycleMap, err := a.Store.CycleTrafficMap([]shared.Server{old}, now); err == nil {

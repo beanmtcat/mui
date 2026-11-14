@@ -5,7 +5,7 @@
 1. 阶段一：Telegram 告警（只改面板）
 2. 阶段二：把 Komari 的监控后台并入 MUI 面板（面板 + Agent）
 3. 阶段二补充：计费续期、流量限额与服务器整理（只改面板）
-4. 阶段三：公开状态页（**暂缓**，等通知后再做）
+4. 阶段三：公开状态页（已实施）
 5. 阶段四：订阅链接防泄露（**暂不实施**，仅留作记录）
 
 通用约束（三个阶段都适用）：
@@ -393,14 +393,14 @@ Telegram 设置新增 `trafficReport: {daily, weekly, monthly}` 三个开关（�
 
 ---
 
-## 阶段三：公开状态页（暂缓）
+## 阶段三：公开状态页
 
-**本阶段已决定暂缓。实现者做完"阶段二补充"即结束，不要开始本节；等明确通知后再做。**
+已实施。
 
 ### 3.1 原则
 
 - 默认关闭。开启后也只展示管理员逐台勾选了"公开展示"的服务器。
-- 公开接口**永不返回**：IP、域名、内部 ID、Agent 版本、节点/订阅/链路/防火墙的任何信息、备注（`Notes`）、标签。
+- 公开接口**永不返回**：IP、域名、内部 ID、Agent 版本、节点/订阅/链路/防火墙的任何信息、备注（`Notes`）、标签，以及 `price`、`currency`、`billingCycle`、`billingCycleDays`、`autoRenew`、`alertMuted`、`sortWeight`。
 - 公开接口不读写会话，不需要登录，不带 `X-Requested-With` 要求（都是 GET）。
 
 ### 3.2 设置
@@ -414,8 +414,9 @@ Telegram 设置新增 `trafficReport: {daily, weekly, monthly}` 三个开关（�
 - `GET /api/public/status`：页面配置加服务器列表。每台：
   - `id`：公开 ID = `Store.Fingerprint("status-page", serverID)`（与内部 ID 不可互推）。
   - `name`：`PublicName`，为空时用服务器名。
-  - `country`、`region`、`city`（已有档案字段）、`online`、`os`、`arch`、`virtualization`、`cpuName`、`cpuCores`、各总量。
+  - `group`、`country`、`region`、`city`（已有档案字段）、`online`、`os`、`arch`、`virtualization`、`cpuName`、`cpuCores`、各总量。
   - 最新样本（同 2.2 的 `MonitorSample`，按 `showTraffic` 决定是否带累计流量）。
+  - `cycleTraffic`（`startAt`/`resetAt`/`used`/`limit`/`type`，受 `showTraffic` 控制）。
   - `expiresAt`、`publicNote`。
 - `GET /api/public/servers/{publicId}/records?range=1h|6h|24h|7d`：历史曲线，点数上限 720。
 - `GET /api/public/servers/{publicId}/pings?range=`：`showPing` 开启时可用；任务只返回 `name`，**不返回 target**。
@@ -439,10 +440,10 @@ Telegram 设置新增 `trafficReport: {daily, weekly, monthly}` 三个开关（�
 - 独立入口上的来源 IP 判定沿用 `clientIP` 与 `MUI_TRUSTED_PROXIES`。
 - 独立入口的响应头：与主入口相同的安全头；另加 `X-Robots-Tag: noindex`（是否允许收录不做成开关，默认不收录）。
 
-前端（独立构建产物、独立容器）：
+前端（独立工程、独立构建产物、独立容器）：
 
-- 独立的 Vite 工程入口：`web/status/index.html` + `web/src/status/main.tsx`，单独的构建命令（`npm run build:status`，输出到 `web/dist-status`）。它不得 import 管理端的 `app/`、`pages/`、`forms/`、`api.ts`（可以共享纯展示用的小工具和 CSS 变量文件）；管理端的构建产物里也不包含状态页代码。
-- 新镜像与容器 `mui-status`（`deploy/Status.Dockerfile` + `deploy/nginx/status.conf.template`），监听独立端口（默认 8089）：只提供 `dist-status` 的静态文件，只把 `/api/public/` 反代到 `MUI_STATUS_LISTEN`；其它路径回退到状态页的 `index.html`。安全头、`real_ip` 处理参照现有 `routes.conf`。
+- 独立工程 `status-web/`（自己的 `package.json`，只依赖 `react` 与 `react-dom`），构建输出 `status-web/dist`，构建末尾运行 `scripts/check-dist.mjs`；卡片与图表代码是 `web/src/monitor/` 的一份副本，位于 `status-web/src/monitor/`，样式改动需两处同步；管理端的构建产物里也不包含状态页代码。
+- 新镜像与容器 `mui-status`（`deploy/Status.Dockerfile` + `deploy/nginx/status.conf.template`），`Status.Dockerfile` 只复制 `status-web/`，监听独立端口（默认 8089）：只提供 `status-web/dist` 的静态文件，只把 `/api/public/` 反代到 `MUI_STATUS_LISTEN`；其它路径回退到状态页的 `index.html`。安全头、`real_ip` 处理参照现有 `routes.conf`。
 - `deploy/compose.yaml` 增加 `mui-status` 服务（可用 profile 控制是否启用）；`deploy/publish.sh` 能构建并发布它；`deploy/.env.example` 与 README 说明：状态页用单独的域名指向这个端口，不要和面板共用域名。
 - 现有 `mui-web` 容器与 `routes.conf` **不增加** `/status` 路径，也不反代 `/api/public/`。
 

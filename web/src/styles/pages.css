@@ -417,7 +417,8 @@ form.totpBox {
   gap: 5px;
   min-width: 0;
 }
-.telegramField input {
+.telegramField input,
+.telegramField textarea {
   width: 100%;
   min-width: 0;
 }
@@ -484,6 +485,36 @@ form.totpBox {
 .telegramActions {
   display: flex;
   flex-wrap: wrap;
+  gap: 8px;
+}
+.statusPageUrlRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface-subtle, var(--bg));
+}
+.statusPageUrlMeta {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.statusPageUrlMeta strong {
+  font-size: 12px;
+  color: var(--muted);
+}
+.statusPageUrlMeta code {
+  font-size: 13px;
+  word-break: break-all;
+}
+.statusPageUrlActions {
+  display: flex;
+  align-items: center;
   gap: 8px;
 }
 @media (max-width: 560px) {

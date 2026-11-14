@@ -180,6 +180,18 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
       }
     }
 
+    const publicName = (serverForm.publicName ?? "").trim();
+    if ([...publicName].length > 80) {
+      setError("公开名称不能超过 80 个字符");
+      return;
+    }
+
+    const publicNote = (serverForm.publicNote ?? "").trim();
+    if ([...publicNote].length > 200) {
+      setError("公开备注不能超过 200 个字符");
+      return;
+    }
+
     const payload: ServerForm = {
       ...serverForm,
       price,
@@ -193,6 +205,9 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
       group,
       sortWeight,
       alertMuted: !!serverForm.alertMuted,
+      publicVisible: !!serverForm.publicVisible,
+      publicName,
+      publicNote,
       cycleTraffic: undefined,
     };
 
@@ -235,6 +250,7 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
     (initial.trafficResetDay && initial.trafficResetDay > 0)
   );
   const hasOrganizeInitial = !!(initial.group || initial.sortWeight || initial.alertMuted);
+  const hasPublicInitial = !!(initial.publicVisible || initial.publicName || initial.publicNote);
   return <Dialog title={serverForm.id ? "编辑服务器" : "新建服务器"} value={{ serverForm, drafts }} initial={{ serverForm: initial, drafts: initialDrafts }} busy={busy}>
               <form className="serverForm" onSubmit={submitServer}>
                 <section className="serverFormSection" aria-labelledby="server-basic-title">
@@ -415,7 +431,7 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
                 </Advanced>}
                 <Advanced title="计费与流量" open={hasBillingInitial}>
                   <div className="formGrid">
-                    <Field label="到期日" help="用于监控卡片与服务器列表展示、流量周期锚点及 Telegram 到期提醒。留空表示不限期。">
+                    <Field label="到期日" help="用于监控卡片、公开状态页与服务器列表展示、流量周期锚点及 Telegram 到期提醒。留空表示不限期。">
                       <input
                         type="date"
                         value={serverForm.expiresAt ? serverForm.expiresAt.slice(0, 10) : ""}
@@ -564,6 +580,40 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
                         静音离线与资源告警
                       </label>
                       <HelpTip label="静音离线与资源告警" text="开启后不再发送该服务器的离线恢复及 CPU / 内存 / 磁盘高占用告警；到期提醒与流量限额告警不受影响。" />
+                    </div>
+                  </div>
+                </Advanced>
+                <Advanced title="公开状态页" open={hasPublicInitial}>
+                  <div className="formGrid">
+                    <div className="serverToggleRow serverFormWide">
+                      <label className="check">
+                        <input
+                          type="checkbox"
+                          checked={!!serverForm.publicVisible}
+                          onChange={(e) => setServerForm({ ...serverForm, publicVisible: e.target.checked })}
+                        />
+                        公开展示（在公开状态页中展示这台服务器）
+                      </label>
+                      <HelpTip label="公开展示规则" text="仅当公开状态页开启且配置了独立入口时生效。公开接口只返回派生公开 ID、名称、地区、硬件配置、实时/历史监控、流量用量、到期日与公开备注，绝不暴露公网 IP、域名、内部 ID、探测目标或内部备注。" />
+                    </div>
+                    <Field label="公开名称（最多 80 字符）" help="留空时默认使用服务器名。">
+                      <input
+                        maxLength={80}
+                        placeholder="留空默认使用服务器名"
+                        value={serverForm.publicName || ""}
+                        onChange={(e) => setServerForm({ ...serverForm, publicName: e.target.value })}
+                      />
+                    </Field>
+                    <div className="serverFormWide">
+                      <Field label="公开备注（最多 200 字符）" help="公开显示在状态页卡片底部，请勿填写 IP、域名、账号或内部敏感信息。">
+                        <textarea
+                          rows={2}
+                          maxLength={200}
+                          placeholder="例如：BGP 优化线路 / 维护窗口周日凌晨"
+                          value={serverForm.publicNote || ""}
+                          onChange={(e) => setServerForm({ ...serverForm, publicNote: e.target.value })}
+                        />
+                      </Field>
                     </div>
                   </div>
                 </Advanced>

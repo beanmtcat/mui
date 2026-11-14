@@ -1,0 +1,183 @@
+/* Counterpart in status-web/src/monitor/monitor-tokens.css — keep design tokens in sync across both apps.
+   Adapted from Komari-Theme-LuminaPlus (Misaka Drive, src/styles/tokens.css & numeric.css),
+   licensed under the Apache License, Version 2.0. Scoped to .monitorPage so global tokens stay untouched. */
+
+.monitorPage {
+  --mon-surface: #ffffff;
+  --mon-surface-elev: #ffffff;
+  --mon-surface-sunken: #f4f4f5;
+  --mon-hover-bg: #f4f4f5;
+
+  --mon-border: rgba(24, 24, 27, 0.09);
+  --mon-border-subtle: rgba(24, 24, 27, 0.06);
+  --mon-border-strong: rgba(24, 24, 27, 0.16);
+  --mon-hairline: rgba(24, 24, 27, 0.08);
+
+  --mon-text-primary: #18181b;
+  --mon-text-secondary: #52525b;
+  --mon-text-tertiary: #696973;
+
+  --mon-fill-secondary: rgba(24, 24, 27, 0.09);
+  --mon-fill-tertiary: rgba(24, 24, 27, 0.045);
+
+  --mon-progress-bg: #e4e4e7;
+  --mon-progress-cpu: #3b82f6;
+  --mon-progress-memory: #8b5cf6;
+  --mon-progress-swap: #6366f1;
+  --mon-progress-disk: #e97b35;
+  --mon-progress-network: #10b981;
+  --mon-progress-load: #ec4899;
+
+  --mon-traffic-heat-spectrum: linear-gradient(
+    to right,
+    #2f9e65 0%,
+    #2f9e65 10%,
+    #7cc93b 28%,
+    #cbd83a 44%,
+    #e2a928 58%,
+    #e97b35 72%,
+    #e05535 86%,
+    #dc2626 100%
+  );
+
+  --mon-status-success: #2f9e65;
+  --mon-status-warning: #e9a23b;
+  --mon-status-error: #dc2626;
+  --mon-status-info: #3b82f6;
+  --mon-status-online: #2f9e65;
+  --mon-status-offline: #dc2626;
+
+  /* Text-safe semantic inks with >= 4.5:1 contrast on light card surfaces */
+  --mon-ink-success: #18794e;
+  --mon-ink-warning: #b45309;
+  --mon-ink-error: #c81e1e;
+  --mon-ink-info: #1d4ed8;
+
+  --mon-latency-excellent: #22a559;
+  --mon-latency-good: #65a30d;
+  --mon-latency-moderate: #a18b0e;
+  --mon-latency-elevated: #d97706;
+  --mon-latency-critical: #dc2626;
+
+  --mon-accent-500: #3b82f6;
+  --mon-accent-strong: #2f5be0;
+
+  --mon-speed-idle: #1f8a52;
+  --mon-speed-low: #b7791f;
+  --mon-speed-high: #c2591b;
+  --mon-speed-max: #c82829;
+
+  --mon-traffic-up: #2563eb;
+  --mon-traffic-down: #18794e;
+
+  --mon-tag-red-bg: #fee2e2;
+  --mon-tag-red-fg: #b91c1c;
+  --mon-tag-amber-bg: rgba(233, 162, 59, 0.16);
+  --mon-tag-amber-fg: #9a4a06;
+  --mon-tag-green-bg: rgba(47, 158, 101, 0.13);
+  --mon-tag-green-fg: #166e46;
+  --mon-tag-blue-bg: rgba(59, 130, 246, 0.13);
+  --mon-tag-blue-fg: #1d4ed8;
+  --mon-tag-gray-bg: #ececef;
+  --mon-tag-gray-fg: #3f3f46;
+
+  --mon-ring: rgba(59, 130, 246, 0.32);
+  --mon-font-numeric:
+    "Inter",
+    -apple-system,
+    BlinkMacSystemFont,
+    "PingFang SC",
+    "Microsoft YaHei",
+    system-ui,
+    sans-serif;
+}
+
+@supports (background: linear-gradient(to right in oklch, red, blue)) {
+  .monitorPage {
+    --mon-traffic-heat-spectrum: linear-gradient(
+      to right in oklch,
+      oklch(0.72 0.16 150) 0%,
+      oklch(0.72 0.16 150) 10%,
+      oklch(0.8 0.18 128) 28%,
+      oklch(0.86 0.18 110) 44%,
+      oklch(0.8 0.18 85) 58%,
+      oklch(0.72 0.19 62) 72%,
+      oklch(0.65 0.21 40) 86%,
+      oklch(0.6 0.22 27) 100%
+    );
+  }
+}
+
+:root[data-theme="dark"] .monitorPage {
+  --mon-surface: #181e26;
+  --mon-surface-elev: #1e2530;
+  --mon-surface-sunken: #11161d;
+  --mon-hover-bg: #232b36;
+
+  --mon-border: #313843;
+  --mon-border-subtle: rgba(56, 64, 76, 0.76);
+  --mon-border-strong: #58606d;
+  --mon-hairline: rgba(56, 64, 76, 0.72);
+
+  --mon-text-primary: #e2e8f0;
+  --mon-text-secondary: #b7bdc8;
+  --mon-text-tertiary: #9198a1;
+
+  --mon-fill-secondary: rgba(101, 108, 118, 0.22);
+  --mon-fill-tertiary: rgba(101, 108, 118, 0.13);
+
+  --mon-progress-bg: #2c333d;
+  --mon-progress-cpu: #539bf5;
+  --mon-progress-memory: #b083f0;
+  --mon-progress-swap: #986ee2;
+  --mon-progress-disk: #e0823d;
+  --mon-progress-network: #57ab5a;
+  --mon-progress-load: #e275ad;
+
+  --mon-status-success: #57ab5a;
+  --mon-status-warning: #daaa3f;
+  --mon-status-error: #f47067;
+  --mon-status-info: #539bf5;
+  --mon-status-online: #57ab5a;
+  --mon-status-offline: #f47067;
+
+  --mon-ink-success: #6bc46d;
+  --mon-ink-warning: #eab84b;
+  --mon-ink-error: #ff8e86;
+  --mon-ink-info: #79c0ff;
+
+  --mon-latency-excellent: #2fc66e;
+  --mon-latency-good: #9fe339;
+  --mon-latency-moderate: #cbd83a;
+  --mon-latency-elevated: #e2a928;
+  --mon-latency-critical: #f47067;
+
+  --mon-accent-500: #539bf5;
+  --mon-accent-strong: #4184e4;
+
+  --mon-speed-idle: #57ab5a;
+  --mon-speed-low: #daaa3f;
+  --mon-speed-high: #e0823d;
+  --mon-speed-max: #f47067;
+
+  --mon-traffic-up: #539bf5;
+  --mon-traffic-down: #57ab5a;
+
+  --mon-tag-red-bg: rgba(244, 112, 103, 0.16);
+  --mon-tag-red-fg: #ffb8b0;
+  --mon-tag-amber-bg: rgba(218, 170, 63, 0.16);
+  --mon-tag-amber-fg: #f2c763;
+  --mon-tag-green-bg: rgba(87, 171, 90, 0.16);
+  --mon-tag-green-fg: #7ee787;
+  --mon-tag-blue-bg: rgba(83, 155, 245, 0.16);
+  --mon-tag-blue-fg: #79c0ff;
+  --mon-tag-gray-bg: rgba(145, 152, 161, 0.18);
+  --mon-tag-gray-fg: #d1d7e0;
+
+  --mon-ring: rgba(83, 155, 245, 0.48);
+}
+
+.monitorPage .monTabular {
+  font-family: var(--mon-font-numeric);
+  font-variant-numeric: tabular-nums slashed-zero;
+}

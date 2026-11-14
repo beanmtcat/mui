@@ -87,6 +87,14 @@ type App struct {
 	monitorNow      func() time.Time
 	monitorErrMu    sync.Mutex
 	monitorErrLast  map[string]time.Time
+	statusListenConfigured bool
+	statusURL              string
+	statusCacheMu          sync.RWMutex
+	statusCfgLoaded        bool
+	statusCfg              storedStatusPageSettings
+	statusSnapshotBody     []byte
+	statusSnapshotExpires  time.Time
+	statusHistoryCache     map[string]publicHistoryCacheEntry
 }
 
 func NewApp(s *Store, publicURL string) (*App, error) {
@@ -94,6 +102,11 @@ func NewApp(s *Store, publicURL string) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	statusURL, err := parseStatusURL(os.Getenv("MUI_STATUS_URL"))
+	if err != nil {
+		return nil, err
+	}
+	statusListenConfigured := strings.TrimSpace(os.Getenv("MUI_STATUS_LISTEN")) != ""
 	password := os.Getenv("MUI_ADMIN_PASSWORD")
 	var count int
 	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM mui_admin`).Scan(&count); err != nil {
@@ -145,9 +158,11 @@ func NewApp(s *Store, publicURL string) (*App, error) {
 			},
 		},
 		resourceSince: map[string]time.Time{},
-		latestSamples: map[string]latestMonitorSample{},
-		minuteAccums:  map[string]*monitorMinuteAccum{},
-		pingAccums:    map[string]*pingMinuteAccum{},
+		latestSamples:          map[string]latestMonitorSample{},
+		minuteAccums:           map[string]*monitorMinuteAccum{},
+		pingAccums:             map[string]*pingMinuteAccum{},
+		statusListenConfigured: statusListenConfigured,
+		statusURL:              statusURL,
 	}
 	if reset {
 		app.notifySecurityEvent("管理员凭据已重置", "", "MUI_ADMIN_RESET 已生效，密码已重置且双因素认证已清除")
@@ -220,6 +235,8 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("GET /api/settings/telegram", a.require(a.telegramSetting))
 	mux.HandleFunc("PUT /api/settings/telegram", a.require(a.telegramSetting))
 	mux.HandleFunc("POST /api/settings/telegram/test", a.require(a.telegramTest))
+	mux.HandleFunc("GET /api/settings/status-page", a.require(a.statusPageSetting))
+	mux.HandleFunc("PUT /api/settings/status-page", a.require(a.statusPageSetting))
 	mux.HandleFunc("GET /api/monitor", a.require(a.monitorOverview))
 	mux.HandleFunc("GET /api/monitor/{serverId}/records", a.require(a.monitorServerRecords))
 	mux.HandleFunc("GET /api/ping-tasks", a.require(a.pingTasks))

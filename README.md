@@ -103,6 +103,17 @@ CREATE DATABASE mui WITH OWNER mui ENCODING 'UTF8';
 
 前端更新可以单独执行 `docker compose --env-file .env -f compose.yaml up -d --build --no-deps mui-web`；后端更新将最后的服务名改为 `mui-service`。更新其中一个镜像不需要重新构建另一个。
 
+### 独立公开状态页（可选）
+
+公开状态页把监控展示拆成独立监听（`MUI_STATUS_LISTEN`）、独立前端工程（`status-web/`，构建产物 `status-web/dist`）和独立 Nginx 容器（`mui-status`，默认映射到 `127.0.0.1:8089`）。访问状态页的访客无法获知管理面板域名，状态页入口也无法到达任何管理、Agent、下载或订阅接口。
+
+- **必须使用独立域名**：为状态页准备单独的域名（例如 `https://status.example.com`），在外层 Nginx 中把该域名的流量反代到 `127.0.0.1:8089`（`MUI_STATUS_BIND`），**不要与管理面板共用域名**。现有 `mui-web` 容器不会提供 `/status` 页面，也不会反代 `/api/public/*`。
+- **启用步骤**：
+  1. 在 `deploy/.env` 中设置 `MUI_STATUS_LISTEN=:8088`（后端容器内的第二个 HTTP 监听，只注册 `/api/public/*` 和 `/healthz`，无需映射到宿主机端口）及可选的 `MUI_STATUS_URL=https://status.example.com`（仅用于在管理端“设置”页展示状态页链接）。
+  2. 带 `--profile status` 启动容器：`docker compose --env-file .env -f compose.yaml --profile status up -d --build`；使用远程发布脚本时传 `./deploy/publish.sh --with-status`（或在 `deploy/publish.env` 设 `WITH_STATUS=1`），仅更新状态页前端可传 `./deploy/publish.sh --service status`。
+  3. 登录管理面板，在“设置 → 公开状态页”开启开关，并在需要公开的服务器编辑弹窗“公开状态页”分组勾选“公开展示”。
+- **隔离边界**：未配置 `MUI_STATUS_LISTEN` 或关闭开关时，公开接口一律返回 404（不会退回到主监听）；配置了 `MUI_STATUS_LISTEN` 后，主监听上的 `/api/public/*` 固定返回 404。公开接口只返回派生公开 ID（与内部服务器 ID 不可互推且不能用于管理或 Agent 接口）、名称、地区、硬件配置、采样与历史曲线、延迟任务名称（不含探测目标）、到期日与公开备注，绝不返回公网 IP、域名、内部备注或标签，并默认携带 `X-Robots-Tag: noindex`。
+
 ### 多域名访问
 
 后端 `.env` 的 `MUI_PUBLIC_URL` 支持用逗号分隔多个完整地址：
@@ -232,6 +243,9 @@ Agent **0.6.15** 起（修复 0.6.14 的所有来源规则冲突），UFW 托管
 | `MUI_AGENT_BIN_DIR` | 安装文件目录，默认 `bin`；按 `amd64`、`arm64` 子目录存放三个构建产物 |
 | `MUI_AGENT_RELEASE_VERSION` | 设置如 `0.6.31` 后启用 GitHub Release 直下；要求 `MUI_RELEASE_PUBLIC_KEY`，目标服务器直接下载对应版本的归档，面板不再提供二进制下载 |
 | `MUI_LISTEN` | Go 后端监听地址，生产容器为 `:8087`；本地开发使用 `127.0.0.1:8080` |
+| `MUI_STATUS_LISTEN` | 公开状态页独立 HTTP 监听地址（例如容器内 `:8088` 或宿主机 `127.0.0.1:8088`）；只注册 `/api/public/*` 与 `/healthz`。留空时公开状态页功能不可用 |
+| `MUI_STATUS_URL` | 公开状态页对外 HTTPS 地址（例如 `https://status.example.com`），仅用于在管理端“设置”页显示链接；不参与 `MUI_PUBLIC_URL` 逻辑 |
+| `MUI_STATUS_BIND` | `mui-status` 容器（`--profile status`）的宿主机端口映射，默认 `127.0.0.1:8089` → `:8089`，供独立状态页域名的外层 Nginx 转发 |
 | `MUI_BIND` | Nginx 前端 HTTP 的宿主机端口映射，默认 `127.0.0.1:8086` → Nginx 容器 `:8086`，供已有外层 Nginx 转发 |
 | `MUI_BACKEND_URL` | Nginx 的 Go 上游地址，默认 `http://mui-service:8087`；可指向另一台服务器，不加末尾斜线 |
 | `MUI_BACKEND_BIND` | Go 后端宿主机端口映射，默认 `127.0.0.1:8087` |

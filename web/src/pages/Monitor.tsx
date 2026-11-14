@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   api,
-  bytes,
   mutation,
   type MonitorOverviewItem,
   type MonitorRecord,
@@ -13,14 +12,11 @@ import { useApp } from "../app/context";
 import { setError } from "../app/feedback";
 import {
   countryFlag,
-  cycleTrafficTone,
   formatBillingCycle,
   formatMonthlyCostSummary,
-  formatServerExpiry,
   groupAndSortServers,
   matchesServerGroupFilter,
   serverGroupFilterOptions,
-  trafficLimitTypeShortLabels,
 } from "../app/helpers";
 import { Field, SubmitButton, useBusy } from "../app/ui";
 import { useUrlParam } from "../app/url";
@@ -28,7 +24,10 @@ import {
   MonitorMetricsCharts,
   PingTaskChart,
   type MonitorRange,
-} from "../components/MonitorCharts";
+} from "../monitor/MonitorCharts";
+import { MonitorServerCard } from "../monitor/MonitorServerCard";
+import { resolveExpireVisual, type ExpireVisual } from "../monitor/monitorTone";
+import type { MonitorCardViewModel } from "../monitor/types";
 import { Dialog } from "../forms/Dialog";
 
 const RANGES: { id: MonitorRange; label: string }[] = [
@@ -38,6 +37,63 @@ const RANGES: { id: MonitorRange; label: string }[] = [
   { id: "7d", label: "7 天" },
   { id: "30d", label: "30 天" },
 ];
+
+function buildAdminMonitorCard(
+  srv: Server,
+  item: MonitorOverviewItem | undefined,
+  trafficLimitThreshold: number,
+  redact: (v: string) => string,
+): MonitorCardViewModel {
+  const online = item?.online ?? srv.status === "online";
+  const supported = item?.hostMonitor ?? !!srv.hostMonitor;
+  const sample = item?.sample;
+  const host = item?.host;
+  const loc = [srv.region, srv.city].filter(Boolean).join(" · ") || srv.country;
+  const stackLabel =
+    srv.ipv4 && srv.ipv6 ? "双栈" : srv.ipv6 ? "IPv6" : srv.ipv4 ? "IPv4" : undefined;
+  const hostLine = host
+    ? [host.cpuName, host.cpuCores ? `${host.cpuCores} 核` : "", host.os, host.virtualization]
+        .filter(Boolean)
+        .join(" · ")
+    : "";
+  const priceLabel = [
+    srv.price && srv.price > 0
+      ? `${(srv.currency || "$").trim() || "$"}${/^[A-Za-z]+$/.test((srv.currency || "$").trim()) ? " " : ""}${srv.price.toFixed(2)}`
+      : "",
+    formatBillingCycle(srv),
+  ]
+    .filter(Boolean)
+    .join(" / ");
+  const ct = item?.cycleTraffic ?? srv.cycleTraffic;
+  return {
+    id: srv.id,
+    name: redact(srv.name),
+    country: srv.country,
+    locationText: loc ? redact(loc) : "",
+    stackLabel,
+    online,
+    supported,
+    unsupportedBadge: "需升级 Agent",
+    unsupportedMessage: "升级至 Agent 0.6.31 或更高版本后自动上报主机监控指标。",
+    hostLine: hostLine || undefined,
+    cpuCores: host?.cpuCores,
+    sample,
+    showTraffic: true,
+    cycleTraffic: {
+      startAt: ct?.startAt ?? "",
+      resetAt: ct?.resetAt ?? "",
+      used: ct?.used ?? 0,
+      limit: ct?.limit ?? srv.trafficLimit ?? 0,
+      type: ct?.type ?? srv.trafficLimitType ?? "sum",
+      rx: ct?.rx ?? 0,
+      tx: ct?.tx ?? 0,
+    },
+    trafficLimitThreshold,
+    expiresAt: srv.expiresAt,
+    expireAutoRenewHint: Boolean(srv.autoRenew && srv.billingCycle),
+    priceLabel: priceLabel || undefined,
+  };
+}
 
 type PingTaskDraft = {
   id?: string;
@@ -53,27 +109,6 @@ const emptyPingDraft: PingTaskDraft = {
   intervalDraft: "60",
   serverIds: [],
 };
-
-function formatUptime(seconds: number | undefined) {
-  if (!seconds || seconds <= 0) return "—";
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const mins = Math.floor((seconds % 3600) / 60);
-  if (days > 0) return `${days} 天 ${hours} 小时`;
-  if (hours > 0) return `${hours} 小时 ${mins} 分钟`;
-  return `${Math.max(1, mins)} 分钟`;
-}
-
-function usagePercent(used: number, total: number) {
-  if (total <= 0) return 0;
-  return Math.max(0, Math.min(100, (used / total) * 100));
-}
-
-function barTone(pct: number) {
-  if (pct >= 90) return "danger";
-  if (pct >= 75) return "warning";
-  return "";
-}
 
 function PingTaskDialog({
   initial,
@@ -370,18 +405,101 @@ export default function Monitor() {
     (s) => overviewByServer.get(s.id)?.online ?? s.status === "online",
   ).length;
 
+  const { billedCount, autoRenewCount, expiringItems } = useMemo(() => {
+    let billed = 0;
+    let autoRenew = 0;
+    const expiring: { srv: Server; visual: ExpireVisual; canSelect: boolean }[] = [];
+    for (const srv of servers) {
+      if (srv.status === "revoked") continue;
+      if (srv.billingCycle && srv.price && srv.price > 0) billed += 1;
+      if (srv.autoRenew && srv.billingCycle) autoRenew += 1;
+      const vis = resolveExpireVisual(srv.expiresAt, srv.autoRenew && !!srv.billingCycle);
+      if (vis && vis.daysRemaining <= 7) {
+        expiring.push({
+          srv,
+          visual: vis,
+          canSelect: srv.managementMode !== "offline" && srv.managementMode !== "external",
+        });
+      }
+    }
+    expiring.sort((a, b) => a.visual.daysRemaining - b.visual.daysRemaining);
+    return { billedCount: billed, autoRenewCount: autoRenew, expiringItems: expiring };
+  }, [servers]);
+
   return protect(
     <div className="monitorPage">
-      <section className="panel">
+      {(monthlyCostSummary || expiringItems.length > 0 || billedCount > 0) && (
+        <section className="monSummaryHero" aria-label="监控与费用概览">
+          <div className="monSummaryMain">
+            <span className="monSummaryEyebrow">月度费用汇总</span>
+            {monthlyCostSummary ? (
+              <div className="monSummaryValue monTabular">{monthlyCostSummary}</div>
+            ) : (
+              <div className="monSummaryValue is-muted">暂未填写计费金额</div>
+            )}
+            {expiringItems.length > 0 && (
+              <div className="monRenewalInlineList" aria-label="近期到期提醒">
+                {expiringItems.map(({ srv, visual, canSelect }) =>
+                  canSelect ? (
+                    <button
+                      key={srv.id}
+                      type="button"
+                      className="monRenewalChip monTabular"
+                      data-tone={visual.tone}
+                      onClick={() => setSelectedId(srv.id)}
+                      title={`点击查看「${redactScreenshot(srv.name)}」监控曲线`}
+                    >
+                      <span>{countryFlag(srv.country)}</span>
+                      <span className="monRenewalName">{redactScreenshot(srv.name)}</span>
+                      <strong>{visual.badgeText}</strong>
+                    </button>
+                  ) : (
+                    <span
+                      key={srv.id}
+                      className="monRenewalChip monTabular"
+                      data-tone={visual.tone}
+                    >
+                      <span>{countryFlag(srv.country)}</span>
+                      <span className="monRenewalName">{redactScreenshot(srv.name)}</span>
+                      <strong>{visual.badgeText}</strong>
+                    </span>
+                  ),
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="monSummaryLedger">
+            <div className="monSummaryLedgerRow">
+              <span>在线服务器</span>
+              <strong className="monTabular monLedgerOnline">
+                <span className="monStatusDot is-online" aria-hidden="true" />
+                {onlineCount} / {onlineManagedServers.length} 台
+              </strong>
+            </div>
+            <div className="monSummaryLedgerRow">
+              <span>计费与续期</span>
+              <strong className="monTabular">
+                {billedCount} 台计费 · {autoRenewCount} 台自动续期
+              </strong>
+            </div>
+            <div className="monSummaryLedgerRow">
+              <span>采样与延迟</span>
+              <strong className="monTabular">
+                每 5 秒刷新 · {pingTasks.length} 项任务
+              </strong>
+            </div>
+          </div>
+        </section>
+      )}
+
+      <section className="panel monitorMainPanel">
         <div className="panelHead">
           <div>
             <h2>主机实时监控</h2>
-            <p className="hint">
+            <p className="hint monTabular">
               共 {onlineManagedServers.length} 台在线管理服务器，当前在线 {onlineCount} 台 · 每 5 秒自动刷新
             </p>
-            {monthlyCostSummary && (
-              <p className="monitorCostSummary">{monthlyCostSummary}</p>
-            )}
           </div>
           <div className="toolbarActions monitorToolbar">
             <select
@@ -434,213 +552,45 @@ export default function Monitor() {
               <div className="monitorGroupSection" key={group}>
                 <div className="monitorGroupHead">
                   <strong>{redactScreenshot(group)}</strong>
-                  <span>{items.length} 台</span>
+                  <span className="monTabular">{items.length} 台</span>
                 </div>
                 <div className="monitorGrid">
                   {items.map((srv) => {
-                    const item = overviewByServer.get(srv.id);
-                    const online = item?.online ?? srv.status === "online";
-                    const supported = item?.hostMonitor ?? !!srv.hostMonitor;
-                    const sample = item?.sample;
-                    const host = item?.host;
-                    const active = selectedServer?.id === srv.id;
-
-                    const cpuPct = sample ? Math.max(0, Math.min(100, sample.cpu)) : 0;
-                    const ramPct = sample ? usagePercent(sample.ramUsed, sample.ramTotal) : 0;
-                    const diskPct = sample ? usagePercent(sample.diskUsed, sample.diskTotal) : 0;
-                    const loc = [srv.region, srv.city].filter(Boolean).join(" · ") || srv.country;
-                    const expiry = formatServerExpiry(srv.expiresAt);
-
-                    const ct = item?.cycleTraffic ?? srv.cycleTraffic;
-                    const cycleLimit = ct?.limit ?? srv.trafficLimit ?? 0;
-                    const cycleUsed = ct?.used ?? 0;
-                    const cycleRx = ct?.rx ?? 0;
-                    const cycleTx = ct?.tx ?? 0;
-                    const cycleType = ct?.type ?? srv.trafficLimitType ?? "sum";
-                    const cyclePctRaw = cycleLimit > 0 ? (cycleUsed / cycleLimit) * 100 : 0;
-                    const cyclePctWidth = Math.max(0, Math.min(100, cyclePctRaw));
-                    const cycleTone = cycleTrafficTone(cycleUsed, cycleLimit, trafficLimitThreshold);
-                    const cycleRangeTitle = ct
-                      ? `本周期：${ct.startAt.slice(0, 10)} 至 ${ct.resetAt.slice(0, 10)}`
-                      : undefined;
-
+                    const card = buildAdminMonitorCard(
+                      srv,
+                      overviewByServer.get(srv.id),
+                      trafficLimitThreshold,
+                      redactScreenshot,
+                    );
+                    const hasBadges = Boolean(srv.alertMuted || (srv.autoRenew && srv.billingCycle));
                     return (
-                      <article
+                      <MonitorServerCard
                         key={srv.id}
-                        className={`monitorCard${active ? " active" : ""}${!online ? " offline" : ""}`}
-                        onClick={() => setSelectedId(active ? "" : srv.id)}
-                      >
-                        <div className="monitorCardHead">
-                          <div className="monitorCardTitle">
-                            <span className="monitorFlag" aria-hidden="true">
-                              {countryFlag(srv.country)}
-                            </span>
-                            <div>
-                              <strong>{redactScreenshot(srv.name)}</strong>
-                              <small>{redactScreenshot(loc)}</small>
-                            </div>
-                          </div>
-                          <div className="monitorBadges">
-                            {srv.alertMuted && (
-                              <span className="pill neutral" title="已静音离线与资源高占用告警">
-                                静音
-                              </span>
-                            )}
-                            {srv.autoRenew && srv.billingCycle && (
-                              <span className="pill accent">自动续期</span>
-                            )}
-                            {expiry && (
-                              <span className={`pill ${expiry.tone}`}>{expiry.fullText}</span>
-                            )}
-                            <span className={`pill ${online ? "good" : "bad"}`}>
-                              {online ? "在线" : "离线"}
-                            </span>
-                          </div>
-                        </div>
-
-                        {!supported ? (
-                          <div className="monitorUpgradeNotice">
-                            <span className="pill warn">需升级 Agent</span>
-                            <p>升级至 Agent 0.6.31 或更高版本后自动上报主机监控指标。</p>
-                          </div>
-                        ) : !sample ? (
-                          <div className="monitorUpgradeNotice">
-                            <p className="hint">
-                              {online ? "等待首次采样上报…" : "服务器当前离线，暂无内存实时样本"}
-                            </p>
-                            {host && (
-                              <small className="hint">
-                                {[host.cpuName, host.cpuCores ? `${host.cpuCores} 核` : "", host.os]
-                                  .filter(Boolean)
-                                  .join(" · ")}
-                              </small>
-                            )}
-                          </div>
-                        ) : (
-                          <>
-                            {host && (
-                              <div className="monitorHostMeta">
-                                {[
-                                  host.cpuName,
-                                  host.cpuCores ? `${host.cpuCores} 核` : "",
-                                  host.os,
-                                  host.virtualization,
-                                ]
-                                  .filter(Boolean)
-                                  .join(" · ")}
-                              </div>
-                            )}
-
-                            <div className="monitorBars">
-                              <div className="monitorBarRow">
-                                <div className="monitorBarLabel">
-                                  <span>CPU</span>
-                                  <strong>{cpuPct.toFixed(1)}%</strong>
-                                </div>
-                                <div className="monitorProgress">
-                                  <div
-                                    className={`monitorProgressFill ${barTone(cpuPct)}`}
-                                    style={{ width: `${cpuPct}%` }}
-                                  />
-                                </div>
-                              </div>
-
-                              <div className="monitorBarRow">
-                                <div className="monitorBarLabel">
-                                  <span>内存</span>
-                                  <strong>
-                                    {bytes(sample.ramUsed)} / {bytes(sample.ramTotal)} ({ramPct.toFixed(0)}%)
-                                  </strong>
-                                </div>
-                                <div className="monitorProgress">
-                                  <div
-                                    className={`monitorProgressFill ${barTone(ramPct)}`}
-                                    style={{ width: `${ramPct}%` }}
-                                  />
-                                </div>
-                              </div>
-
-                              <div className="monitorBarRow">
-                                <div className="monitorBarLabel">
-                                  <span>磁盘</span>
-                                  <strong>
-                                    {bytes(sample.diskUsed)} / {bytes(sample.diskTotal)} ({diskPct.toFixed(0)}%)
-                                  </strong>
-                                </div>
-                                <div className="monitorProgress">
-                                  <div
-                                    className={`monitorProgressFill ${barTone(diskPct)}`}
-                                    style={{ width: `${diskPct}%` }}
-                                  />
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="monitorStatsGrid">
-                              <div>
-                                <span>实时速率</span>
-                                <strong>
-                                  ↑ {bytes(sample.netUp)}/s · ↓ {bytes(sample.netDown)}/s
-                                </strong>
-                              </div>
-                              <div>
-                                <span>累计流量</span>
-                                <strong>
-                                  ↑ {bytes(sample.netTotalUp)} · ↓ {bytes(sample.netTotalDown)}
-                                </strong>
-                              </div>
-                              <div>
-                                <span>负载 (1/5/15)</span>
-                                <strong>
-                                  {sample.load1.toFixed(2)} / {sample.load5.toFixed(2)} / {sample.load15.toFixed(2)}
-                                </strong>
-                              </div>
-                              <div>
-                                <span>开机时长</span>
-                                <strong>{formatUptime(sample.uptime)}</strong>
-                              </div>
-                            </div>
-                          </>
-                        )}
-
-                        <div className="monitorCycleSection" title={cycleRangeTitle}>
-                          {cycleLimit > 0 ? (
-                            <div className="monitorBarRow">
-                              <div className="monitorBarLabel">
-                                <span>本周期流量（{trafficLimitTypeShortLabels[cycleType]}）</span>
-                                <strong className={cycleTone === "danger" ? "dangerText" : ""}>
-                                  {bytes(cycleUsed)} / {bytes(cycleLimit)} ({cyclePctRaw.toFixed(0)}%)
-                                </strong>
-                              </div>
-                              <div className="monitorProgress">
-                                <div
-                                  className={`monitorProgressFill ${cycleTone}`}
-                                  style={{ width: `${cyclePctWidth}%` }}
-                                />
-                              </div>
-                            </div>
-                          ) : (
-                            <div className="monitorCyclePlain">
-                              <span>本周期用量</span>
-                              <strong>
-                                {bytes(cycleRx + cycleTx)}（↑ {bytes(cycleTx)} · ↓ {bytes(cycleRx)}）
-                              </strong>
-                            </div>
-                          )}
-                        </div>
-
-                        {!!srv.billingCycle && (
-                          <div className="monitorCardFooter">
-                            <small className="monitorBillingMeta">
-                              {[
-                                srv.price && srv.price > 0
-                                  ? `${(srv.currency || "$").trim() || "$"}${/^[A-Za-z]+$/.test((srv.currency || "$").trim()) ? " " : ""}${srv.price.toFixed(2)}`
-                                  : "",
-                                formatBillingCycle(srv),
-                              ]
-                                .filter(Boolean)
-                                .join(" / ")}
-                            </small>
+                        card={card}
+                        active={selectedServer?.id === srv.id}
+                        onSelect={setSelectedId}
+                        headerBadgesSlot={
+                          hasBadges ? (
+                            <>
+                              {srv.alertMuted && (
+                                <span
+                                  className="monTagChip"
+                                  data-tone="gray"
+                                  title="已静音离线与资源高占用告警"
+                                >
+                                  静音
+                                </span>
+                              )}
+                              {srv.autoRenew && srv.billingCycle && (
+                                <span className="monTagChip" data-tone="blue">
+                                  自动续期
+                                </span>
+                              )}
+                            </>
+                          ) : undefined
+                        }
+                        footerActionSlot={
+                          srv.billingCycle ? (
                             <button
                               type="button"
                               className="ghost monitorRenewBtn"
@@ -659,9 +609,9 @@ export default function Monitor() {
                             >
                               续期一个周期
                             </button>
-                          </div>
-                        )}
-                      </article>
+                          ) : undefined
+                        }
+                      />
                     );
                   })}
                 </div>
@@ -720,29 +670,31 @@ export default function Monitor() {
             </div>
           </div>
 
-          {loadingRecords && records.length === 0 ? (
-            <p className="hint">正在加载历史记录…</p>
-          ) : (
-            <>
-              <MonitorMetricsCharts records={records} range={range} />
-              {serverPingTasks.length > 0 && (
-                <div className="monitorPingChartsSection">
-                  <h3>TCP 延迟监测曲线</h3>
-                  <div className="monitorChartsGrid">
-                    {serverPingTasks.map((task) => (
-                      <PingTaskChart
-                        key={task.id}
-                        title={redactScreenshot(task.name)}
-                        target={redactScreenshot(task.target)}
-                        records={pingRecordsMap[task.id] || []}
-                        range={range}
-                      />
-                    ))}
+          <div className="monitorDetailBody">
+            {loadingRecords && records.length === 0 ? (
+              <p className="hint">正在加载历史记录…</p>
+            ) : (
+              <>
+                <MonitorMetricsCharts records={records} range={range} />
+                {serverPingTasks.length > 0 && (
+                  <div className="monitorPingChartsSection">
+                    <h3>TCP 延迟监测曲线</h3>
+                    <div className="monitorChartsGrid">
+                      {serverPingTasks.map((task) => (
+                        <PingTaskChart
+                          key={task.id}
+                          title={redactScreenshot(task.name)}
+                          target={redactScreenshot(task.target)}
+                          records={pingRecordsMap[task.id] || []}
+                          range={range}
+                        />
+                      ))}
+                    </div>
                   </div>
-                </div>
-              )}
-            </>
-          )}
+                )}
+              </>
+            )}
+          </div>
         </section>
       )}
 

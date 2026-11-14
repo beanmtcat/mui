@@ -1,12 +1,28 @@
-import { memo, useState } from "react";
-import { bytes, type MonitorRecord, type PingMinuteRecord } from "../api";
+// Counterpart in status-web/src/monitor/MonitorCharts.tsx — keep chart layout & styles in sync.
 
-export type MonitorRange = "1h" | "6h" | "24h" | "7d" | "30d";
+import { memo, useState, type CSSProperties } from "react";
+import { formatBytes } from "./format";
+import { latencyHeatColor } from "./monitorTone";
+import type { MonitorRange, SharedMonitorRecord, SharedPingPoint } from "./types";
+
+export type { MonitorRange };
+
+type SeriesTone =
+  | "cpu"
+  | "memory"
+  | "swap"
+  | "up"
+  | "down"
+  | "network"
+  | "load"
+  | "latency"
+  | "latencyMax";
 
 type SeriesDef<T> = {
   key: string;
   label: string;
-  tone: "up" | "down" | "good";
+  tone: SeriesTone;
+  dashed?: boolean;
   value: (point: T) => number | null;
 };
 
@@ -30,13 +46,14 @@ function niceCeiling(peak: number, fixedMax?: number) {
   if (fixedMax && fixedMax > 0 && peak <= fixedMax) return fixedMax;
   if (peak <= 0) return 1;
   const magnitude = 10 ** Math.floor(Math.log10(peak));
-  return (([1, 2, 5, 10].find((step) => step * magnitude >= peak) || 10) * magnitude);
+  return ([1, 2, 5, 10].find((step) => step * magnitude >= peak) || 10) * magnitude;
 }
 
-// Hand-drawn SVG multi-series chart matching TrafficChart.tsx (no external chart libraries).
-function MonitorSeriesChart<T extends { at: string }>({
+export function MonitorSeriesChart<T extends { at: string }>({
   title,
   subtitle,
+  accent,
+  latencyColor,
   points,
   series,
   range,
@@ -48,6 +65,8 @@ function MonitorSeriesChart<T extends { at: string }>({
 }: {
   title: string;
   subtitle?: string;
+  accent?: string;
+  latencyColor?: string;
   points: T[];
   series: SeriesDef<T>[];
   range: MonitorRange;
@@ -110,16 +129,24 @@ function MonitorSeriesChart<T extends { at: string }>({
           points.length - 1,
         ].filter((idx, pos, arr) => idx >= 0 && idx < points.length && arr.indexOf(idx) === pos);
 
+  const cardStyle = {
+    ...(accent ? { "--mon-chart-accent": accent } : {}),
+    ...(latencyColor ? { "--mon-chart-latency": latencyColor } : {}),
+  } as CSSProperties;
+
   return (
-    <div className="trafficChart monitorChartCard">
-      <div className="trafficChartHead">
-        <div>
+    <div className="trafficChart monitorChartCard monTabular" style={cardStyle}>
+      <div className="trafficChartHead monitorChartHead">
+        <div className="monitorChartHeadText">
           <strong className="monitorChartTitle">{title}</strong>
           {subtitle && <span className="monitorChartSub">{subtitle}</span>}
         </div>
-        <div className="trafficLegend">
+        <div className="trafficLegend monitorLegend">
           {series.map((s) => (
-            <span key={s.key} className={s.tone}>
+            <span
+              key={s.key}
+              className={`monSeries-${s.tone}${s.dashed ? " is-dashed" : ""}`}
+            >
               {s.label}
             </span>
           ))}
@@ -152,13 +179,25 @@ function MonitorSeriesChart<T extends { at: string }>({
             ))}
             {series.map((s) => {
               const d = buildPath(s);
-              return d ? <path key={s.key} className={`trafficLine ${s.tone}`} d={d} /> : null;
+              return d ? (
+                <path
+                  key={s.key}
+                  className={`trafficLine monSeries-${s.tone}${s.dashed ? " is-dashed" : ""}`}
+                  d={d}
+                />
+              ) : null;
             })}
             {points.length === 1 &&
               series.map((s) => {
                 const v = s.value(points[0]);
                 return v !== null ? (
-                  <circle key={s.key} className={`trafficDot ${s.tone}`} cx={x(0)} cy={y(v)} r="4.5" />
+                  <circle
+                    key={s.key}
+                    className={`trafficDot monSeries-${s.tone}`}
+                    cx={x(0)}
+                    cy={y(v)}
+                    r="4.5"
+                  />
                 ) : null;
               })}
             {hoverIndex !== null && selected && (
@@ -175,7 +214,7 @@ function MonitorSeriesChart<T extends { at: string }>({
                   return v !== null ? (
                     <circle
                       key={s.key}
-                      className={`trafficDot ${s.tone}`}
+                      className={`trafficDot monSeries-${s.tone}`}
                       cx={x(selectedIndex)}
                       cy={y(v)}
                       r="4.5"
@@ -198,7 +237,7 @@ function MonitorSeriesChart<T extends { at: string }>({
         </div>
       )}
       {selected && (
-        <div className="trafficReadout">
+        <div className="trafficReadout monitorReadout">
           <strong>{formatChartTime(selected.at, range)}</strong>
           {series.map((s) => {
             const v = s.value(selected);
@@ -219,7 +258,7 @@ export const MonitorMetricsCharts = memo(function MonitorMetricsCharts({
   records,
   range,
 }: {
-  records: MonitorRecord[];
+  records: SharedMonitorRecord[];
   range: MonitorRange;
 }) {
   const lastRamTotal = records.length ? records[records.length - 1].ramTotal : 0;
@@ -228,26 +267,28 @@ export const MonitorMetricsCharts = memo(function MonitorMetricsCharts({
       <MonitorSeriesChart
         title="CPU 使用率"
         subtitle={range === "7d" || range === "30d" ? "按小时均值" : "按分钟均值"}
+        accent="var(--mon-progress-cpu)"
         points={records}
         range={range}
         fixedCeiling={100}
-        series={[{ key: "cpu", label: "CPU", tone: "up", value: (p) => p.cpu }]}
+        series={[{ key: "cpu", label: "CPU", tone: "cpu", value: (p) => p.cpu }]}
         formatAxis={(v) => `${Math.round(v)}%`}
         formatValue={(v) => `${v.toFixed(1)}%`}
         extraReadout={(p) => `1 分钟负载：${p.load1.toFixed(2)}`}
       />
       <MonitorSeriesChart
         title="内存与交换分区"
-        subtitle={lastRamTotal > 0 ? `物理内存总量 ${bytes(lastRamTotal)}` : undefined}
+        subtitle={lastRamTotal > 0 ? `物理内存总量 ${formatBytes(lastRamTotal)}` : undefined}
+        accent="var(--mon-progress-memory)"
         points={records}
         range={range}
         fixedCeiling={lastRamTotal > 0 ? lastRamTotal : undefined}
         series={[
-          { key: "ram", label: "内存已用", tone: "up", value: (p) => p.ramUsed },
-          { key: "swap", label: "Swap 已用", tone: "down", value: (p) => p.swapUsed },
+          { key: "ram", label: "内存已用", tone: "memory", value: (p) => p.ramUsed },
+          { key: "swap", label: "Swap 已用", tone: "swap", dashed: true, value: (p) => p.swapUsed },
         ]}
-        formatAxis={(v) => bytes(v)}
-        formatValue={(v) => bytes(v)}
+        formatAxis={(v) => formatBytes(v)}
+        formatValue={(v) => formatBytes(v)}
         extraReadout={(p) =>
           p.ramTotal > 0 ? `占比 ${((p.ramUsed / p.ramTotal) * 100).toFixed(1)}%` : null
         }
@@ -255,24 +296,26 @@ export const MonitorMetricsCharts = memo(function MonitorMetricsCharts({
       <MonitorSeriesChart
         title="网络速率"
         subtitle="均值与峰值"
+        accent="var(--mon-progress-network)"
         points={records}
         range={range}
         series={[
           { key: "up", label: "上行速率", tone: "up", value: (p) => p.netUp },
-          { key: "down", label: "下行速率", tone: "down", value: (p) => p.netDown },
+          { key: "down", label: "下行速率", tone: "down", dashed: true, value: (p) => p.netDown },
         ]}
-        formatAxis={(v) => `${bytes(v)}/s`}
-        formatValue={(v) => `${bytes(v)}/s`}
-        extraReadout={(p) => `峰值 ↑ ${bytes(p.netUpPeak)}/s · ↓ ${bytes(p.netDownPeak)}/s`}
+        formatAxis={(v) => `${formatBytes(v)}/s`}
+        formatValue={(v) => `${formatBytes(v)}/s`}
+        extraReadout={(p) => `峰值 ↑ ${formatBytes(p.netUpPeak)}/s · ↓ ${formatBytes(p.netDownPeak)}/s`}
       />
       <MonitorSeriesChart
         title="连接数与进程数"
+        accent="var(--mon-progress-load)"
         points={records}
         range={range}
         series={[
-          { key: "tcp", label: "TCP", tone: "up", value: (p) => p.tcp },
-          { key: "udp", label: "UDP", tone: "down", value: (p) => p.udp },
-          { key: "proc", label: "进程", tone: "good", value: (p) => p.process },
+          { key: "tcp", label: "TCP", tone: "cpu", value: (p) => p.tcp },
+          { key: "udp", label: "UDP", tone: "network", dashed: true, value: (p) => p.udp },
+          { key: "proc", label: "进程", tone: "load", value: (p) => p.process },
         ]}
         formatAxis={(v) => `${Math.round(v)}`}
         formatValue={(v) => `${Math.round(v)}`}
@@ -288,8 +331,8 @@ export const PingTaskChart = memo(function PingTaskChart({
   range,
 }: {
   title: string;
-  target: string;
-  records: PingMinuteRecord[];
+  target?: string;
+  records: SharedPingPoint[];
   range: MonitorRange;
 }) {
   let totalSent = 0;
@@ -307,7 +350,9 @@ export const PingTaskChart = memo(function PingTaskChart({
   }
   const lossPct = totalSent > 0 ? (totalLost / totalSent) * 100 : 0;
   const avgMs = okCount > 0 ? weightedMs / okCount : null;
-  const subParts = [target];
+  const latColor = avgMs !== null ? latencyHeatColor(avgMs) : "var(--mon-latency-excellent)";
+  const subParts: string[] = [];
+  if (target) subParts.push(target);
   if (avgMs !== null) subParts.push(`均值 ${avgMs.toFixed(0)} ms`);
   if (totalSent > 0) subParts.push(`丢包率 ${lossPct.toFixed(1)}%（${totalLost}/${totalSent}）`);
   if (range === "30d") subParts.push("延迟记录保留 7 天");
@@ -315,20 +360,23 @@ export const PingTaskChart = memo(function PingTaskChart({
   return (
     <MonitorSeriesChart
       title={title}
-      subtitle={subParts.join(" · ")}
+      subtitle={subParts.length > 0 ? subParts.join(" · ") : undefined}
+      accent={latColor}
+      latencyColor={latColor}
       points={records}
       range={range}
       series={[
         {
           key: "avg",
           label: "平均延迟",
-          tone: "up",
+          tone: "latency",
           value: (p) => (p.sent > p.lost ? p.msAvg : null),
         },
         {
           key: "max",
           label: "最大延迟",
-          tone: "down",
+          tone: "latencyMax",
+          dashed: true,
           value: (p) => (p.sent > p.lost ? p.msMax : null),
         },
       ]}

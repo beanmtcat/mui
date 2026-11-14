@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -137,6 +138,22 @@ func main() {
 			time.Sleep(6 * time.Hour)
 		}
 	}()
+	if statusAddr := strings.TrimSpace(os.Getenv("MUI_STATUS_LISTEN")); statusAddr != "" {
+		statusHTTP := &http.Server{
+			Addr:              statusAddr,
+			Handler:           app.StatusHandler(),
+			ReadHeaderTimeout: 10 * time.Second,
+			ReadTimeout:       time.Minute,
+			IdleTimeout:       2 * time.Minute,
+			MaxHeaderBytes:    1 << 20,
+		}
+		go func() {
+			fmt.Println("mui status listening on", statusAddr)
+			if err := statusHTTP.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Fatal(err)
+			}
+		}()
+	}
 	serverHTTP := &http.Server{Addr: address, Handler: api, ReadHeaderTimeout: 10 * time.Second,
 		// Request bodies are small JSON documents. There is deliberately no write
 		// timeout: agents download a 100 MB core over whatever link they have.

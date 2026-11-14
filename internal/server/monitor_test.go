@@ -217,7 +217,9 @@ func TestMonitorAggregationHourlyRollupIdempotencyAndRetentionPruning(t *testing
 	sID, _, headers := enrollMonitorTestServer(t, p, "rollup-srv")
 
 	// Feed 2 samples in minute M0 and 1 sample in minute M1 to verify minute aggregation math.
-	m0 := time.Now().UTC().Truncate(time.Minute).Add(-3 * time.Minute)
+	// Use a deterministic mid-hour timestamp so M0 never crosses the previous hour boundary at :00-:02.
+	now := time.Date(2026, 11, 14, 15, 30, 0, 0, time.UTC)
+	m0 := now.Add(-3 * time.Minute)
 	panelClock := m0
 	p.app.monitorNow = func() time.Time { return panelClock }
 	steps := []struct {
@@ -257,7 +259,7 @@ func TestMonitorAggregationHourlyRollupIdempotencyAndRetentionPruning(t *testing
 		}
 	}
 
-	minRecs, err := p.store.MonitorRecords(sID, "1h", time.Now().UTC(), 1500)
+	minRecs, err := p.store.MonitorRecords(sID, "1h", now, 1500)
 	if err != nil || len(minRecs) != 1 {
 		t.Fatalf("expected 1 flushed minute record, got %d (%v)", len(minRecs), err)
 	}
@@ -269,7 +271,6 @@ func TestMonitorAggregationHourlyRollupIdempotencyAndRetentionPruning(t *testing
 	}
 
 	// Insert two minute rows in a completed hour (2 hours ago) and verify RollupMonitorHours accuracy + idempotency.
-	now := time.Now().UTC()
 	completedHour := now.Truncate(time.Hour).Add(-2 * time.Hour)
 	if err := p.store.PutMonitorMinute(sID, completedHour.UnixMilli(), MonitorRecord{
 		CPU: 10, Load1: 0.5, RAMUsed: 1000, RAMTotal: 8000, SwapUsed: 50, DiskUsed: 2000, DiskTotal: 20000,

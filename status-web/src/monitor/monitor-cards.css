@@ -1,0 +1,987 @@
+/* Counterpart in web/src/monitor/monitor-cards.css — keep card & chart styles in sync across both apps. */
+
+@import "./monitor-tokens.css";
+
+.monScope .monitorGroupSection {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.monScope .monitorGroupHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--mon-hairline);
+  font-size: 13px;
+  min-width: 0;
+}
+
+.monScope .monitorGroupHead strong {
+  color: var(--mon-text-primary);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monScope .monitorGroupHead span {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--mon-fill-tertiary);
+  border: 1px solid var(--mon-border-subtle);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--mon-text-secondary);
+}
+
+.monScope .monitorGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
+
+.monScope .monitorCard {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 14px 15px;
+  border-radius: 13px;
+  border: 1px solid var(--mon-border);
+  background: var(--mon-surface-elev);
+  color: var(--mon-text-primary);
+  cursor: pointer;
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    background-color 0.16s ease;
+}
+
+.monScope .monitorCard:hover {
+  border-color: var(--mon-border-strong);
+  box-shadow: 0 6px 18px -10px rgba(15, 23, 42, 0.22);
+}
+
+.monScope .monitorCard:focus-visible {
+  outline: 2px solid var(--mon-accent-500);
+  outline-offset: 2px;
+}
+
+.monScope .monitorCard.active {
+  border-color: var(--mon-accent-500);
+  box-shadow:
+    0 0 0 2px var(--mon-ring),
+    0 8px 20px -12px rgba(37, 99, 235, 0.28);
+}
+
+.monScope .monitorCard.offline {
+  background: color-mix(in srgb, var(--mon-surface-sunken) 48%, var(--mon-surface-elev) 52%);
+}
+
+.monScope .monitorCardHead {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.monScope .monTitleBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.monScope .monTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.monScope .monitorFlag {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.monScope .monServerName {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+  font-weight: 700;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  color: var(--mon-text-primary);
+}
+
+.monScope .monSubtitleRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.monScope .monSubtitlePill {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  line-height: 1.3;
+  color: var(--mon-text-tertiary);
+}
+
+.monScope .monitorBadges {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 5px;
+  flex-shrink: 0;
+  max-width: 55%;
+}
+
+.monScope .monStatusPill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  background: var(--mon-tag-green-bg);
+  color: var(--mon-tag-green-fg);
+}
+
+.monScope .monStatusPill[data-online="false"] {
+  background: var(--mon-tag-red-bg);
+  color: var(--mon-tag-red-fg);
+}
+
+.monScope .monStatusDot {
+  width: 6.5px;
+  height: 6.5px;
+  border-radius: 999px;
+  background: currentColor;
+  flex-shrink: 0;
+}
+
+.monScope .monStatusDot.is-online {
+  background: var(--mon-status-online);
+}
+
+.monScope .monStatusPill[data-online="true"] .monStatusDot {
+  background: var(--mon-status-online);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--mon-status-online) 24%, transparent);
+}
+
+.monScope .monitorHostMeta {
+  padding: 5px 8px;
+  border-radius: 7px;
+  background: var(--mon-fill-tertiary);
+  border: 1px solid var(--mon-border-subtle);
+  font-size: 11.5px;
+  line-height: 1.35;
+  color: var(--mon-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.monScope .monPublicNote {
+  padding: 6px 9px;
+  border-radius: 7px;
+  background: var(--mon-fill-tertiary);
+  border: 1px solid var(--mon-border-subtle);
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--mon-text-secondary);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.monScope .monitorUpgradeNotice {
+  display: grid;
+  gap: 6px;
+  padding: 11px 12px;
+  border-radius: 9px;
+  background: var(--mon-fill-tertiary);
+  border: 1px dashed var(--mon-border-strong);
+  min-width: 0;
+}
+
+.monScope .monitorUpgradeNotice p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--mon-text-secondary);
+}
+
+.monScope .monitorUpgradeNotice small {
+  display: block;
+  font-size: 11.5px;
+  color: var(--mon-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monScope .monCardStack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.monScope .monMetricGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+  min-width: 0;
+}
+
+.monScope .monMetricItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.monScope .monMetricHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.monScope .monMetricLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.2;
+  color: var(--mon-text-secondary);
+}
+
+.monScope .monMetricLabel svg {
+  color: var(--mon-gauge-color);
+  flex-shrink: 0;
+}
+
+.monScope .monMetricValue {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1.5px;
+  flex-shrink: 0;
+  color: var(--mon-text-primary);
+}
+
+.monScope .monMetricValue strong {
+  font-size: 13px;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+}
+
+.monScope .monMetricValue small {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--mon-text-tertiary);
+}
+
+.monScope .monMetricDetail {
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--mon-text-tertiary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.monScope .monGaugeTrack {
+  min-width: 0;
+  height: 7px;
+  overflow: hidden;
+  background: linear-gradient(
+    to right,
+    var(--mon-gauge-color) 0,
+    var(--mon-gauge-color) var(--mon-gauge-fill, 0%),
+    var(--mon-progress-bg) var(--mon-gauge-fill, 0%),
+    var(--mon-progress-bg) 100%
+  );
+  -webkit-mask: repeating-linear-gradient(
+    to right,
+    #000 0,
+    #000 calc((100% + 2px) / 18 - 2px),
+    transparent calc((100% + 2px) / 18 - 2px),
+    transparent calc((100% + 2px) / 18)
+  );
+  mask: repeating-linear-gradient(
+    to right,
+    #000 0,
+    #000 calc((100% + 2px) / 18 - 2px),
+    transparent calc((100% + 2px) / 18 - 2px),
+    transparent calc((100% + 2px) / 18)
+  );
+}
+
+@supports (
+  (-webkit-mask-image: url("data:image/svg+xml,%3Csvg%3E%3C/svg%3E")) or
+    (mask-image: url("data:image/svg+xml,%3Csvg%3E%3C/svg%3E"))
+) {
+  .monScope .monGaugeTrack {
+    --mon-segment-mask: url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 100 100%27 preserveAspectRatio=%27none%27%3E%3Crect width=%2784%27 height=%27100%27 rx=%2716%27 ry=%2724%27 fill=%27black%27/%3E%3C/svg%3E");
+    -webkit-mask-image: var(--mon-segment-mask);
+    -webkit-mask-position: left top;
+    -webkit-mask-repeat: repeat-x;
+    -webkit-mask-size: calc((100% + 2px) / 18) 100%;
+    mask-image: var(--mon-segment-mask);
+    mask-position: left top;
+    mask-repeat: repeat-x;
+    mask-size: calc((100% + 2px) / 18) 100%;
+  }
+}
+
+.monScope .monSectionDivider {
+  padding-top: 9px;
+  border-top: 1px solid var(--mon-hairline);
+  min-width: 0;
+}
+
+.monScope .monTrafficGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+}
+
+.monScope .monTrafficStat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 7px 9px;
+  border-radius: 8px;
+  background: var(--mon-fill-tertiary);
+  border: 1px solid var(--mon-border-subtle);
+}
+
+.monScope .monTrafficHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.monScope .monTrafficDir {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11.5px;
+  font-weight: 650;
+  color: var(--mon-text-secondary);
+  flex-shrink: 0;
+}
+
+.monScope .monTrafficIconUp {
+  display: inline-flex;
+  color: var(--mon-traffic-up);
+}
+
+.monScope .monTrafficIconDown {
+  display: inline-flex;
+  color: var(--mon-traffic-down);
+}
+
+.monScope .monTrafficRate {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 720;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+}
+
+.monScope .monTrafficRate small {
+  font-size: 10.5px;
+  font-weight: 600;
+  opacity: 0.88;
+}
+
+.monScope .monTrafficFoot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--mon-text-tertiary);
+  min-width: 0;
+}
+
+.monScope .monTrafficFoot strong {
+  color: var(--mon-text-secondary);
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.monScope .monMetaGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 12px;
+}
+
+.monScope .monMetaItem {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  font-size: 11.5px;
+}
+
+.monScope .monMetaLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--mon-text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.monScope .monMetaValue {
+  color: var(--mon-text-primary);
+  font-weight: 650;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.monScope .monMetaValue[data-tone="online"] {
+  color: var(--mon-ink-success);
+}
+
+.monScope .monMetaValue[data-tone="muted"] {
+  color: var(--mon-text-tertiary);
+}
+
+.monScope .monMetaValue small {
+  margin-left: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--mon-text-tertiary);
+}
+
+.monScope .monitorCycleSection {
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--mon-hairline);
+  min-width: 0;
+}
+
+.monScope .monQuotaBlock {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.monScope .monQuotaHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 8px;
+  min-width: 0;
+  font-size: 11.5px;
+}
+
+.monScope .monQuotaLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--mon-text-secondary);
+  font-weight: 600;
+}
+
+.monScope .monQuotaLabel svg {
+  color: var(--mon-progress-network);
+  flex-shrink: 0;
+}
+
+.monScope .monQuotaRemain {
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--mon-text-tertiary);
+  white-space: nowrap;
+}
+
+.monScope .monQuotaUsage {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--mon-text-primary);
+  white-space: nowrap;
+}
+
+.monScope .monQuotaUsage.is-warning {
+  color: var(--mon-ink-warning);
+}
+
+.monScope .monQuotaUsage.is-danger {
+  color: var(--mon-ink-error);
+}
+
+.monScope .monQuotaTrack {
+  display: grid;
+  grid-template-columns: repeat(18, minmax(0, 1fr));
+  gap: 2px;
+  height: 7px;
+  min-width: 0;
+}
+
+.monScope .monQuotaSegment {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  transition: background-color 0.2s ease;
+}
+
+.monScope .monitorCyclePlain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 8px;
+  font-size: 11.5px;
+  min-width: 0;
+}
+
+.monScope .monitorCyclePlain strong {
+  color: var(--mon-text-primary);
+  font-weight: 650;
+}
+
+.monScope .monitorCardFooter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px 8px;
+  padding-top: 9px;
+  border-top: 1px dashed var(--mon-border);
+  min-width: 0;
+}
+
+.monScope .monFooterInfo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px 8px;
+  min-width: 0;
+}
+
+.monScope .monExpireChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4.5px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--mon-text-secondary);
+}
+
+.monScope .monExpireChip svg {
+  color: var(--mon-expire-color, var(--mon-text-tertiary));
+  flex-shrink: 0;
+}
+
+.monScope .monExpireDate {
+  color: var(--mon-text-tertiary);
+}
+
+.monScope .monExpireChip strong {
+  color: var(--mon-expire-color, var(--mon-text-secondary));
+  font-weight: 700;
+}
+
+.monScope .monExpireChip[data-tone="critical"] strong {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--mon-tag-red-bg);
+  color: var(--mon-tag-red-fg);
+}
+
+.monScope .monExpireChip[data-tone="warning"] strong {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--mon-tag-amber-bg);
+  color: var(--mon-tag-amber-fg);
+}
+
+.monScope .monitorRangeTabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--mon-border);
+  border-radius: 10px;
+  background: var(--mon-surface-sunken);
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.monScope .monitorRangeTabs button {
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  padding: 5px 11px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--mon-text-secondary);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.monScope .monitorRangeTabs button:hover:not(.active) {
+  color: var(--mon-text-primary);
+}
+
+.monScope .monitorRangeTabs button.active {
+  background: var(--mon-surface-elev);
+  color: var(--mon-accent-strong);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.1);
+}
+
+.monScope .monitorChartsGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  min-width: 0;
+}
+
+.monScope .trafficChartHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 8px 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.monScope .trafficLegend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  font-size: 11.5px;
+  color: var(--mon-text-secondary);
+}
+
+.monScope .trafficLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.monScope .trafficLegend span::before {
+  content: "";
+  display: inline-block;
+  width: 12px;
+  height: 3px;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.monScope .trafficPlotRow {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.monScope .trafficYAxis {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+  height: 185px;
+  color: var(--mon-text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.monScope .trafficPlot {
+  position: relative;
+  height: 185px;
+  min-width: 0;
+}
+
+.monScope .trafficPlot svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.monScope .trafficGridLine {
+  stroke: var(--mon-hairline);
+  stroke-dasharray: 4 5;
+  vector-effect: non-scaling-stroke;
+}
+
+.monScope .trafficLine {
+  fill: none;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.monScope .trafficCursor {
+  stroke: var(--mon-text-tertiary);
+  stroke-dasharray: 3 4;
+  vector-effect: non-scaling-stroke;
+}
+
+.monScope .trafficDot {
+  stroke: var(--mon-surface-elev);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.monScope .trafficZero {
+  position: absolute;
+  top: 45%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--mon-text-tertiary);
+  background: var(--mon-surface-elev);
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+.monScope .trafficXAxis {
+  display: flex;
+  justify-content: space-between;
+  gap: 4px;
+  margin: 4px 0 0 66px;
+  color: var(--mon-text-tertiary);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.monScope .trafficReadout {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-top: 10px;
+  padding: 7px 0 0;
+  font-size: 11.5px;
+}
+
+.monScope .monitorChartCard {
+  --mon-chart-accent: var(--mon-accent-500);
+  position: relative;
+  overflow: hidden;
+  min-width: 0;
+  padding: 14px 15px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--mon-border);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--mon-chart-accent) 4%, var(--mon-surface-elev) 96%) 0%,
+      var(--mon-surface-elev) 48px
+    );
+}
+
+.monScope .monitorChartCard::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 2.5px;
+  background: var(--mon-chart-accent);
+  opacity: 0.85;
+}
+
+.monScope .monitorChartHeadText {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.monScope .monitorChartTitle {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--mon-text-primary);
+}
+
+.monScope .monitorChartSub {
+  font-size: 11.5px;
+  color: var(--mon-text-tertiary);
+}
+
+.monScope .monitorReadout {
+  border-top: 1px solid var(--mon-border-subtle);
+  color: var(--mon-text-secondary);
+}
+
+.monScope .monitorReadout strong {
+  color: var(--mon-text-primary);
+}
+
+.monScope .monitorLegend span.monSeries-cpu::before { background: var(--mon-progress-cpu); }
+.monScope .trafficLine.monSeries-cpu { stroke: var(--mon-progress-cpu); }
+.monScope .trafficDot.monSeries-cpu { fill: var(--mon-progress-cpu); }
+
+.monScope .monitorLegend span.monSeries-memory::before { background: var(--mon-progress-memory); }
+.monScope .trafficLine.monSeries-memory { stroke: var(--mon-progress-memory); }
+.monScope .trafficDot.monSeries-memory { fill: var(--mon-progress-memory); }
+
+.monScope .monitorLegend span.monSeries-swap::before { background: var(--mon-progress-swap); }
+.monScope .trafficLine.monSeries-swap { stroke: var(--mon-progress-swap); }
+.monScope .trafficDot.monSeries-swap { fill: var(--mon-progress-swap); }
+
+.monScope .monitorLegend span.monSeries-up::before { background: var(--mon-traffic-up); }
+.monScope .trafficLine.monSeries-up { stroke: var(--mon-traffic-up); }
+.monScope .trafficDot.monSeries-up { fill: var(--mon-traffic-up); }
+
+.monScope .monitorLegend span.monSeries-down::before { background: var(--mon-traffic-down); }
+.monScope .trafficLine.monSeries-down { stroke: var(--mon-traffic-down); }
+.monScope .trafficDot.monSeries-down { fill: var(--mon-traffic-down); }
+
+.monScope .monitorLegend span.monSeries-network::before { background: var(--mon-progress-network); }
+.monScope .trafficLine.monSeries-network { stroke: var(--mon-progress-network); }
+.monScope .trafficDot.monSeries-network { fill: var(--mon-progress-network); }
+
+.monScope .monitorLegend span.monSeries-load::before { background: var(--mon-progress-load); }
+.monScope .trafficLine.monSeries-load { stroke: var(--mon-progress-load); }
+.monScope .trafficDot.monSeries-load { fill: var(--mon-progress-load); }
+
+.monScope .monitorLegend span.monSeries-latency::before {
+  background: var(--mon-chart-latency, var(--mon-latency-excellent));
+}
+.monScope .trafficLine.monSeries-latency {
+  stroke: var(--mon-chart-latency, var(--mon-latency-excellent));
+}
+.monScope .trafficDot.monSeries-latency {
+  fill: var(--mon-chart-latency, var(--mon-latency-excellent));
+}
+
+.monScope .monitorLegend span.monSeries-latencyMax::before {
+  background: var(--mon-status-warning);
+}
+.monScope .trafficLine.monSeries-latencyMax {
+  stroke: var(--mon-status-warning);
+}
+.monScope .trafficDot.monSeries-latencyMax {
+  fill: var(--mon-status-warning);
+}
+
+.monScope .trafficLine.is-dashed {
+  stroke-dasharray: 5 3.5;
+  opacity: 0.88;
+}
+
+.monScope .monitorPingChartsSection {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--mon-hairline);
+  display: grid;
+  gap: 12px;
+}
+
+.monScope .monitorPingChartsSection h3 {
+  margin: 0;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--mon-text-primary);
+}
+
+@media (max-width: 960px) {
+  .monScope .monitorChartsGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (min-width: 641px) and (max-width: 1024px) {
+  .monScope .monitorGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .monScope .monitorGrid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .monScope .trafficXAxis .optional {
+    display: none;
+  }
+}
+
+@media (max-width: 480px) {
+  .monScope .monitorCard {
+    padding: 12px;
+    gap: 10px;
+  }
+
+  .monScope .monitorBadges {
+    max-width: 58%;
+    gap: 4px;
+  }
+
+  .monScope .monMetricGrid {
+    gap: 9px 10px;
+  }
+
+  .monScope .monTrafficGrid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .monScope .monMetaGrid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 5px;
+  }
+
+  .monScope .trafficPlotRow {
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 6px;
+  }
+
+  .monScope .trafficXAxis {
+    margin-left: 54px;
+  }
+}

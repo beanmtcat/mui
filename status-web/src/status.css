@@ -1,0 +1,346 @@
+@import "./monitor/monitor-cards.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  min-height: 100%;
+  overflow-x: hidden;
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "PingFang SC",
+    "Hiragino Sans GB",
+    "Microsoft YaHei",
+    "Inter",
+    system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background: #f5f6f8;
+  color: #18181b;
+}
+
+:root[data-theme="dark"] body,
+:root[data-theme="dark"] {
+  background: #0f141b;
+  color: #e2e8f0;
+}
+
+.statusPage {
+  min-height: 100vh;
+  width: 100%;
+  overflow-x: hidden;
+  color: var(--mon-text-primary);
+}
+
+.statusShell {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 24px 18px 44px;
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.statusCentered {
+  min-height: 100vh;
+  align-content: center;
+  justify-items: center;
+  position: relative;
+}
+
+.statusThemeFloat {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+}
+
+.statusDisabledCard {
+  width: min(100%, 420px);
+  padding: 36px 24px;
+  border-radius: 14px;
+  border: 1px solid var(--mon-border);
+  background: var(--mon-surface);
+  text-align: center;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.statusDisabledCard h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--mon-text-secondary);
+}
+
+.statusHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px 20px;
+  flex-wrap: wrap;
+  padding: 18px 20px;
+  border-radius: 14px;
+  border: 1px solid var(--mon-border);
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--mon-accent-500) 5%, var(--mon-surface) 95%) 0%,
+      var(--mon-surface) 62%
+    );
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  min-width: 0;
+}
+
+.statusTitleBlock {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  flex: 1 1 260px;
+}
+
+.statusTitleBlock h1 {
+  margin: 0;
+  font-size: clamp(19px, 2.4vw, 24px);
+  font-weight: 760;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  color: var(--mon-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.statusDescription {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--mon-text-secondary);
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+}
+
+.statusHeaderActions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.statusOnlineBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--mon-border);
+  background: var(--mon-surface-elev);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--mon-text-secondary);
+  white-space: nowrap;
+}
+
+.statusOnlineBadge strong {
+  color: var(--mon-ink-success);
+  font-weight: 750;
+}
+
+.statusIconBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--mon-border);
+  background: var(--mon-surface-elev);
+  color: var(--mon-text-primary);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.statusIconBtn:hover {
+  border-color: var(--mon-border-strong);
+  background: var(--mon-hover-bg);
+}
+
+.statusBanner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 11px 15px;
+  border-radius: 11px;
+  border: 1px solid color-mix(in srgb, var(--mon-status-warning) 42%, transparent);
+  background: var(--mon-tag-amber-bg);
+  color: var(--mon-tag-amber-fg);
+  font-size: 13px;
+  line-height: 1.45;
+  min-width: 0;
+}
+
+.statusBanner strong {
+  font-weight: 700;
+}
+
+.statusToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.statusSelect,
+.statusSearch {
+  height: 36px;
+  padding: 0 12px;
+  border-radius: 9px;
+  border: 1px solid var(--mon-border);
+  background: var(--mon-surface-elev);
+  color: var(--mon-text-primary);
+  font-size: 13px;
+  outline: none;
+  min-width: 0;
+}
+
+.statusSelect:focus,
+.statusSearch:focus {
+  border-color: var(--mon-accent-500);
+  box-shadow: 0 0 0 2px var(--mon-ring);
+}
+
+.statusSelect {
+  flex: 0 1 180px;
+}
+
+.statusSearch {
+  flex: 1 1 220px;
+  max-width: 360px;
+}
+
+.statusSurface {
+  border-radius: 14px;
+  border: 1px solid var(--mon-border);
+  background: var(--mon-surface);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+  min-width: 0;
+}
+
+.statusEmpty {
+  padding: 32px 20px;
+  text-align: center;
+  font-size: 13.5px;
+  color: var(--mon-text-tertiary);
+}
+
+.statusBody {
+  padding: 16px 18px 20px;
+  display: grid;
+  gap: 20px;
+}
+
+.statusHint {
+  margin: 0;
+  padding: 10px 2px;
+  font-size: 13px;
+  color: var(--mon-text-tertiary);
+}
+
+.statusDetailHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px 16px;
+  padding: 15px 18px;
+  border-bottom: 1px solid var(--mon-hairline);
+  min-width: 0;
+}
+
+.statusDetailTitle {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+
+.statusDetailTitle h2 {
+  margin: 0;
+  font-size: 15.5px;
+  font-weight: 720;
+  color: var(--mon-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.statusDetailMeta {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--mon-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.statusDetailControls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+}
+
+.statusCloseBtn {
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--mon-border);
+  background: var(--mon-surface-elev);
+  color: var(--mon-text-secondary);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.statusCloseBtn:hover {
+  border-color: var(--mon-border-strong);
+  color: var(--mon-text-primary);
+}
+
+.statusDetailBody {
+  padding: 16px 18px 20px;
+  min-width: 0;
+}
+
+@media (max-width: 640px) {
+  .statusShell {
+    padding: 14px 12px 32px;
+    gap: 12px;
+  }
+
+  .statusHeader {
+    padding: 14px;
+  }
+
+  .statusBody,
+  .statusDetailBody {
+    padding: 14px;
+  }
+
+  .statusDetailHead {
+    padding: 13px 14px;
+  }
+
+  .statusSelect,
+  .statusSearch {
+    flex: 1 1 100%;
+    max-width: none;
+  }
+}
