@@ -70,6 +70,7 @@ type PublicServerItem struct {
 	Sample         *PublicMonitorSample     `json:"sample,omitempty"`
 	CycleTraffic   *PublicCycleTraffic      `json:"cycleTraffic,omitempty"`
 	Ping           []PublicServerPingBucket `json:"ping,omitempty"`
+	PingLines      []PublicServerPingLine   `json:"pingLines,omitempty"`
 	ExpiresAt      *time.Time               `json:"expiresAt,omitempty"`
 	PublicNote     string                   `json:"publicNote,omitempty"`
 }
@@ -366,7 +367,7 @@ func (a *App) buildPublicStatusSnapshot(cfg storedStatusPageSettings, now time.T
 		}
 	}
 
-	var pingMap map[string][]PublicServerPingBucket
+	var pingMap publicPingSummary
 	if cfg.ShowPing && len(visible) > 0 {
 		pingMap, err = a.cachedPublicPingSummary(visible, now)
 		if err != nil {
@@ -485,8 +486,12 @@ func (a *App) buildPublicStatusSnapshot(cfg storedStatusPageSettings, now time.T
 		}
 
 		if cfg.ShowPing {
-			if buckets := pingMap[s.ID]; len(buckets) > 0 {
+			if buckets := pingMap.buckets[s.ID]; len(buckets) > 0 {
 				item.Ping = buckets
+			}
+			// One line per probe task; a single task adds nothing over the average.
+			if lines := pingMap.lines[s.ID]; len(lines) > 1 {
+				item.PingLines = lines
 			}
 		}
 

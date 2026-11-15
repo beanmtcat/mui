@@ -324,70 +324,94 @@ export const MonitorMetricsCharts = memo(function MonitorMetricsCharts({
   );
 });
 
-export const PingTaskChart = memo(function PingTaskChart({
-  title,
-  target,
-  records,
+// One chart for every probe task of a server: a line per task, aligned on time.
+const PING_SERIES_TONES: SeriesTone[] = ["cpu", "memory", "network", "load", "down", "swap"];
+
+type CombinedPingPoint = {
+  at: string;
+  ms: (number | null)[];
+  sent: number[];
+  lost: number[];
+};
+
+export const PingCombinedChart = memo(function PingCombinedChart({
+  tasks,
   range,
 }: {
-  title: string;
-  target?: string;
-  records: SharedPingPoint[];
+  tasks: { id: string; name: string; records: SharedPingPoint[] }[];
   range: MonitorRange;
 }) {
+  const byTime = new Map<number, CombinedPingPoint>();
   let totalSent = 0;
   let totalLost = 0;
   let okCount = 0;
   let weightedMs = 0;
-  for (const r of records) {
-    totalSent += r.sent;
-    totalLost += r.lost;
-    const ok = r.sent - r.lost;
-    if (ok > 0) {
-      okCount += ok;
-      weightedMs += r.msAvg * ok;
+  tasks.forEach((task, taskIndex) => {
+    for (const r of task.records) {
+      const key = new Date(r.at).getTime();
+      if (!Number.isFinite(key)) continue;
+      let point = byTime.get(key);
+      if (!point) {
+        point = {
+          at: r.at,
+          ms: tasks.map(() => null),
+          sent: tasks.map(() => 0),
+          lost: tasks.map(() => 0),
+        };
+        byTime.set(key, point);
+      }
+      const ok = r.sent - r.lost;
+      point.ms[taskIndex] = ok > 0 ? r.msAvg : null;
+      point.sent[taskIndex] = r.sent;
+      point.lost[taskIndex] = r.lost;
+      totalSent += r.sent;
+      totalLost += r.lost;
+      if (ok > 0) {
+        okCount += ok;
+        weightedMs += r.msAvg * ok;
+      }
     }
-  }
-  const lossPct = totalSent > 0 ? (totalLost / totalSent) * 100 : 0;
+  });
+  const points = [...byTime.entries()].sort((a, b) => a[0] - b[0]).map(([, point]) => point);
+
   const avgMs = okCount > 0 ? weightedMs / okCount : null;
   const latColor = avgMs !== null ? latencyHeatColor(avgMs) : "var(--mon-latency-excellent)";
-  const subParts: string[] = [];
-  if (target) subParts.push(target);
+  const subParts: string[] = [`${tasks.length} 个任务`];
   if (avgMs !== null) subParts.push(`均值 ${avgMs.toFixed(0)} ms`);
-  if (totalSent > 0) subParts.push(`丢包率 ${lossPct.toFixed(1)}%（${totalLost}/${totalSent}）`);
-  if (range === "30d") subParts.push("延迟记录保留 7 天");
+  if (totalSent > 0) {
+    subParts.push(`丢包率 ${((totalLost / totalSent) * 100).toFixed(1)}%（${totalLost}/${totalSent}）`);
+  }
 
   return (
-    <MonitorSeriesChart
-      title={title}
-      subtitle={subParts.length > 0 ? subParts.join(" · ") : undefined}
-      accent={latColor}
-      latencyColor={latColor}
-      points={records}
-      range={range}
-      series={[
-        {
-          key: "avg",
-          label: "平均延迟",
-          tone: "latency",
-          value: (p) => (p.sent > p.lost ? p.msAvg : null),
-        },
-        {
-          key: "max",
-          label: "最大延迟",
-          tone: "latencyMax",
-          dashed: true,
-          value: (p) => (p.sent > p.lost ? p.msMax : null),
-        },
-      ]}
-      formatAxis={(v) => `${Math.round(v)} ms`}
-      formatValue={(v) => `${Math.round(v)} ms`}
-      emptyLabel="暂无 TCP 延迟记录"
-      extraReadout={(p) =>
-        p.sent > 0
-          ? `丢包 ${p.lost}/${p.sent}（${((p.lost / p.sent) * 100).toFixed(0)}%）`
-          : null
-      }
-    />
+    <div className="monitorChartWide">
+      <MonitorSeriesChart
+        title="延迟"
+        subtitle={subParts.join(" · ")}
+        accent={latColor}
+        latencyColor={latColor}
+        points={points}
+        range={range}
+        series={tasks.map((task, taskIndex) => ({
+          key: task.id,
+          label: task.name,
+          tone: PING_SERIES_TONES[taskIndex % PING_SERIES_TONES.length],
+          dashed: taskIndex >= PING_SERIES_TONES.length,
+          value: (p: CombinedPingPoint) => p.ms[taskIndex],
+        }))}
+        formatAxis={(v) => `${Math.round(v)} ms`}
+        formatValue={(v) => `${Math.round(v)} ms`}
+        emptyLabel="暂无 TCP 延迟记录"
+        extraReadout={(p) => {
+          const parts = tasks
+            .map((task, taskIndex) =>
+              p.sent[taskIndex] > 0 && p.lost[taskIndex] > 0
+                ? `${task.name} ${((p.lost[taskIndex] / p.sent[taskIndex]) * 100).toFixed(0)}%`
+                : null,
+            )
+            .filter(Boolean);
+          return parts.length > 0 ? `丢包 ${parts.join("、")}` : null;
+        }}
+      />
+    </div>
   );
 });

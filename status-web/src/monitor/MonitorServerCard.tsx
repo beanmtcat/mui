@@ -419,7 +419,7 @@ export const MonitorServerCard = memo(function MonitorServerCard({
         </div>
       )}
 
-      <PingHealthStrip buckets={card.ping} showPing={card.showPing} />
+      <PingHealthStrip buckets={card.ping} lines={card.pingLines} showPing={card.showPing} />
     </article>
   );
 });

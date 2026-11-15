@@ -305,3 +305,9 @@
     margin-left: 54px;
   }
 }
+
+/* A chart that spans the whole charts grid (the combined latency chart). */
+.monScope .monitorChartWide {
+  grid-column: 1 / -1;
+  min-width: 0;
+}

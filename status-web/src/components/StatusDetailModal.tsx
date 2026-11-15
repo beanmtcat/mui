@@ -1,7 +1,7 @@
 import { useEffect } from "react";
 import { countryFlag, formatBytes, formatMonitorUptime, formatServerExpiry } from "../monitor/format";
 import { resolveExpireVisual } from "../monitor/monitorTone";
-import { MonitorMetricsCharts, PingTaskChart } from "../monitor/MonitorCharts";
+import { MonitorMetricsCharts, PingCombinedChart } from "../monitor/MonitorCharts";
 import type { PublicPingTaskSeries, PublicServerItem } from "../monitor/publicCard";
 import type { MonitorRange, SharedMonitorRecord } from "../monitor/types";
 
@@ -153,14 +153,7 @@ export function StatusDetailModal({
                 <div className="monitorPingChartsSection">
                   <h3>延迟监测曲线</h3>
                   <div className="monitorChartsGrid">
-                    {pings.map((task) => (
-                      <PingTaskChart
-                        key={task.id}
-                        title={task.name}
-                        records={task.records}
-                        range={range}
-                      />
-                    ))}
+                    <PingCombinedChart tasks={pings} range={range} />
                   </div>
                 </div>
               )}

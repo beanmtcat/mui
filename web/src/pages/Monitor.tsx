@@ -22,7 +22,7 @@ import { ModalShell } from "../app/ui";
 import { useUrlParam } from "../app/url";
 import {
   MonitorMetricsCharts,
-  PingTaskChart,
+  PingCombinedChart,
   type MonitorRange,
 } from "../monitor/MonitorCharts";
 import { MonitorServerCard } from "../monitor/MonitorServerCard";
@@ -552,15 +552,14 @@ export default function Monitor() {
                   <div className="monitorPingChartsSection">
                     <h3>TCP 延迟监测曲线</h3>
                     <div className="monitorChartsGrid">
-                      {serverPingTasks.map((task) => (
-                        <PingTaskChart
-                          key={task.id}
-                          title={redactScreenshot(task.name)}
-                          target={redactScreenshot(task.target)}
-                          records={pingRecordsMap[task.id] || []}
-                          range={range}
-                        />
-                      ))}
+                      <PingCombinedChart
+                        tasks={serverPingTasks.map((task) => ({
+                          id: task.id,
+                          name: redactScreenshot(task.name),
+                          records: pingRecordsMap[task.id] || [],
+                        }))}
+                        range={range}
+                      />
                     </div>
                   </div>
                 )}

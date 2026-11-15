@@ -154,7 +154,7 @@ func (a *App) invalidatePublicStatusCache() {
 	a.statusCfgLoaded = false
 	a.statusSnapshotBody = nil
 	a.statusSnapshotExpires = time.Time{}
-	a.statusPingSummary = nil
+	a.statusPingSummary = publicPingSummary{}
 	a.statusPingExpires = time.Time{}
 	a.statusPingCacheReady = false
 	a.statusHistoryCache = nil
@@ -166,7 +166,7 @@ func (a *App) invalidatePublicStatusSnapshot() {
 	a.statusCacheGen++
 	a.statusSnapshotBody = nil
 	a.statusSnapshotExpires = time.Time{}
-	a.statusPingSummary = nil
+	a.statusPingSummary = publicPingSummary{}
 	a.statusPingExpires = time.Time{}
 	a.statusPingCacheReady = false
 	a.statusHistoryCache = nil
@@ -242,7 +242,7 @@ func (a *App) statusPageSetting(w http.ResponseWriter, r *http.Request) {
 	a.statusCfgLoaded = true
 	a.statusSnapshotBody = nil
 	a.statusSnapshotExpires = time.Time{}
-	a.statusPingSummary = nil
+	a.statusPingSummary = publicPingSummary{}
 	a.statusPingExpires = time.Time{}
 	a.statusPingCacheReady = false
 	a.statusHistoryCache = nil

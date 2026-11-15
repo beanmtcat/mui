@@ -201,7 +201,7 @@ func TestPublicStatusStrictFieldWhitelistAndNoSensitiveLeaks(t *testing.T) {
 		"id", "name", "group", "country", "region", "city", "online", "hostMonitor",
 		"ipv4", "ipv6",
 		"os", "arch", "virtualization", "cpuName", "cpuCores", "memTotal", "swapTotal", "diskTotal",
-		"sample", "cycleTraffic", "ping", "expiresAt", "publicNote",
+		"sample", "cycleTraffic", "ping", "pingLines", "expiresAt", "publicNote",
 	)
 	if srvMap["ipv4"] != true || srvMap["ipv6"] != true {
 		t.Fatalf("expected ipv4=true and ipv6=true, got %v / %v", srvMap["ipv4"], srvMap["ipv6"])
@@ -628,11 +628,11 @@ func TestPublicStatusDeleteServerInvalidatesCache(t *testing.T) {
 	// Report a monitor sample for delID so /records returns 200 and gets cached.
 	monPayload, _ := json.Marshal(shared.MonitorRequest{
 		Sample: shared.MonitorSample{
-			At:       now,
-			CPU:      24.5,
-			RAMUsed:  1024,
-			RAMTotal: 4096,
-			DiskUsed: 2048,
+			At:        now,
+			CPU:       24.5,
+			RAMUsed:   1024,
+			RAMTotal:  4096,
+			DiskUsed:  2048,
 			DiskTotal: 8192,
 		},
 	})
@@ -998,9 +998,43 @@ func TestPublicStatusPingBucketsAllLostIPvStackAndSingleQuery(t *testing.T) {
 	}
 
 	bodyStr := res1.Body.String()
-	for _, secret := range []string{"203.0.113.10", "2001:db8::99", task1ID, task2ID, "Secret-Task-A", "Secret-Task-B", "9.9.9.9", "8.8.8.8"} {
+	// Task names are public (the per-task lines on a card need them, and the
+	// detail endpoint already exposes them); IDs, targets and addresses are not.
+	for _, secret := range []string{"203.0.113.10", "2001:db8::99", task1ID, task2ID, "9.9.9.9", "8.8.8.8"} {
 		if strings.Contains(bodyStr, secret) {
 			t.Fatalf("status leaked secret %q in %s", secret, bodyStr)
+		}
+	}
+	var linesDoc struct {
+		Servers []struct {
+			Name      string           `json:"name"`
+			PingLines []map[string]any `json:"pingLines"`
+		} `json:"servers"`
+	}
+	if err := json.Unmarshal(res1.Body.Bytes(), &linesDoc); err != nil {
+		t.Fatal(err)
+	}
+	for _, srv := range linesDoc.Servers {
+		if srv.Name != "Tokyo-Ping" {
+			if len(srv.PingLines) != 0 {
+				t.Fatalf("server %s without probe data must not carry pingLines: %v", srv.Name, srv.PingLines)
+			}
+			continue
+		}
+		if len(srv.PingLines) != 2 {
+			t.Fatalf("expected one line per probe task (2), got %d", len(srv.PingLines))
+		}
+		for i, want := range []string{"Secret-Task-A", "Secret-Task-B"} {
+			line := srv.PingLines[i]
+			assertOnlyAllowedKeys(t, "status.servers[].pingLines[]", line, "name", "buckets")
+			if line["name"] != want {
+				t.Fatalf("pingLines[%d] name = %v, want %s (admin order)", i, line["name"], want)
+			}
+			buckets, _ := line["buckets"].([]any)
+			if len(buckets) == 0 {
+				t.Fatalf("pingLines[%d] has no buckets", i)
+			}
+			assertOnlyAllowedKeys(t, "status.servers[].pingLines[].buckets[]", buckets[0].(map[string]any), "at", "ms", "loss")
 		}
 	}
 

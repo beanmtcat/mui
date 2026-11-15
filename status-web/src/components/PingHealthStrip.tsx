@@ -1,6 +1,6 @@
 import { memo, useMemo, useState } from "react";
 import { latencyHeatColor, lossHeatColor } from "../monitor/monitorTone";
-import type { PublicPingBucket } from "../monitor/types";
+import type { PublicPingBucket, PublicPingLine } from "../monitor/types";
 
 // The reference theme shows 18 bars; the API may send up to 30 minute buckets.
 const PING_SLOT_COUNT = 18;
@@ -66,11 +66,103 @@ type HoverTarget = {
   slotIndex: number;
 };
 
+function toSlots(buckets: PublicPingBucket[]): (PublicPingBucket | null)[] {
+  const recent = buckets.slice(-PING_SLOT_COUNT);
+  const emptyLead = PING_SLOT_COUNT - recent.length;
+  return Array.from({ length: PING_SLOT_COUNT }, (_, idx) =>
+    idx < emptyLead ? null : recent[idx - emptyLead],
+  );
+}
+
+function bucketTitle(bucket: PublicPingBucket): string {
+  return `${formatBucketTime(bucket.at)} · ${
+    bucket.ms >= 0 ? `${Math.round(bucket.ms)} ms` : "超时"
+  } · 丢包 ${formatLossPercent(bucket.loss)}`;
+}
+
+/** Several probe tasks: one row per task, latency on the left and loss on the
+ *  right, like the reference theme's multi-carrier layout. */
+function MultiPingStrip({ lines }: { lines: PublicPingLine[] }) {
+  const rows = lines.map((line) => {
+    const slots = toSlots(line.buckets);
+    const latest = line.buckets[line.buckets.length - 1];
+    return { name: line.name, slots, latest };
+  });
+  return (
+    <div className="monPingStrip monPingStripMulti">
+      {(["latency", "loss"] as const).map((side) => (
+        <div className="monPingColumn" key={side} aria-label={side === "latency" ? "延迟" : "丢包"}>
+          {rows.map((row, rowIdx) => {
+            const latest = row.latest;
+            const failed = !latest || latest.ms < 0;
+            const valueText =
+              side === "latency"
+                ? !latest
+                  ? "—"
+                  : failed
+                    ? "超时"
+                    : `${Math.round(latest.ms)}`
+                : !latest
+                  ? "—"
+                  : formatLossPercent(Math.max(0, Math.min(100, latest.loss)));
+            const valueColor = !latest
+              ? undefined
+              : side === "latency"
+                ? failed
+                  ? "var(--mon-latency-critical)"
+                  : latencyHeatColor(latest.ms)
+                : lossHeatColor(Math.max(0, Math.min(100, latest.loss)));
+            return (
+              <div className="monPingRow" key={`${row.name}-${rowIdx}`} title={row.name}>
+                <div className="monPingRowHead" data-side={side}>
+                  {side === "latency" && <span className="monPingName">{row.name}</span>}
+                  <strong
+                    className="monPingValue monTabular"
+                    data-empty={!latest ? "true" : "false"}
+                    style={valueColor ? { color: valueColor } : undefined}
+                  >
+                    {valueText}
+                    {side === "latency" && latest && !failed && <small>ms</small>}
+                  </strong>
+                </div>
+                <div className="monPingBars">
+                  {row.slots.map((bucket, idx) => {
+                    if (!bucket) {
+                      return <span key={idx} className="monPingBar" data-state="empty" aria-hidden="true" />;
+                    }
+                    const lost = bucket.ms < 0;
+                    const color = lost
+                      ? "var(--mon-latency-critical)"
+                      : side === "latency"
+                        ? latencyHeatColor(bucket.ms)
+                        : lossHeatColor(bucket.loss);
+                    return (
+                      <span
+                        key={bucket.at}
+                        className="monPingBar"
+                        data-state={lost ? "failed" : "ok"}
+                        style={{ backgroundColor: color }}
+                        title={bucketTitle(bucket)}
+                      />
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export const PingHealthStrip = memo(function PingHealthStrip({
   buckets,
+  lines,
   showPing,
 }: {
   buckets?: PublicPingBucket[];
+  lines?: PublicPingLine[];
   showPing?: boolean;
 }) {
   const [hover, setHover] = useState<HoverTarget | null>(null);
@@ -97,6 +189,10 @@ export const PingHealthStrip = memo(function PingHealthStrip({
 
   if (!showPing) {
     return null;
+  }
+
+  if (lines && lines.length > 1) {
+    return <MultiPingStrip lines={lines} />;
   }
 
   // No probe data yet: keep the row with empty bars so cards stay the same height.

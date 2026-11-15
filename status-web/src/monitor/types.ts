@@ -40,6 +40,12 @@ export type PublicPingBucket = {
   loss: number;
 };
 
+/** One probe task's recent buckets; sent only when a server has several tasks. */
+export type PublicPingLine = {
+  name: string;
+  buckets: PublicPingBucket[];
+};
+
 export type MonitorCardViewModel = {
   id: string;
   name: string;
@@ -59,6 +65,7 @@ export type MonitorCardViewModel = {
   showPing?: boolean;
   cycleTraffic?: MonitorCardCycleTraffic;
   ping?: PublicPingBucket[];
+  pingLines?: PublicPingLine[];
   expiresAt?: string;
   publicNote?: string;
 };

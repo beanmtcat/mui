@@ -14,6 +14,8 @@ const (
 	publicStatusPingBuckets  = 30
 	publicStatusPingWindow   = 30 * time.Minute
 	publicStatusPingCacheTTL = 30 * time.Second
+	// Cards show at most this many probe tasks, like the reference theme.
+	publicStatusPingLines = 3
 )
 
 // PublicServerPingBucket summarizes one minute of public probe latency and packet loss.
@@ -21,6 +23,20 @@ type PublicServerPingBucket struct {
 	At   time.Time `json:"at"`
 	Ms   int       `json:"ms"`
 	Loss float64   `json:"loss"`
+}
+
+// PublicServerPingLine is one probe task's recent buckets for a server. Only the
+// task name is public; its ID and target never are.
+type PublicServerPingLine struct {
+	Name    string                   `json:"name"`
+	Buckets []PublicServerPingBucket `json:"buckets"`
+}
+
+// publicPingSummary holds both views of the same data: one averaged series per
+// server, and up to publicStatusPingLines per-task series.
+type publicPingSummary struct {
+	buckets map[string][]PublicServerPingBucket
+	lines   map[string][]PublicServerPingLine
 }
 
 // PingTaskMinuteRow represents one task/server/minute row from mui_ping_minutes.
@@ -69,7 +85,7 @@ func (s *Store) RecentPingMinuteRows(serverIDs []string, sinceMs int64) ([]PingT
 	return out, nil
 }
 
-func (a *App) cachedPublicPingSummary(visible []shared.Server, now time.Time) (map[string][]PublicServerPingBucket, error) {
+func (a *App) cachedPublicPingSummary(visible []shared.Server, now time.Time) (publicPingSummary, error) {
 	a.statusCacheMu.RLock()
 	if a.statusPingCacheReady && now.Before(a.statusPingExpires) {
 		cached := a.statusPingSummary
@@ -81,7 +97,7 @@ func (a *App) cachedPublicPingSummary(visible []shared.Server, now time.Time) (m
 
 	pingMap, err := a.buildPublicPingSummary(visible, now)
 	if err != nil {
-		return nil, err
+		return publicPingSummary{}, err
 	}
 
 	a.statusCacheMu.Lock()
@@ -95,7 +111,7 @@ func (a *App) cachedPublicPingSummary(visible []shared.Server, now time.Time) (m
 	return pingMap, nil
 }
 
-func (a *App) buildPublicPingSummary(visible []shared.Server, now time.Time) (map[string][]PublicServerPingBucket, error) {
+func (a *App) buildPublicPingSummary(visible []shared.Server, now time.Time) (publicPingSummary, error) {
 	agentServerIDs := make([]string, 0, len(visible))
 	serverSet := make(map[string]bool, len(visible))
 	for _, s := range visible {
@@ -106,15 +122,15 @@ func (a *App) buildPublicPingSummary(visible []shared.Server, now time.Time) (ma
 		serverSet[s.ID] = true
 	}
 	if len(agentServerIDs) == 0 {
-		return nil, nil
+		return publicPingSummary{}, nil
 	}
 
 	tasks, err := a.cachedPingTasks()
 	if err != nil {
-		return nil, err
+		return publicPingSummary{}, err
 	}
 	if len(tasks) == 0 {
-		return nil, nil
+		return publicPingSummary{}, nil
 	}
 
 	taskByID := make(map[string]MonitorPingTask, len(tasks))
@@ -133,7 +149,7 @@ func (a *App) buildPublicPingSummary(visible []shared.Server, now time.Time) (ma
 	sinceMs := now.UTC().Truncate(time.Minute).Add(-publicStatusPingWindow).UnixMilli()
 	dbRows, err := a.Store.RecentPingMinuteRows(agentServerIDs, sinceMs)
 	if err != nil {
-		return nil, err
+		return publicPingSummary{}, err
 	}
 
 	type taskServerAtKey struct {
@@ -154,6 +170,7 @@ func (a *App) buildPublicPingSummary(visible []shared.Server, now time.Time) (ma
 
 	seen := make(map[taskServerAtKey]bool, len(dbRows))
 	byServerAt := make(map[serverAtKey]*pingBucketAccum)
+	byTask := make(map[taskServerAtKey]*pingBucketAccum)
 
 	addSample := func(taskID, serverID string, atMs int64, msAvg, sent, lost int) {
 		if atMs < sinceMs || sent <= 0 || !serverSet[serverID] {
@@ -186,6 +203,8 @@ func (a *App) buildPublicPingSummary(visible []shared.Server, now time.Time) (ma
 		}
 		agg.sent += sent
 		agg.lost += clampedLost
+		taskAgg := &pingBucketAccum{sent: sent, lost: clampedLost}
+		byTask[k] = taskAgg
 		if sent > clampedLost {
 			avgVal := msAvg
 			if avgVal < 0 {
@@ -193,6 +212,7 @@ func (a *App) buildPublicPingSummary(visible []shared.Server, now time.Time) (ma
 			}
 			agg.msSum += int64(avgVal)
 			agg.msCount++
+			taskAgg.msSum, taskAgg.msCount = int64(avgVal), 1
 		}
 	}
 
@@ -210,39 +230,73 @@ func (a *App) buildPublicPingSummary(visible []shared.Server, now time.Time) (ma
 	a.pingAccumMu.Unlock()
 
 	if len(byServerAt) == 0 {
-		return nil, nil
+		return publicPingSummary{}, nil
+	}
+
+	toBucket := func(atMs int64, agg *pingBucketAccum) (PublicServerPingBucket, bool) {
+		if agg == nil || agg.sent <= 0 {
+			return PublicServerPingBucket{}, false
+		}
+		ms := -1
+		if agg.msCount > 0 {
+			ms = int(math.Round(float64(agg.msSum) / float64(agg.msCount)))
+		}
+		loss := math.Round(float64(agg.lost)*1000/float64(agg.sent)) / 10
+		return PublicServerPingBucket{At: time.UnixMilli(atMs).UTC(), Ms: ms, Loss: loss}, true
+	}
+	lastN := func(times []int64) []int64 {
+		slices.Sort(times)
+		if len(times) > publicStatusPingBuckets {
+			times = times[len(times)-publicStatusPingBuckets:]
+		}
+		return times
 	}
 
 	perServerTimes := make(map[string][]int64)
 	for sk := range byServerAt {
 		perServerTimes[sk.serverID] = append(perServerTimes[sk.serverID], sk.atMs)
 	}
-
-	out := make(map[string][]PublicServerPingBucket, len(perServerTimes))
+	out := publicPingSummary{
+		buckets: make(map[string][]PublicServerPingBucket, len(perServerTimes)),
+		lines:   make(map[string][]PublicServerPingLine, len(perServerTimes)),
+	}
 	for serverID, times := range perServerTimes {
-		slices.Sort(times)
-		if len(times) > publicStatusPingBuckets {
-			times = times[len(times)-publicStatusPingBuckets:]
-		}
-		buckets := make([]PublicServerPingBucket, 0, len(times))
-		for _, atMs := range times {
-			agg := byServerAt[serverAtKey{serverID: serverID, atMs: atMs}]
-			if agg == nil || agg.sent <= 0 {
-				continue
+		buckets := make([]PublicServerPingBucket, 0, publicStatusPingBuckets)
+		for _, atMs := range lastN(times) {
+			if b, ok := toBucket(atMs, byServerAt[serverAtKey{serverID: serverID, atMs: atMs}]); ok {
+				buckets = append(buckets, b)
 			}
-			ms := -1
-			if agg.msCount > 0 {
-				ms = int(math.Round(float64(agg.msSum) / float64(agg.msCount)))
-			}
-			loss := math.Round(float64(agg.lost)*1000/float64(agg.sent)) / 10
-			buckets = append(buckets, PublicServerPingBucket{
-				At:   time.UnixMilli(atMs).UTC(),
-				Ms:   ms,
-				Loss: loss,
-			})
 		}
 		if len(buckets) > 0 {
-			out[serverID] = buckets
+			out.buckets[serverID] = buckets
+		}
+	}
+
+	// Per-task lines, in the same order the admin lists the tasks.
+	type taskServerKey struct{ taskID, serverID string }
+	perTaskTimes := make(map[taskServerKey][]int64)
+	for k := range byTask {
+		tk := taskServerKey{taskID: k.taskID, serverID: k.serverID}
+		perTaskTimes[tk] = append(perTaskTimes[tk], k.atMs)
+	}
+	for _, task := range tasks {
+		for serverID := range out.buckets {
+			if len(out.lines[serverID]) >= publicStatusPingLines {
+				continue
+			}
+			times, ok := perTaskTimes[taskServerKey{taskID: task.ID, serverID: serverID}]
+			if !ok {
+				continue
+			}
+			buckets := make([]PublicServerPingBucket, 0, publicStatusPingBuckets)
+			for _, atMs := range lastN(times) {
+				if b, ok := toBucket(atMs, byTask[taskServerAtKey{taskID: task.ID, serverID: serverID, atMs: atMs}]); ok {
+					buckets = append(buckets, b)
+				}
+			}
+			if len(buckets) > 0 {
+				out.lines[serverID] = append(out.lines[serverID], PublicServerPingLine{Name: task.Name, Buckets: buckets})
+			}
 		}
 	}
 	return out, nil

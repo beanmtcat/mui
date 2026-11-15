@@ -2,6 +2,7 @@ import type {
   MonitorCardSample,
   MonitorCardViewModel,
   PublicPingBucket,
+  PublicPingLine,
   SharedPingPoint,
   SharedTrafficLimitType,
 } from "./types";
@@ -36,6 +37,7 @@ export type PublicServerItem = {
   sample?: MonitorCardSample;
   cycleTraffic?: PublicCycleTraffic;
   ping?: PublicPingBucket[];
+  pingLines?: PublicPingLine[];
   expiresAt?: string;
   publicNote?: string;
 };
@@ -90,6 +92,10 @@ export function toPublicCardViewModel(
     showPing,
     cycleTraffic: showTraffic && srv.cycleTraffic ? srv.cycleTraffic : undefined,
     ping: showPing && srv.ping && srv.ping.length > 0 ? srv.ping : undefined,
+    pingLines:
+      showPing && Array.isArray(srv.pingLines) && srv.pingLines.length > 1
+        ? srv.pingLines.filter((line) => line && Array.isArray(line.buckets))
+        : undefined,
     expiresAt: srv.expiresAt,
     publicNote: srv.publicNote,
   };

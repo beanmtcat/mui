@@ -112,3 +112,54 @@
   font-size: 10px;
   font-weight: 650;
 }
+
+/* Several probe tasks: one compact row per task in each column. */
+.monScope .monPingStripMulti {
+  align-items: start;
+}
+
+.monScope .monPingColumn {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.monScope .monPingRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.monScope .monPingRowHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  line-height: 1.1;
+}
+
+.monScope .monPingRowHead[data-side="loss"] {
+  justify-content: flex-end;
+}
+
+.monScope .monPingName {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  font-weight: 650;
+  color: var(--mon-text-secondary);
+}
+
+.monScope .monPingStripMulti .monPingValue {
+  font-size: 11.5px;
+  flex-shrink: 0;
+}
+
+.monScope .monPingStripMulti .monPingBars {
+  height: 9px;
+}
