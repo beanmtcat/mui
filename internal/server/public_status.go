@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"mui/internal/shared"
@@ -137,6 +138,8 @@ type publicHistoryCacheEntry struct {
 func (a *App) StatusHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/public/status", a.publicStatus)
+	mux.HandleFunc("GET /api/public/cdn.js", a.publicCDNStatusJS)
+	mux.HandleFunc("GET /api/public/cdn.json", a.publicCDNStatusJSON)
 	mux.HandleFunc("GET /api/public/background", a.publicBackground)
 	mux.HandleFunc("GET /api/public/servers/{publicId}/records", a.publicServerRecords)
 	mux.HandleFunc("GET /api/public/servers/{publicId}/pings", a.publicServerPings)
@@ -285,70 +288,87 @@ func (a *App) doPublicFlight(key string, fn func() (publicFlightResult, error)) 
 	return c.res, c.err
 }
 
-func (a *App) publicStatus(w http.ResponseWriter, r *http.Request) {
-	cfg, ok := a.checkPublicStatusGate(w, r)
-	if !ok {
-		return
-	}
+func (a *App) cachedPublicSnapshot(
+	flightKey string,
+	cacheBody *[]byte,
+	cacheExpires *time.Time,
+	builds *atomic.Int64,
+	build func(now time.Time) ([]byte, error),
+) ([]byte, error) {
 	now := a.nowMonitorUTC()
 
 	a.statusCacheMu.RLock()
-	if len(a.statusSnapshotBody) > 0 && now.Before(a.statusSnapshotExpires) {
-		body := a.statusSnapshotBody
+	if len(*cacheBody) > 0 && now.Before(*cacheExpires) {
+		body := *cacheBody
 		a.statusCacheMu.RUnlock()
-		writeCachedJSONBytes(w, "public, max-age=2", body)
-		return
+		return body, nil
 	}
 	a.statusCacheMu.RUnlock()
 
-	res, err := a.doPublicFlight("status", func() (publicFlightResult, error) {
+	res, err := a.doPublicFlight(flightKey, func() (publicFlightResult, error) {
 		recheckNow := a.nowMonitorUTC()
 		a.statusCacheMu.RLock()
-		if len(a.statusSnapshotBody) > 0 && recheckNow.Before(a.statusSnapshotExpires) {
-			body := a.statusSnapshotBody
+		if len(*cacheBody) > 0 && recheckNow.Before(*cacheExpires) {
+			body := *cacheBody
 			a.statusCacheMu.RUnlock()
 			return publicFlightResult{status: http.StatusOK, body: body}, nil
 		}
 		gen := a.statusCacheGen
 		a.statusCacheMu.RUnlock()
 
-		a.statusSnapshotBuilds.Add(1)
+		if builds != nil {
+			builds.Add(1)
+		}
 		if hook := a.statusBuildHook; hook != nil {
-			hook("status")
+			hook(flightKey)
 		}
 
-		body, err := a.buildPublicStatusSnapshot(cfg, recheckNow)
+		body, err := build(recheckNow)
 		if err != nil {
 			return publicFlightResult{}, err
 		}
 
 		a.statusCacheMu.Lock()
 		if a.statusCacheGen == gen {
-			a.statusSnapshotBody = body
-			a.statusSnapshotExpires = recheckNow.Add(publicStatusCacheTTL)
+			*cacheBody = body
+			*cacheExpires = recheckNow.Add(publicStatusCacheTTL)
 		}
 		a.statusCacheMu.Unlock()
 		return publicFlightResult{status: http.StatusOK, body: body}, nil
 	})
 	if err != nil {
+		return nil, err
+	}
+	return res.body, nil
+}
+
+func (a *App) publicStatus(w http.ResponseWriter, r *http.Request) {
+	cfg, ok := a.checkPublicStatusGate(w, r)
+	if !ok {
+		return
+	}
+	body, err := a.cachedPublicSnapshot("status", &a.statusSnapshotBody, &a.statusSnapshotExpires, &a.statusSnapshotBuilds, func(now time.Time) ([]byte, error) {
+		return a.buildPublicStatusSnapshot(cfg, now)
+	})
+	if err != nil {
 		errorJSON(w, 500, "internal error")
 		return
 	}
-	writeCachedJSONBytes(w, "public, max-age=2", res.body)
+	writeCachedJSONBytes(w, "public, max-age=2", body)
 }
 
-func (a *App) buildPublicStatusSnapshot(cfg storedStatusPageSettings, now time.Time) ([]byte, error) {
-	allServers, err := a.Store.Servers()
-	if err != nil {
-		return nil, err
-	}
+func visiblePublicServers(allServers []shared.Server) []shared.Server {
 	visible := make([]shared.Server, 0, len(allServers))
 	for _, s := range allServers {
 		if s.PublicVisible && s.Status != "revoked" {
 			visible = append(visible, s)
 		}
 	}
-	slices.SortFunc(visible, func(x, y shared.Server) int {
+	return visible
+}
+
+func sortPublicServers(servers []shared.Server) {
+	slices.SortFunc(servers, func(x, y shared.Server) int {
 		if x.SortWeight != y.SortWeight {
 			if x.SortWeight > y.SortWeight {
 				return -1
@@ -361,6 +381,34 @@ func (a *App) buildPublicStatusSnapshot(cfg storedStatusPageSettings, now time.T
 		}
 		return strings.Compare(x.ID, y.ID)
 	})
+}
+
+func publicServerOnline(s shared.Server, entry latestMonitorSample, hasSample bool, now time.Time) bool {
+	if shared.NoAgentManaged(s) {
+		return false
+	}
+	seenOnline := s.LastSeen != nil && now.Sub(*s.LastSeen) <= 90*time.Second
+	sampleOnline := hasSample && now.Sub(entry.receivedAt) <= 30*time.Second
+	return seenOnline || sampleOnline
+}
+
+func (a *App) copyLatestMonitorSamples() map[string]latestMonitorSample {
+	a.monitorMu.RLock()
+	defer a.monitorMu.RUnlock()
+	samples := make(map[string]latestMonitorSample, len(a.latestSamples))
+	for k, v := range a.latestSamples {
+		samples[k] = v
+	}
+	return samples
+}
+
+func (a *App) buildPublicStatusSnapshot(cfg storedStatusPageSettings, now time.Time) ([]byte, error) {
+	allServers, err := a.Store.Servers()
+	if err != nil {
+		return nil, err
+	}
+	visible := visiblePublicServers(allServers)
+	sortPublicServers(visible)
 
 	hosts, err := a.Store.MonitorHosts()
 	if err != nil {
@@ -383,12 +431,7 @@ func (a *App) buildPublicStatusSnapshot(cfg storedStatusPageSettings, now time.T
 		}
 	}
 
-	a.monitorMu.RLock()
-	samples := make(map[string]latestMonitorSample, len(a.latestSamples))
-	for k, v := range a.latestSamples {
-		samples[k] = v
-	}
-	a.monitorMu.RUnlock()
+	samples := a.copyLatestMonitorSamples()
 
 	items := make([]PublicServerItem, 0, len(visible))
 	for _, s := range visible {
@@ -397,12 +440,9 @@ func (a *App) buildPublicStatusSnapshot(cfg storedStatusPageSettings, now time.T
 		entry, hasSample := samples[s.ID]
 		host, hasHost := hosts[s.ID]
 
-		online := false
+		online := publicServerOnline(s, entry, hasSample, now)
 		hostMonitor := false
 		if !noAgent {
-			seenOnline := s.LastSeen != nil && now.Sub(*s.LastSeen) <= 90*time.Second
-			sampleOnline := hasSample && now.Sub(entry.receivedAt) <= 30*time.Second
-			online = seenOnline || sampleOnline
 			hostMonitor = s.HostMonitor || hasSample || hasHost
 		}
 

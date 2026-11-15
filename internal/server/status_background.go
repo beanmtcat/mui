@@ -152,6 +152,8 @@ func (a *App) statusPageBackground(w http.ResponseWriter, r *http.Request) {
 		a.statusBgLoaded = true
 		a.statusSnapshotBody = nil
 		a.statusSnapshotExpires = time.Time{}
+		a.statusCDNBody = nil
+		a.statusCDNExpires = time.Time{}
 		a.statusCacheMu.Unlock()
 
 		a.auditRequest(r, "settings.status_background", "status_page", fmt.Sprintf("upload mime=%s size=%d %dx%d", mime, len(raw), width, height))
@@ -173,6 +175,8 @@ func (a *App) statusPageBackground(w http.ResponseWriter, r *http.Request) {
 		a.statusBgLoaded = true
 		a.statusSnapshotBody = nil
 		a.statusSnapshotExpires = time.Time{}
+		a.statusCDNBody = nil
+		a.statusCDNExpires = time.Time{}
 		a.statusCacheMu.Unlock()
 
 		a.auditRequest(r, "settings.status_background", "status_page", "delete")

@@ -6,7 +6,7 @@
   gap: 2px;
   padding: 3px;
   border: 1px solid var(--mon-border);
-  border-radius: 10px;
+  border-radius: 8px;
   background: var(--mon-surface-sunken);
   max-width: 100%;
   overflow-x: auto;
@@ -14,7 +14,7 @@
 
 .monScope .monitorRangeTabs button {
   border: 0;
-  border-radius: 7px;
+  border-radius: 5px;
   background: transparent;
   padding: 5px 11px;
   font-size: 12px;
@@ -168,7 +168,7 @@
   overflow: hidden;
   min-width: 0;
   padding: 14px 15px 12px;
-  border-radius: 12px;
+  border-radius: 10px;
   border: 1px solid var(--mon-border);
   background:
     linear-gradient(

@@ -117,7 +117,7 @@ func validRoles(roles []string) ([]string, error) {
 	var out []string
 	for _, r := range roles {
 		switch r {
-		case shared.RoleEntry, shared.RoleLine, shared.RoleTransit, shared.RoleExit:
+		case shared.RoleEntry, shared.RoleLine, shared.RoleTransit, shared.RoleExit, shared.RoleOther:
 			if !slices.Contains(out, r) {
 				out = append(out, r)
 			}

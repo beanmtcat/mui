@@ -170,30 +170,31 @@ func (a *App) cachedStatusPageSettings() (storedStatusPageSettings, error) {
 	return cfg, nil
 }
 
+func (a *App) clearPublicStatusSnapshotStateLocked() {
+	a.statusSnapshotBody = nil
+	a.statusSnapshotExpires = time.Time{}
+	a.statusCDNBody = nil
+	a.statusCDNExpires = time.Time{}
+	a.statusPingSummary = publicPingSummary{}
+	a.statusPingExpires = time.Time{}
+	a.statusPingCacheReady = false
+	a.statusHistoryCache = nil
+}
+
 func (a *App) invalidatePublicStatusCache() {
 	a.statusCacheMu.Lock()
 	a.statusCacheGen++
 	a.statusCfgLoaded = false
 	a.statusBgLoaded = false
 	a.statusBg = nil
-	a.statusSnapshotBody = nil
-	a.statusSnapshotExpires = time.Time{}
-	a.statusPingSummary = publicPingSummary{}
-	a.statusPingExpires = time.Time{}
-	a.statusPingCacheReady = false
-	a.statusHistoryCache = nil
+	a.clearPublicStatusSnapshotStateLocked()
 	a.statusCacheMu.Unlock()
 }
 
 func (a *App) invalidatePublicStatusSnapshot() {
 	a.statusCacheMu.Lock()
 	a.statusCacheGen++
-	a.statusSnapshotBody = nil
-	a.statusSnapshotExpires = time.Time{}
-	a.statusPingSummary = publicPingSummary{}
-	a.statusPingExpires = time.Time{}
-	a.statusPingCacheReady = false
-	a.statusHistoryCache = nil
+	a.clearPublicStatusSnapshotStateLocked()
 	a.statusCacheMu.Unlock()
 }
 
@@ -296,12 +297,7 @@ func (a *App) statusPageSetting(w http.ResponseWriter, r *http.Request) {
 	a.statusCacheGen++
 	a.statusCfg = cfg
 	a.statusCfgLoaded = true
-	a.statusSnapshotBody = nil
-	a.statusSnapshotExpires = time.Time{}
-	a.statusPingSummary = publicPingSummary{}
-	a.statusPingExpires = time.Time{}
-	a.statusPingCacheReady = false
-	a.statusHistoryCache = nil
+	a.clearPublicStatusSnapshotStateLocked()
 	a.statusCacheMu.Unlock()
 
 	detail := fmt.Sprintf("enabled=%v showTraffic=%v showPing=%v cardOpacity=%d backgroundBlur=%d", cfg.Enabled, cfg.ShowTraffic, cfg.ShowPing, cfg.CardOpacity, cfg.BackgroundBlur)

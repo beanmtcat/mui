@@ -116,7 +116,7 @@
   grid-template-columns: repeat(var(--mon-info-cols, 3), minmax(0, 1fr));
   overflow: hidden;
   border: 1px solid var(--mon-border-subtle);
-  border-radius: 9px;
+  border-radius: 6px;
   background: color-mix(in srgb, var(--mon-fill-tertiary) 78%, transparent);
   min-width: 0;
 }

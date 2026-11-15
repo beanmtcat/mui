@@ -97,6 +97,8 @@ type App struct {
 	statusBg               *statusAsset
 	statusSnapshotBody     []byte
 	statusSnapshotExpires  time.Time
+	statusCDNBody          []byte
+	statusCDNExpires       time.Time
 	statusPingSummary      publicPingSummary
 	statusPingExpires      time.Time
 	statusPingCacheReady   bool

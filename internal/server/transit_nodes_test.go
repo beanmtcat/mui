@@ -126,3 +126,110 @@ func TestTransitWithCoreReinstallsCore(t *testing.T) {
 		t.Fatal("manual repair install of a transit with sing-box would drop the core")
 	}
 }
+
+func TestOtherRoleServerBehavior(t *testing.T) {
+	l := newRouteLab(t)
+	p := l.p
+
+	// 1. Online "other" server installs Agent only ('relay') without sing-box.
+	code, created, _ := p.do("POST", "/api/servers", map[string]any{
+		"name":    "other-vps",
+		"roles":   []string{shared.RoleOther},
+		"country": "JP",
+		"ipv4":    "198.51.100.50",
+	}, nil)
+	if code != 201 {
+		t.Fatalf("create other server: %d %v", code, created)
+	}
+	if !strings.Contains(created["installCommand"].(string), "'relay'") {
+		t.Fatalf("other server installer unexpectedly includes core: %s", created["installCommand"])
+	}
+	otherID := created["server"].(map[string]any)["id"].(string)
+	otherServer, err := p.store.Server(otherID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	guide := p.app.offlineInstall(otherID, "fixture-token", otherServer)
+	for _, download := range guide.Downloads {
+		for _, file := range download.Files {
+			if file.Name == "sing-box" {
+				t.Fatal("other server unexpectedly downloads sing-box")
+			}
+		}
+	}
+
+	// Enroll the "other" server for route and forward checks.
+	code, enrolled, _ := p.do("POST", "/agent/enroll", map[string]string{
+		"serverId": otherID,
+		"token":    created["enrollToken"].(string),
+	}, nil)
+	if code != 200 {
+		t.Fatalf("enroll other server: %d %v", code, enrolled)
+	}
+	p.newAgent(map[string]string{"X-Server-ID": otherID, "Authorization": "Bearer " + enrolled["agentToken"].(string)})
+
+	// 2. "other" server cannot host proxy nodes.
+	if code, out, _ := p.do("POST", "/api/nodes", map[string]any{
+		"serverId": otherID,
+		"name":     "forbidden-other-node",
+		"protocol": "ss",
+		"port":     51010,
+	}, nil); code != 409 {
+		t.Fatalf("other server accepted node: %d %v", code, out)
+	}
+
+	// 3. "other" server cannot act as route entry or middle hop.
+	if code, out := l.route(map[string]any{
+		"name":          "other-as-entry",
+		"entryServerId": otherID,
+		"nodeId":        l.nodeID,
+		"enabled":       true,
+		"hops":          []map[string]any{},
+	}); code != 400 {
+		t.Fatalf("other server accepted as route entry: %d %v", code, out)
+	}
+	if code, out := l.route(map[string]any{
+		"name":          "other-as-hop",
+		"entryServerId": l.entry,
+		"nodeId":        l.nodeID,
+		"enabled":       true,
+		"hops":          []map[string]any{{"serverIds": []string{otherID}}},
+	}); code != 400 {
+		t.Fatalf("other server accepted as route hop: %d %v", code, out)
+	}
+
+	// 4. Standalone port forward succeeds, offline mode succeeds, external mode rejects.
+	if code, fwd, _ := p.do("POST", "/api/forwards", map[string]any{
+		"serverId":       otherID,
+		"name":           "other-forward",
+		"network":        "tcp",
+		"port":           51020,
+		"targets":        []map[string]any{{"host": "198.51.100.60", "port": 443}},
+		"firewallPolicy": "all",
+		"enabled":        true,
+	}, nil); code != 201 {
+		t.Fatalf("standalone forward on other server failed: %d %v", code, fwd)
+	}
+
+	if code, offOut, _ := p.do("POST", "/api/servers", map[string]any{
+		"name":           "offline-other",
+		"roles":          []string{shared.RoleOther},
+		"managementMode": "offline",
+		"firewallMode":   "manual",
+		"country":        "SG",
+		"ipv4":           "198.51.100.51",
+	}, nil); code != 201 {
+		t.Fatalf("offline other server rejected: %d %v", code, offOut)
+	}
+
+	if code, extOut, _ := p.do("POST", "/api/servers", map[string]any{
+		"name":           "external-other",
+		"roles":          []string{shared.RoleOther},
+		"managementMode": "external",
+		"firewallMode":   "manual",
+		"country":        "SG",
+		"ipv4":           "198.51.100.52",
+	}, nil); code != 400 {
+		t.Fatalf("external other server unexpectedly accepted: %d %v", code, extOut)
+	}
+}

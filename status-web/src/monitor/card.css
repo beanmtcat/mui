@@ -54,7 +54,7 @@
   min-width: 0;
   max-width: 100%;
   padding: 12px 14px;
-  border-radius: 14px;
+  border-radius: 10px;
   border: 1px solid var(--mon-border);
   background: var(--mon-surface);
   color: var(--mon-text-primary);
@@ -151,7 +151,7 @@
   min-width: 0;
   max-width: 11rem;
   padding: 0 0.56rem;
-  border-radius: 7px;
+  border-radius: 5px;
   font-size: 10.5px;
   font-weight: 680;
   line-height: 1;
@@ -182,7 +182,7 @@
   justify-content: center;
   height: 22px;
   padding: 0 7px;
-  border-radius: 7px;
+  border-radius: 5px;
   background: var(--mon-tag-green-bg);
   color: var(--mon-tag-green-fg);
   font-size: 10.5px;
@@ -218,7 +218,7 @@
   display: grid;
   gap: 6px;
   padding: 11px 12px;
-  border-radius: 9px;
+  border-radius: 6px;
   background: var(--mon-fill-tertiary);
   border: 1px dashed var(--mon-border-strong);
   min-width: 0;

@@ -30,7 +30,7 @@ func proxyRoleFixture(t *testing.T) (*testMui, string, map[string]string, shared
 }
 
 func TestAgentProxyAllOnlineServerRoles(t *testing.T) {
-	for _, role := range []string{shared.RoleEntry, shared.RoleLine, shared.RoleTransit, shared.RoleExit} {
+	for _, role := range []string{shared.RoleEntry, shared.RoleLine, shared.RoleTransit, shared.RoleExit, shared.RoleOther} {
 		t.Run(role, func(t *testing.T) {
 			p, hostID, hostAuth, node := proxyRoleFixture(t)
 			input := map[string]any{"name": role, "roles": []string{role}, "country": "SG", "ipv4": "198.51.100.31", "firewallMode": "manual", "agentProxyNodeId": node.ID}

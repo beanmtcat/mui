@@ -41,7 +41,7 @@
 .statusDisabledCard {
   width: min(100%, 420px);
   padding: 36px 24px;
-  border-radius: 18px;
+  border-radius: 12px;
   border: 1px solid var(--mon-border-strong);
   background: var(--mon-surface);
   text-align: center;
@@ -128,7 +128,7 @@
   align-items: center;
   gap: 6px 10px;
   padding: 10px 14px;
-  border-radius: 12px;
+  border-radius: 9px;
   border: 1px solid color-mix(in srgb, var(--mon-status-warning) 42%, transparent);
   background: var(--mon-tag-amber-bg);
   color: var(--mon-tag-amber-fg);
@@ -139,7 +139,7 @@
 
 .statusEmpty {
   padding: 40px 20px;
-  border-radius: 16px;
+  border-radius: 10px;
   border: 1px solid var(--mon-border);
   background: var(--mon-surface);
   text-align: center;

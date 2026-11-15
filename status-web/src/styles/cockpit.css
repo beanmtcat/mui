@@ -34,7 +34,7 @@
   overflow: visible;
   padding: 10px 10px 8px;
   border: 1px solid color-mix(in srgb, var(--mon-border-strong) 48%, transparent);
-  border-radius: 18px;
+  border-radius: 12px;
   background:
     radial-gradient(circle at 12% 46%, rgba(55, 137, 214, 0.14), transparent 19%),
     radial-gradient(circle at 88% 46%, rgba(55, 137, 214, 0.14), transparent 19%),

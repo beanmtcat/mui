@@ -241,7 +241,7 @@ export const emptyForward: Partial<ForwardRule> = {
   targets: [{ host: "", port: 443 }], balance: "failover", firewallPolicy: "restricted", firewallSources: "", enabled: true,
 };
 export const emptyRoute: Partial<Route> = { name: "", entryServerId: "", hops: [], nodeId: "", nodeInternal: false, nodeSourceFamily: "ipv4", port: 0, enabled: true, notes: "" };
-export const roleOrder: Role[] = ["entry", "line", "transit", "exit"];
+export const roleOrder: Role[] = ["entry", "line", "transit", "exit", "other"];
 export const rolesText = (roles: Role[] | undefined) => roleOrder.filter((r) => roles?.includes(r)).map((r) => roleLabels[r]).join(" / ") || "未设置";
 export const supportsGitHubUpgrade = (version: string) => {
   const match = /^(\d+)\.(\d+)\.(\d+)/.exec(version);

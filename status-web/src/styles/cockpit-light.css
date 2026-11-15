@@ -185,7 +185,7 @@
     min-height: 0;
     gap: 6px 4px;
     padding: 8px 8px 6px;
-    border-radius: 14px;
+    border-radius: 10px;
   }
 
   .home-cockpit-overview[data-has-toolbar="true"] {

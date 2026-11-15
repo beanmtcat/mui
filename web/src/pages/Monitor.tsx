@@ -43,7 +43,11 @@ const RANGES: { id: MonitorRange; label: string }[] = [
 ];
 
 export default function Monitor() {
-  const { servers, trafficLimitThreshold, ensureTrafficLimitThreshold, refreshTick, act, setConfirmation, redactScreenshot, protect } = useApp();
+  const { servers, trafficLimitThreshold, ensureTrafficLimitThreshold, refreshTick, act, setConfirmation, screenshotMode, redactScreenshot, protect } = useApp();
+  const redact = useCallback(
+    (value: string) => (screenshotMode ? redactScreenshot(value) : value),
+    [screenshotMode, redactScreenshot],
+  );
   useEffect(() => {
     ensureTrafficLimitThreshold();
   }, [ensureTrafficLimitThreshold]);
@@ -330,10 +334,10 @@ export default function Monitor() {
                       className="monRenewalChip monTabular"
                       data-tone={visual.tone}
                       onClick={() => setSelectedId(srv.id)}
-                      title={`点击查看「${redactScreenshot(srv.name)}」监控曲线`}
+                      title={`点击查看「${redact(srv.name)}」监控曲线`}
                     >
                       <span>{countryFlag(srv.country)}</span>
-                      <span className="monRenewalName">{redactScreenshot(srv.name)}</span>
+                      <span className="monRenewalName">{redact(srv.name)}</span>
                       <strong>{visual.badgeText}</strong>
                     </button>
                   ) : (
@@ -343,7 +347,7 @@ export default function Monitor() {
                       data-tone={visual.tone}
                     >
                       <span>{countryFlag(srv.country)}</span>
-                      <span className="monRenewalName">{redactScreenshot(srv.name)}</span>
+                      <span className="monRenewalName">{redact(srv.name)}</span>
                       <strong>{visual.badgeText}</strong>
                     </span>
                   ),
@@ -424,7 +428,7 @@ export default function Monitor() {
             groupedServers.map(({ group, items }) => (
               <div className="monitorGroupSection" key={group}>
                 <div className="monitorGroupHead">
-                  <strong>{redactScreenshot(group)}</strong>
+                  <strong>{redact(group)}</strong>
                   <span className="monTabular">{items.length} 台</span>
                 </div>
                 <div className="monitorGrid">
@@ -433,7 +437,7 @@ export default function Monitor() {
                       srv,
                       overviewByServer.get(srv.id),
                       trafficLimitThreshold,
-                      redactScreenshot,
+                      redact,
                     );
                     const hasBadges = Boolean(srv.alertMuted || (srv.autoRenew && srv.billingCycle));
                     return (
@@ -496,7 +500,7 @@ export default function Monitor() {
 
       {selectedServer && (
         <ModalShell
-          title={`${countryFlag(selectedServer.country)} ${redactScreenshot(selectedServer.name)} · 历史曲线`}
+          title={`${countryFlag(selectedServer.country)} ${redact(selectedServer.name)} · 历史曲线`}
           labelledBy="monitor-detail-title"
           dirty={false}
           onClose={() => setSelectedId("")}
@@ -555,7 +559,7 @@ export default function Monitor() {
                       <PingCombinedChart
                         tasks={serverPingTasks.map((task) => ({
                           id: task.id,
-                          name: redactScreenshot(task.name),
+                          name: redact(task.name),
                           records: pingRecordsMap[task.id] || [],
                         }))}
                         range={range}
@@ -605,10 +609,10 @@ export default function Monitor() {
                 {pingTasks.map((t) => (
                   <tr key={t.id}>
                     <td>
-                      <strong>{redactScreenshot(t.name)}</strong>
+                      <strong>{redact(t.name)}</strong>
                     </td>
                     <td>
-                      <code>{redactScreenshot(t.target)}</code>
+                      <code>{redact(t.target)}</code>
                     </td>
                     <td>{t.intervalSeconds} 秒</td>
                     <td>
@@ -617,7 +621,7 @@ export default function Monitor() {
                         : t.serverIds
                             .map((id) => {
                               const s = servers.find((srv) => srv.id === id);
-                              return s ? redactScreenshot(s.name) : id;
+                              return s ? redact(s.name) : id;
                             })
                             .join("、")}
                     </td>
@@ -669,7 +673,7 @@ export default function Monitor() {
         <PingTaskDialog
           initial={pingDialog}
           onlineServers={onlineManagedServers}
-          redact={redactScreenshot}
+          redact={redact}
           onClose={() => setPingDialog(null)}
           onSaved={async () => {
             await fetchPingTasks();

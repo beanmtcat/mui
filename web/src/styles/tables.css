@@ -88,19 +88,16 @@
   white-space: nowrap;
   font-size: 12px;
 }
-.serverCycleTraffic {
-  display: grid;
-  gap: 3px;
-  min-width: 140px;
+.serverListTable td.serverTraffic small {
+  max-width: none;
 }
-.serverCycleBar {
-  height: 5px;
+.serverNameLine .pill {
+  padding: 0 6px;
+  font-size: 11px;
+  line-height: 1.3;
 }
-.serverMetaPills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 4px;
+.warnText {
+  color: var(--warn);
 }
 .serverGroupRow td {
   padding: 7px 14px;

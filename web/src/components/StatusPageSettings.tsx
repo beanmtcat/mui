@@ -188,17 +188,30 @@ export default function StatusPageSettingsCard() {
         </div>
       )}
       {form.statusUrl && (
-        <div className="statusPageUrlRow">
-          <div className="statusPageUrlMeta">
-            <strong>对外访问链接</strong>
-            <code>{form.statusUrl}</code>
+        <>
+          <div className="statusPageUrlRow">
+            <div className="statusPageUrlMeta">
+              <strong>对外访问链接</strong>
+              <code>{form.statusUrl}</code>
+            </div>
+            <div className="statusPageUrlActions">
+              <button type="button" className="ghost" onClick={() => copy(form.statusUrl)}>
+                复制链接
+              </button>
+            </div>
           </div>
-          <div className="statusPageUrlActions">
-            <button type="button" className="ghost" onClick={() => copy(form.statusUrl)}>
-              复制链接
-            </button>
+          <div className="statusPageUrlRow">
+            <div className="statusPageUrlMeta">
+              <strong>CDN 延迟 JS 接口</strong>
+              <code>{`${form.statusUrl}/api/public/cdn.js`}</code>
+            </div>
+            <div className="statusPageUrlActions">
+              <button type="button" className="ghost" onClick={() => copy(`${form.statusUrl}/api/public/cdn.js`)}>
+                复制链接
+              </button>
+            </div>
           </div>
-        </div>
+        </>
       )}
       <form className="telegramSettingsForm" onSubmit={onSave}>
         <label className="check telegramMasterSwitch">

@@ -32,10 +32,18 @@ export default function Servers() {
     ["地区", "region", region, setRegion], ["城市", "city", city, setCity],
   ] as const;
   const groupOptions = useMemo(() => serverGroupFilterOptions(servers), [servers]);
+  const hasNamedGroups = useMemo(
+    () =>
+      servers.some((s) => {
+        const g = s.group?.trim();
+        return !!g && g !== "未分组";
+      }),
+    [servers],
+  );
   const filtered = !!(q || groupFilter || country || provider || region || city || status);
   const groupedServers = useMemo(() => {
     const base = servers.filter((s) =>
-      matches(q, s.name, s.group, s.ipv4, s.ipv6, s.domain, s.internalAddress, s.provider, s.tags, s.notes) &&
+      matches(q, s.name, rolesText(s.roles), s.group, s.ipv4, s.ipv6, s.domain, s.internalAddress, s.provider, s.tags, s.notes) &&
       matchesServerGroupFilter(s, groupFilter) &&
       (!country || s.country?.trim() === country) && (!provider || s.provider?.trim() === provider) &&
       (!region || s.region?.trim() === region) && (!city || s.city?.trim() === city) && (!status || s.status === status),
@@ -95,10 +103,12 @@ export default function Servers() {
             </div>
             <div className="filters serverFilters">
               <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder="搜索名称、分组、地址、服务商或备注" aria-label="搜索服务器" />
-              <select aria-label="按分组筛选服务器" value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
-                <option value="">全部分组</option>
-                {groupOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
-              </select>
+              {(hasNamedGroups || !!groupFilter) && (
+                <select aria-label="按分组筛选服务器" value={groupFilter} onChange={(e) => setGroupFilter(e.target.value)}>
+                  <option value="">全部分组</option>
+                  {groupOptions.map((opt) => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                </select>
+              )}
               {filters.map(([label, field, value, set]) => (
                 <select key={field} aria-label={`按${label}筛选服务器`} value={value} onChange={(e) => set(e.target.value)}>
                   <option value="">全部{label}</option>
@@ -141,14 +151,16 @@ export default function Servers() {
                 <tbody>
                   {groupedServers.map(({ group, items }) => (
                     <Fragment key={group}>
-                      <tr className="serverGroupRow">
-                        <td colSpan={10}>
-                          <div className="serverGroupBar">
-                            <strong>{group}</strong>
-                            <span>{items.length} 台</span>
-                          </div>
-                        </td>
-                      </tr>
+                      {hasNamedGroups && (
+                        <tr className="serverGroupRow">
+                          <td colSpan={10}>
+                            <div className="serverGroupBar">
+                              <strong>{group}</strong>
+                              <span>{items.length} 台</span>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
                       {items.map((s) => {
                         const expiry = formatServerExpiry(s.expiresAt);
                         const ct = s.cycleTraffic;
@@ -158,22 +170,24 @@ export default function Servers() {
                         const cycleTx = ct?.tx ?? 0;
                         const cycleType = ct?.type ?? s.trafficLimitType ?? "sum";
                         const cyclePctRaw = cycleLimit > 0 ? (cycleUsed / cycleLimit) * 100 : 0;
-                        const cyclePctWidth = Math.max(0, Math.min(100, cyclePctRaw));
                         const cycleTone = cycleTrafficTone(cycleUsed, cycleLimit, trafficLimitThreshold);
                         const noNicTraffic = s.managementMode === "offline" || s.managementMode === "external";
+                        const billingHelp = expiry ? `到期：${expiry.fullText}${s.autoRenew && s.billingCycle ? "（自动续期）" : ""}` : "";
+                        const mutedHelp = s.alertMuted ? "告警：已静音离线与资源高占用告警" : "";
                         return (
                     <tr key={s.id}>
                       <td className="selectCell"><input type="checkbox" aria-label={`选择 ${s.name}`} checked={selection.has(s.id)} onChange={() => selection.toggle(s.id)} /></td>
                       <td>
-                        <span className="serverNameLine"><strong title={s.name}>{s.name}</strong>{serverWarnings(s).length > 0 && <HelpTip label={`${s.name} 的 ${serverWarnings(s).length} 项提醒`} text={serverWarnings(s).join("\n")} warning />}</span>
+                        <span className="serverNameLine">
+                          <strong title={s.name}>{s.name}</strong>
+                          {expiry && expiry.tone !== "neutral" && (
+                            <span className={`pill ${expiry.tone}`} title={expiry.fullText}>
+                              {expiry.remainText}
+                            </span>
+                          )}
+                          {serverWarnings(s).length > 0 && <HelpTip label={`${s.name} 的 ${serverWarnings(s).length} 项提醒`} text={serverWarnings(s).join("\n")} warning />}
+                        </span>
                         <small>{s.managementMode === "external" ? "卖家节点" : s.managementMode === "offline" ? "离线管理" : s.os || "待接入"}{s.arch && ` · ${s.arch}`}</small>
-                        {(expiry || (s.autoRenew && s.billingCycle) || s.alertMuted) && (
-                          <div className="serverMetaPills">
-                            {expiry && <span className={`pill ${expiry.tone}`}>{expiry.fullText}</span>}
-                            {s.autoRenew && s.billingCycle && <span className="pill accent">自动续期</span>}
-                            {s.alertMuted && <span className="pill neutral" title="已静音离线与资源高占用告警">静音</span>}
-                          </div>
-                        )}
                       </td>
                       <td>
                         <span className="serverCountry">{countryFlag(s.country) && <span className="serverFlag" aria-hidden="true">{countryFlag(s.country)}</span>}{s.country}</span>
@@ -182,9 +196,9 @@ export default function Servers() {
                       <td className="mono"><span className="serverAddress" title={s.domain || s.ipv4 || s.ipv6}>{s.domain || s.ipv4 || s.ipv6 || "—"}</span>{(s.autoSyncPublicIp || s.internalAddress || s.domain && (s.ipv4 || s.ipv6)) && <HelpTip label={`${s.name} 的地址`} text={[s.domain && `域名：${s.domain}`, s.ipv4 && `IPv4：${s.ipv4}`, s.ipv6 && `IPv6：${s.ipv6}`, s.internalAddress && `内网：${s.internalAddress}`, s.autoSyncPublicIp && "公网 IP 自动同步"].filter(Boolean).join("\n")} />}</td>
                       <td>
                         <span className="serverAgentLine"><Status value={s.managementMode !== "offline" && s.managementMode !== "external" && s.status === "online" ? upgradingAgentIDs.has(s.id) ? "upgrading" : updatingAgentIDs.has(s.id) ? "updating" : s.status : s.status} /><HelpTip label={`${s.name} 的管理状态`} text={s.managementMode === "external"
-                          ? "外部节点由卖家运行；面板不安装 Agent、不修改防火墙，也无法确认服务状态或统计其流量。"
+                          ? ["外部节点由卖家运行；面板不安装 Agent、不修改防火墙，也无法确认服务状态或统计其流量。", billingHelp, mutedHelp].filter(Boolean).join("\n")
                           : s.managementMode === "offline"
-                          ? [s.offlineExportedAt ? `已导出版本 ${s.offlineExportedRevision}` : "尚未导出配置", (!s.offlineExportedAt || s.offlineExportedRevision !== s.revision) && `配置待导出 · 版本 ${s.revision || 1}`, "实时连通性未知"].filter(Boolean).join("\n")
+                          ? [s.offlineExportedAt ? `已导出版本 ${s.offlineExportedRevision}` : "尚未导出配置", (!s.offlineExportedAt || s.offlineExportedRevision !== s.revision) && `配置待导出 · 版本 ${s.revision || 1}`, "实时连通性未知", billingHelp, mutedHelp].filter(Boolean).join("\n")
                           : [
                             `Agent：${s.agentVersion || "未接入"}`,
                             upgradingAgentIDs.has(s.id) ? "Agent 升级中，等待新版上报" :
@@ -197,6 +211,8 @@ export default function Servers() {
                             s.coreBuild && "这里显示已安装的二进制版本，不代表 sing-box 服务正在运行；无启用节点时 Agent 0.6.22 会停用服务。",
                             s.coreSelfUpdate && s.coreBuild && coreReleases[s.arch] ? s.coreBuild === coreReleases[s.arch] ? "核心已是当前构建" : "核心有可用升级" : !s.coreSelfUpdate && s.agentVersion ? "升级 Agent 后可一键升级核心" : "",
                             operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status)) && "程序升级进行中，详情见操作记录",
+                            billingHelp,
+                            mutedHelp,
                           ].filter(Boolean).join("\n")} /></span>
                         <small>{s.managementMode === "external" ? "连接信息由卖家提供" : s.managementMode === "offline" ? (!s.offlineExportedAt || s.offlineExportedRevision !== s.revision ? "配置待导出" : `已导出 v${s.offlineExportedRevision}`) : `Agent ${s.agentVersion || "未接入"} · sing-box ${s.coreBuild ? `已安装 ${s.coreVersion || "版本待上报"}` : "未安装"}`}</small>
                       </td>
@@ -217,27 +233,26 @@ export default function Servers() {
                         {noNicTraffic && cycleLimit <= 0 ? (
                           "—"
                         ) : cycleLimit > 0 ? (
-                          <div className="serverCycleTraffic">
-                            <span className={cycleTone === "danger" ? "dangerText" : ""}>
+                          <>
+                            <span className={cycleTone === "danger" ? "dangerText" : cycleTone === "warning" ? "warnText" : ""}>
                               {bytes(cycleUsed)} / {bytes(cycleLimit)} ({cyclePctRaw.toFixed(0)}%)
                             </span>
-                            <div className="monitorProgress serverCycleBar">
-                              <div
-                                className={`monitorProgressFill ${cycleTone}`}
-                                style={{ width: `${cyclePctWidth}%` }}
-                              />
-                            </div>
                             <small>
                               {noNicTraffic
                                 ? trafficLimitTypeShortLabels[cycleType]
-                                : `累计 ↓ ${bytes(s.networkRx || 0)} · ↑ ${bytes(s.networkTx || 0)}`}
+                                : `↓ ${bytes(s.networkRx || 0)} · ↑ ${bytes(s.networkTx || 0)}`}
                             </small>
-                          </div>
-                        ) : (
-                          <div className="serverCycleTraffic">
+                          </>
+                        ) : ct ? (
+                          <>
                             <span>本周期 {bytes(cycleRx + cycleTx)}</span>
-                            <small>↑ {bytes(cycleTx)} · ↓ {bytes(cycleRx)}</small>
-                          </div>
+                            <small>↓ {bytes(s.networkRx || 0)} · ↑ {bytes(s.networkTx || 0)}</small>
+                          </>
+                        ) : (
+                          <>
+                            <span>↓ {bytes(s.networkRx || 0)}</span>
+                            <small>↑ {bytes(s.networkTx || 0)}</small>
+                          </>
                         )}
                       </td>
                       <td><button type="button" className="serverListLink" title={`查看「${s.name}」的节点`} aria-label={`查看「${s.name}」的节点`} onClick={() => {
@@ -249,6 +264,8 @@ export default function Servers() {
                       <td>
                         <div className="actions">
                           <button onClick={() => openServer(s)}>编辑</button>
+                          {s.managementMode === "offline" && <button onClick={() => setOfflineServer(s)}>离线配置</button>}
+                          <ActionMenu>
                           {!!s.billingCycle && (
                             <button
                               disabled={!s.expiresAt || s.status === "revoked"}
@@ -258,8 +275,6 @@ export default function Servers() {
                               续期一个周期
                             </button>
                           )}
-                          {s.managementMode === "offline" && <button onClick={() => setOfflineServer(s)}>离线配置</button>}
-                          <ActionMenu>
                           {s.managementMode !== "offline" && s.managementMode !== "external" && <>
                           <button
                             disabled={s.status === "revoked" || !s.agentSelfUpdate || !!agentReleases.releaseVersion && !supportsGitHubUpgrade(s.agentVersion || "") || !agentReleases[s.arch] || s.agentBuild === agentReleases[s.arch] || operations.some((o) => o.serverId === s.id && ["agent.upgrade", "core.upgrade"].includes(o.kind) && ["queued", "running", "activating"].includes(o.status))}

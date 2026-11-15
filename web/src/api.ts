@@ -1,6 +1,7 @@
 // Online transit and exit servers may host nodes. Entry and line servers
-// can be the first hop of a route; transit and line servers a middle hop.
-export type Role = "entry" | "line" | "transit" | "exit";
+// can be the first hop of a route; transit and line servers a middle hop;
+// other marks general-purpose servers outside route and node roles.
+export type Role = "entry" | "line" | "transit" | "exit" | "other";
 export type OfflineInstallGuide = {
     migrationCommand?: string;
     proxyNotice?: string;
@@ -14,7 +15,7 @@ export type InstallGuide = {
   offlineInstall: OfflineInstallGuide;
   standaloneInstall: OfflineInstallGuide;
 };
-export const roleLabels: Record<Role, string> = { entry: "入口", line: "线路", transit: "中转", exit: "落地" };
+export const roleLabels: Record<Role, string> = { entry: "入口", line: "线路", transit: "中转", exit: "落地", other: "其他" };
 export type BillingCycle = "" | "month" | "quarter" | "halfyear" | "year" | "2year" | "3year" | "days";
 export type TrafficLimitType = "sum" | "up" | "down" | "max" | "min";
 export type CycleTrafficSummary = {

@@ -304,7 +304,7 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
                     </div>
                     <div className="serverFormWide">
                       <fieldset className="serverRoles">
-                        <legend><span className="fieldLabelRow">类型（可多选） * <HelpTip label="服务器类型" text="入口、线路可作为首跳；中转、线路可作为中间跳；在线中转和落地都可搭建节点。中转服务器建节点前需在列表安装 sing-box，安装后保留中转类型。" /></span></legend>
+                        <legend><span className="fieldLabelRow">类型（可多选） * <HelpTip label="服务器类型" text="入口、线路可作为首跳；中转、线路可作为中间跳；在线中转和落地都可搭建节点；其他用于非代理用途的服务器（仅安装 Agent，不进入链路与节点选择）。中转服务器建节点前需在列表安装 sing-box，安装后保留中转类型。" /></span></legend>
                         <div className="checkRow">
                           {roleOrder.map((role) => (
                             <label className="check" key={role}>

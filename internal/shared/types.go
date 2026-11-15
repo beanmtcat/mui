@@ -14,7 +14,7 @@ type Server struct {
 	OfflineExportedAt       *time.Time `json:"offlineExportedAt,omitempty"`
 	ID                      string     `json:"id"`
 	Name                    string     `json:"name"`
-	// Roles is any combination of entry, line, transit and exit. Online
+	// Roles is any combination of entry, line, transit, exit and other. Online
 	// transit and exit servers may run sing-box and carry nodes.
 	Roles    []string `json:"roles"`
 	Country  string   `json:"country"`
@@ -268,6 +268,7 @@ const (
 	RoleLine    = "line"    // first or middle hop of a route; subscribable
 	RoleTransit = "transit" // middle hop; may also host nodes
 	RoleExit    = "exit"    // hosts nodes and installs sing-box on enrollment
+	RoleOther   = "other"   // general-purpose server outside route/node roles
 )
 
 func HasRole(s Server, role string) bool {

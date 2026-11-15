@@ -22,7 +22,7 @@ func validateManagement(server shared.Server) error {
 		}
 	}
 	if shared.OfflineManaged(server) && (!shared.ManualFirewall(server.FirewallMode) || shared.HasRole(server, shared.RoleExit)) {
-		return errors.New("离线管理仅支持入口、线路、中转，且必须手动管理防火墙；落地节点仍需在线 Agent")
+		return errors.New("离线管理仅支持入口、线路、中转、其他，且必须手动管理防火墙；落地节点仍需在线 Agent")
 	}
 	return nil
 }
