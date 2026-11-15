@@ -225,6 +225,34 @@
   min-width: 0;
 }
 
+.monitorPage .modal:has(.monitorDetailBody) {
+  width: min(1180px, calc(100vw - 32px));
+}
+
+.monitorPage .overlay:has(.monitorDetailBody) {
+  padding-top: 4vh;
+}
+
+.monitorPage .monitorDetailHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 16px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+}
+
+.monitorPage .monitorDetailHead > div:first-child {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.monitorPage .monitorDetailTools {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
 .monitorPage .monitorDetailBody {
   padding: 16px 18px 20px;
   min-width: 0;

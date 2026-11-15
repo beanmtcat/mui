@@ -1,11 +1,19 @@
 import { lazy, Suspense, useState } from "react";
 import { mutation } from "../api";
 import { useApp } from "../app/context";
+import { useUrlParam } from "../app/url";
 import { MemoMaskedValue as MaskedValue } from "../components/secrets";
 import StatusPageSettingsCard from "../components/StatusPageSettings";
 import TelegramSettingsCard from "../components/TelegramSettings";
 
 const QRCode = lazy(() => import("../components/QRCode"));
+
+const SETTINGS_TABS = [
+  { id: "notify", label: "通知" },
+  { id: "status", label: "状态页" },
+  { id: "security", label: "账户安全" },
+] as const;
+type SettingsTab = (typeof SETTINGS_TABS)[number]["id"];
 
 export default function Settings() {
   const { totpEnabled, setTotpEnabled, expiring, act, copy, protect } = useApp();
@@ -13,17 +21,41 @@ export default function Settings() {
     [totpOff, setTotpOff] = useState({ password: "", code: "" }),
     [code, setCode] = useState(""),
     [totpSetup, setTotpSetup] = useState<{ secret: string; uri: string } | null>(null);
+  const [tabParam, setTabParam] = useUrlParam("section");
+  const tab: SettingsTab = SETTINGS_TABS.some((t) => t.id === tabParam) ? (tabParam as SettingsTab) : "notify";
   return protect(
           <section className="panel settings">
-            <TelegramSettingsCard />
-            <StatusPageSettingsCard />
-            <h2>账户安全</h2>
-            <p>建议启用动态验证码以保护管理面板。</p>
             {expiring.length > 0 && (
               <div className="banner warning" role="status">
                 {expiring.length} 张 TLS 证书已过期或将在 30 天内到期（{expiring.map((c) => c.domain).join("、")}），请尽快更新证书。
               </div>
             )}
+            <div className="settingsTabs" role="tablist" aria-label="设置分类">
+              {SETTINGS_TABS.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  id={`settings-tab-${t.id}`}
+                  aria-selected={tab === t.id}
+                  aria-controls={`settings-panel-${t.id}`}
+                  className={tab === t.id ? "active" : ""}
+                  onClick={() => setTabParam(t.id === "notify" ? "" : t.id)}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+            {/* Panels stay mounted so unsaved edits survive switching tabs. */}
+            <div className="settingsTabPanel" role="tabpanel" id="settings-panel-notify" aria-labelledby="settings-tab-notify" hidden={tab !== "notify"}>
+              <TelegramSettingsCard />
+            </div>
+            <div className="settingsTabPanel" role="tabpanel" id="settings-panel-status" aria-labelledby="settings-tab-status" hidden={tab !== "status"}>
+              <StatusPageSettingsCard />
+            </div>
+            <div className="settingsTabPanel" role="tabpanel" id="settings-panel-security" aria-labelledby="settings-tab-security" hidden={tab !== "security"}>
+            <h2>账户安全</h2>
+            <p>建议启用动态验证码以保护管理面板。</p>
             <div className="settingRow">
               <div>
                 <strong>TOTP 双因素认证</strong>
@@ -161,6 +193,7 @@ export default function Settings() {
             <p className="hint">
               忘记密码或丢失验证器：按 README“忘记密码”一节的一次性命令重置（不要把 MUI_ADMIN_RESET 写进 .env 或 compose 文件）。
             </p>
+            </div>
           </section>,
   );
 }

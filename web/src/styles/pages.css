@@ -359,8 +359,38 @@ th.num {
   max-width: 640px;
   padding: 16px 20px 20px;
 }
-.settings > h2 + p {
+.settings > h2 + p,
+.settingsTabPanel > h2 + p {
   margin-bottom: 12px;
+}
+.settingsTabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 16px;
+  box-shadow: inset 0 -1px 0 var(--line);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.settingsTabs button {
+  flex: 0 0 auto;
+  padding: 8px 14px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+.settingsTabs button:hover {
+  color: var(--text);
+}
+.settingsTabs button.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+.settingsTabPanel[hidden] {
+  display: none;
 }
 .settingRow {
   display: flex;
@@ -396,6 +426,11 @@ form.totpBox {
   margin: 0 0 24px;
   padding-bottom: 20px;
   border-bottom: 1px solid var(--line);
+}
+.settingsTabPanel > .telegramSettingsCard {
+  margin: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
 }
 .telegramSettingsCard > h2 + p {
   margin-bottom: 12px;

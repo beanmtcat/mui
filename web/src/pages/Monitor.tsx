@@ -18,6 +18,7 @@ import {
   matchesServerGroupFilter,
   serverGroupFilterOptions,
 } from "../app/helpers";
+import { ModalShell } from "../app/ui";
 import { useUrlParam } from "../app/url";
 import {
   MonitorMetricsCharts,
@@ -42,7 +43,7 @@ const RANGES: { id: MonitorRange; label: string }[] = [
 ];
 
 export default function Monitor() {
-  const { servers, trafficLimitThreshold, ensureTrafficLimitThreshold, act, setConfirmation, redactScreenshot, protect } = useApp();
+  const { servers, trafficLimitThreshold, ensureTrafficLimitThreshold, refreshTick, act, setConfirmation, redactScreenshot, protect } = useApp();
   useEffect(() => {
     ensureTrafficLimitThreshold();
   }, [ensureTrafficLimitThreshold]);
@@ -273,6 +274,16 @@ export default function Monitor() {
     };
   }, [activeServerId, range, pingTaskIdsKey, loadDetailHistory]);
 
+  // The header refresh button reloads this page's own data too, so one button covers everything.
+  const seenRefreshTick = useRef(refreshTick);
+  useEffect(() => {
+    if (seenRefreshTick.current === refreshTick) return;
+    seenRefreshTick.current = refreshTick;
+    void fetchOverview();
+    void fetchPingTasks();
+    if (activeServerId) void loadDetailHistory(true);
+  }, [refreshTick, fetchOverview, fetchPingTasks, activeServerId, loadDetailHistory]);
+
   const onlineCount = onlineManagedServers.filter(
     (s) => overviewByServer.get(s.id)?.online ?? s.status === "online",
   ).length;
@@ -393,16 +404,6 @@ export default function Monitor() {
             )}
             <button
               type="button"
-              className="ghost"
-              onClick={() => {
-                void fetchOverview();
-                if (activeServerId) void loadDetailHistory(true);
-              }}
-            >
-              立即刷新
-            </button>
-            <button
-              type="button"
               className="primary"
               disabled={pingTasks.length >= 32}
               onClick={() => setPingDialog({ ...emptyPingDraft })}
@@ -494,13 +495,15 @@ export default function Monitor() {
       </section>
 
       {selectedServer && (
-        <section className="panel monitorDetailPanel">
-          <div className="panelHead">
+        <ModalShell
+          title={`${countryFlag(selectedServer.country)} ${redactScreenshot(selectedServer.name)} · 历史曲线`}
+          labelledBy="monitor-detail-title"
+          dirty={false}
+          onClose={() => setSelectedId("")}
+          onConfirm={setConfirmation}
+        >
+          <div className="monitorDetailHead">
             <div>
-              <h2>
-                {countryFlag(selectedServer.country)}{" "}
-                {redactScreenshot(selectedServer.name)} · 历史曲线
-              </h2>
               {(() => {
                 const h = overviewByServer.get(selectedServer.id)?.host;
                 const s = overviewByServer.get(selectedServer.id)?.sample;
@@ -521,7 +524,7 @@ export default function Monitor() {
                 );
               })()}
             </div>
-            <div className="toolbarActions">
+            <div className="monitorDetailTools">
               <div className="monitorRangeTabs" role="tablist" aria-label="监控时间范围">
                 {RANGES.map((r) => (
                   <button
@@ -536,9 +539,6 @@ export default function Monitor() {
                   </button>
                 ))}
               </div>
-              <button type="button" className="ghost" onClick={() => setSelectedId("")}>
-                收起详情
-              </button>
             </div>
           </div>
 
@@ -567,7 +567,7 @@ export default function Monitor() {
               </>
             )}
           </div>
-        </section>
+        </ModalShell>
       )}
 
       <section className="panel">
