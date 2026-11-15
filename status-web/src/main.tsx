@@ -1,8 +1,8 @@
 import { createRoot } from "react-dom/client";
-import { applyStatusTheme, readInitialStatusTheme } from "./theme";
+import { readInitialStatusTheme, syncStatusTheme } from "./theme";
 import { StatusApp } from "./StatusApp";
 import "./status.css";
 
-applyStatusTheme(readInitialStatusTheme());
+syncStatusTheme(readInitialStatusTheme());
 
 createRoot(document.getElementById("root")!).render(<StatusApp />);

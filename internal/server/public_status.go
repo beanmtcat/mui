@@ -49,26 +49,29 @@ type PublicCycleTraffic struct {
 }
 
 type PublicServerItem struct {
-	ID             string               `json:"id"`
-	Name           string               `json:"name"`
-	Group          string               `json:"group"`
-	Country        string               `json:"country"`
-	Region         string               `json:"region,omitempty"`
-	City           string               `json:"city,omitempty"`
-	Online         bool                 `json:"online"`
-	HostMonitor    bool                 `json:"hostMonitor"`
-	OS             string               `json:"os,omitempty"`
-	Arch           string               `json:"arch,omitempty"`
-	Virtualization string               `json:"virtualization,omitempty"`
-	CPUName        string               `json:"cpuName,omitempty"`
-	CPUCores       int                  `json:"cpuCores,omitempty"`
-	MemTotal       int64                `json:"memTotal,omitempty"`
-	SwapTotal      int64                `json:"swapTotal,omitempty"`
-	DiskTotal      int64                `json:"diskTotal,omitempty"`
-	Sample         *PublicMonitorSample `json:"sample,omitempty"`
-	CycleTraffic   *PublicCycleTraffic  `json:"cycleTraffic,omitempty"`
-	ExpiresAt      *time.Time           `json:"expiresAt,omitempty"`
-	PublicNote     string               `json:"publicNote,omitempty"`
+	ID             string                   `json:"id"`
+	Name           string                   `json:"name"`
+	Group          string                   `json:"group"`
+	Country        string                   `json:"country"`
+	Region         string                   `json:"region,omitempty"`
+	City           string                   `json:"city,omitempty"`
+	Online         bool                     `json:"online"`
+	HostMonitor    bool                     `json:"hostMonitor"`
+	IPv4           bool                     `json:"ipv4"`
+	IPv6           bool                     `json:"ipv6"`
+	OS             string                   `json:"os,omitempty"`
+	Arch           string                   `json:"arch,omitempty"`
+	Virtualization string                   `json:"virtualization,omitempty"`
+	CPUName        string                   `json:"cpuName,omitempty"`
+	CPUCores       int                      `json:"cpuCores,omitempty"`
+	MemTotal       int64                    `json:"memTotal,omitempty"`
+	SwapTotal      int64                    `json:"swapTotal,omitempty"`
+	DiskTotal      int64                    `json:"diskTotal,omitempty"`
+	Sample         *PublicMonitorSample     `json:"sample,omitempty"`
+	CycleTraffic   *PublicCycleTraffic      `json:"cycleTraffic,omitempty"`
+	Ping           []PublicServerPingBucket `json:"ping,omitempty"`
+	ExpiresAt      *time.Time               `json:"expiresAt,omitempty"`
+	PublicNote     string                   `json:"publicNote,omitempty"`
 }
 
 type PublicStatusResponse struct {
@@ -363,6 +366,14 @@ func (a *App) buildPublicStatusSnapshot(cfg storedStatusPageSettings, now time.T
 		}
 	}
 
+	var pingMap map[string][]PublicServerPingBucket
+	if cfg.ShowPing && len(visible) > 0 {
+		pingMap, err = a.cachedPublicPingSummary(visible, now)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	a.monitorMu.RLock()
 	samples := make(map[string]latestMonitorSample, len(a.latestSamples))
 	for k, v := range a.latestSamples {
@@ -418,6 +429,8 @@ func (a *App) buildPublicStatusSnapshot(cfg storedStatusPageSettings, now time.T
 			City:           strings.TrimSpace(s.City),
 			Online:         online,
 			HostMonitor:    hostMonitor,
+			IPv4:           strings.TrimSpace(s.IPv4) != "" || strings.TrimSpace(s.DetectedIPv4) != "",
+			IPv6:           strings.TrimSpace(s.IPv6) != "" || strings.TrimSpace(s.DetectedIPv6) != "",
 			OS:             osName,
 			Arch:           archName,
 			Virtualization: strings.TrimSpace(host.Virtualization),
@@ -468,6 +481,12 @@ func (a *App) buildPublicStatusSnapshot(cfg storedStatusPageSettings, now time.T
 				Used:    ct.Used,
 				Limit:   ct.Limit,
 				Type:    ct.Type,
+			}
+		}
+
+		if cfg.ShowPing {
+			if buckets := pingMap[s.ID]; len(buckets) > 0 {
+				item.Ping = buckets
 			}
 		}
 

@@ -199,9 +199,22 @@ func TestPublicStatusStrictFieldWhitelistAndNoSensitiveLeaks(t *testing.T) {
 	srvMap := srvList[0].(map[string]any)
 	assertOnlyAllowedKeys(t, "status.servers[0]", srvMap,
 		"id", "name", "group", "country", "region", "city", "online", "hostMonitor",
+		"ipv4", "ipv6",
 		"os", "arch", "virtualization", "cpuName", "cpuCores", "memTotal", "swapTotal", "diskTotal",
-		"sample", "cycleTraffic", "expiresAt", "publicNote",
+		"sample", "cycleTraffic", "ping", "expiresAt", "publicNote",
 	)
+	if srvMap["ipv4"] != true || srvMap["ipv6"] != true {
+		t.Fatalf("expected ipv4=true and ipv6=true, got %v / %v", srvMap["ipv4"], srvMap["ipv6"])
+	}
+	pingList, ok := srvMap["ping"].([]any)
+	if !ok || len(pingList) != 1 {
+		t.Fatalf("expected 1 ping bucket on server, got %#v", srvMap["ping"])
+	}
+	pingBucket0 := pingList[0].(map[string]any)
+	assertOnlyAllowedKeys(t, "status.servers[0].ping[0]", pingBucket0, "at", "ms", "loss")
+	if pingBucket0["ms"] != float64(37) || pingBucket0["loss"] != float64(0) {
+		t.Fatalf("unexpected ping bucket[0]: %v", pingBucket0)
+	}
 	if srvMap["group"] != "欧洲" || srvMap["name"] != "Frankfurt-Public-1" || srvMap["publicNote"] != "BGP 优化线路" {
 		t.Fatalf("unexpected public fields: %v", srvMap)
 	}
@@ -271,6 +284,9 @@ func TestPublicStatusStrictFieldWhitelistAndNoSensitiveLeaks(t *testing.T) {
 	srvNoTraf := rawNoTraf["servers"].([]any)[0].(map[string]any)
 	if _, exists := srvNoTraf["cycleTraffic"]; exists {
 		t.Fatalf("cycleTraffic must be omitted when showTraffic=false: %v", srvNoTraf)
+	}
+	if _, exists := srvNoTraf["ping"]; exists {
+		t.Fatalf("ping must be omitted when showPing=false: %v", srvNoTraf)
 	}
 	sampNoTraf := srvNoTraf["sample"].(map[string]any)
 	if _, exists := sampNoTraf["netTotalUp"]; exists {
@@ -837,5 +853,351 @@ func TestPublicStatusStampedeSingleflightAndErrorPropagation(t *testing.T) {
 	fire50("/api/public/status", 500)
 	if got := p.app.statusSnapshotBuilds.Load() - beforeErrSnap; got != 1 {
 		t.Fatalf("expected 1 failing snapshot rebuild for 50 concurrent requests, got %d", got)
+	}
+}
+
+func TestPublicStatusPingBucketsAllLostIPvStackAndSingleQuery(t *testing.T) {
+	t.Setenv("MUI_STATUS_LISTEN", "127.0.0.1:18088")
+	p := newTestMui(t)
+	now := time.Date(2026, 11, 14, 15, 30, 20, 0, time.UTC)
+	p.app.monitorNow = func() time.Time { return now }
+
+	srv1, srv1Tok, _ := enrollMonitorTestServer(t, p, "ping-v4-only")
+	srv2, _, _ := enrollMonitorTestServer(t, p, "noping-v6-only")
+
+	if code, out, _ := p.do("PATCH", "/api/servers/"+srv1, map[string]any{
+		"name":          "ping-v4-only",
+		"roles":         []string{"exit"},
+		"country":       "JP",
+		"ipv4":          "203.0.113.10",
+		"publicVisible": true,
+		"publicName":    "Tokyo-Ping",
+	}, nil); code != 200 {
+		t.Fatalf("patch srv1: %d %v", code, out)
+	}
+	if code, out, _ := p.do("PATCH", "/api/servers/"+srv2, map[string]any{
+		"name":          "noping-v6-only",
+		"roles":         []string{"exit"},
+		"country":       "SG",
+		"ipv6":          "2001:db8::99",
+		"publicVisible": true,
+		"publicName":    "Singapore-Quiet",
+	}, nil); code != 200 {
+		t.Fatalf("patch srv2: %d %v", code, out)
+	}
+
+	code, task1Out, _ := p.do("POST", "/api/ping-tasks", map[string]any{
+		"name":            "Secret-Task-A",
+		"target":          "9.9.9.9:443",
+		"intervalSeconds": 60,
+		"serverIds":       []string{srv1},
+	}, nil)
+	if code != 201 {
+		t.Fatalf("task1: %d %v", code, task1Out)
+	}
+	task1ID := task1Out["id"].(string)
+
+	code, task2Out, _ := p.do("POST", "/api/ping-tasks", map[string]any{
+		"name":            "Secret-Task-B",
+		"target":          "8.8.8.8:443",
+		"intervalSeconds": 60,
+		"serverIds":       []string{srv1},
+	}, nil)
+	if code != 201 {
+		t.Fatalf("task2: %d %v", code, task2Out)
+	}
+	task2ID := task2Out["id"].(string)
+
+	// Unassigned task data on srv1 must not appear in public ping buckets.
+	code, taskOtherOut, _ := p.do("POST", "/api/ping-tasks", map[string]any{
+		"name":            "Unassigned-Task",
+		"target":          "1.0.0.1:443",
+		"intervalSeconds": 60,
+		"serverIds":       []string{srv2},
+	}, nil)
+	if code != 201 {
+		t.Fatalf("taskOther: %d %v", code, taskOtherOut)
+	}
+	taskOtherID := taskOtherOut["id"].(string)
+
+	curMinute := now.Truncate(time.Minute)
+	// Insert 34 historical minutes (-34m .. -1m) into DB so window trimming to 30 buckets is exercised.
+	for i := 34; i >= 1; i-- {
+		atMs := curMinute.Add(-time.Duration(i) * time.Minute).UnixMilli()
+		switch i {
+		case 3:
+			// Mixed: task1 (2 sent, 0 lost, 20ms) + task2 (2 sent, 1 lost, 40ms) -> ms=30, loss=25
+			if err := p.store.UpsertPingMinute(task1ID, srv1, atMs, 20, 22, 2, 0); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.store.UpsertPingMinute(task2ID, srv1, atMs, 40, 45, 2, 1); err != nil {
+				t.Fatal(err)
+			}
+		case 2:
+			// All lost across assigned tasks -> ms=-1, loss=100
+			if err := p.store.UpsertPingMinute(task1ID, srv1, atMs, 0, 0, 2, 2); err != nil {
+				t.Fatal(err)
+			}
+			if err := p.store.UpsertPingMinute(task2ID, srv1, atMs, 0, 0, 2, 2); err != nil {
+				t.Fatal(err)
+			}
+		default:
+			if err := p.store.UpsertPingMinute(task1ID, srv1, atMs, 25, 30, 1, 0); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := p.store.UpsertPingMinute(taskOtherID, srv1, atMs, 999, 999, 1, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Send current minute in-memory sample for srv1.
+	monPayload, _ := json.Marshal(shared.MonitorRequest{
+		Sample: shared.MonitorSample{At: now, CPU: 12, NetUp: 100, NetDown: 200},
+		Pings: []shared.PingResult{
+			{TaskID: task1ID, Ms: 18},
+			{TaskID: task2ID, Ms: -1},
+		},
+	})
+	monReq := httptest.NewRequest("POST", "/agent/monitor", bytes.NewReader(monPayload))
+	monReq.Header.Set("X-Server-ID", srv1)
+	monReq.Header.Set("Authorization", "Bearer "+srv1Tok)
+	signAgentRequest(t, monReq, srv1Tok, monPayload)
+	monRec := httptest.NewRecorder()
+	p.handler.ServeHTTP(monRec, monReq)
+	if monRec.Code != 200 {
+		t.Fatalf("POST /agent/monitor: %d %s", monRec.Code, monRec.Body.String())
+	}
+
+	if code, _, _ := p.do("PUT", "/api/settings/status-page", map[string]any{
+		"enabled":     true,
+		"title":       "Status",
+		"showTraffic": true,
+		"showPing":    true,
+	}, nil); code != 200 {
+		t.Fatalf("enable status page failed: %d", code)
+	}
+
+	statusMux := p.app.StatusHandler()
+	beforeQ := p.store.publicPingQueries.Load()
+	res1 := statusServe(statusMux, "GET", "/api/public/status", nil, "198.51.100.20:1234")
+	if res1.Code != 200 {
+		t.Fatalf("status code=%d body=%s", res1.Code, res1.Body.String())
+	}
+	if delta := p.store.publicPingQueries.Load() - beforeQ; delta != 1 {
+		t.Fatalf("expected 1 batch ping query during snapshot build, got %d", delta)
+	}
+
+	// Second request within 2s TTL hits cache with 0 DB queries.
+	res2 := statusServe(statusMux, "GET", "/api/public/status", nil, "198.51.100.21:1234")
+	if res2.Code != 200 {
+		t.Fatalf("cached status code=%d", res2.Code)
+	}
+	if delta := p.store.publicPingQueries.Load() - beforeQ; delta != 1 {
+		t.Fatalf("expected 0 extra ping queries on cache hit, total=%d", delta)
+	}
+
+	bodyStr := res1.Body.String()
+	for _, secret := range []string{"203.0.113.10", "2001:db8::99", task1ID, task2ID, "Secret-Task-A", "Secret-Task-B", "9.9.9.9", "8.8.8.8"} {
+		if strings.Contains(bodyStr, secret) {
+			t.Fatalf("status leaked secret %q in %s", secret, bodyStr)
+		}
+	}
+
+	var decoded struct {
+		Servers []map[string]any `json:"servers"`
+	}
+	if err := json.Unmarshal(res1.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]map[string]any{}
+	for _, item := range decoded.Servers {
+		byName[item["name"].(string)] = item
+	}
+
+	s1 := byName["Tokyo-Ping"]
+	if s1["ipv4"] != true || s1["ipv6"] != false {
+		t.Fatalf("srv1 ipv flags mismatch: %v", s1)
+	}
+	buckets := s1["ping"].([]any)
+	if len(buckets) != 30 {
+		t.Fatalf("expected 30 ping buckets, got %d", len(buckets))
+	}
+	// Trailing 4 buckets correspond to -3m (mixed), -2m (all lost), -1m (25ms), 0m (live 18ms + 1 lost -> loss 50%).
+	m3 := buckets[len(buckets)-4].(map[string]any)
+	if m3["ms"] != float64(30) || m3["loss"] != float64(25) {
+		t.Fatalf("expected -3m bucket ms=30 loss=25, got %v", m3)
+	}
+	m2 := buckets[len(buckets)-3].(map[string]any)
+	if m2["ms"] != float64(-1) || m2["loss"] != float64(100) {
+		t.Fatalf("expected -2m all-lost bucket ms=-1 loss=100, got %v", m2)
+	}
+	m0 := buckets[len(buckets)-1].(map[string]any)
+	if m0["ms"] != float64(18) || m0["loss"] != float64(50) {
+		t.Fatalf("expected current minute live bucket ms=18 loss=50, got %v", m0)
+	}
+
+	s2 := byName["Singapore-Quiet"]
+	if s2["ipv4"] != false || s2["ipv6"] != true {
+		t.Fatalf("srv2 ipv flags mismatch: %v", s2)
+	}
+	if _, exists := s2["ping"]; exists {
+		t.Fatalf("expected srv2 ping to be omitted when no ping data exists: %v", s2)
+	}
+}
+
+func TestPublicStatusPingSummaryCached30sAndInvalidatedWithSnapshot(t *testing.T) {
+	t.Setenv("MUI_STATUS_LISTEN", "127.0.0.1:18088")
+	p := newTestMui(t)
+	now := time.Date(2026, 11, 14, 16, 0, 10, 0, time.UTC)
+	var nowMu sync.Mutex
+	setNow := func(next time.Time) {
+		nowMu.Lock()
+		now = next
+		nowMu.Unlock()
+	}
+	p.app.monitorNow = func() time.Time {
+		nowMu.Lock()
+		defer nowMu.Unlock()
+		return now
+	}
+
+	srvID, srvTok, _ := enrollMonitorTestServer(t, p, "ping-cache-node")
+	if code, out, _ := p.do("PATCH", "/api/servers/"+srvID, map[string]any{
+		"name":          "ping-cache-node",
+		"roles":         []string{"exit"},
+		"country":       "JP",
+		"ipv4":          "203.0.113.20",
+		"publicVisible": true,
+		"publicName":    "Tokyo-Cached-Ping",
+	}, nil); code != 200 {
+		t.Fatalf("patch server: %d %v", code, out)
+	}
+
+	code, taskOut, _ := p.do("POST", "/api/ping-tasks", map[string]any{
+		"name":            "Ping-Cache-Task",
+		"target":          "1.1.1.1:443",
+		"intervalSeconds": 60,
+		"serverIds":       []string{srvID},
+	}, nil)
+	if code != 201 {
+		t.Fatalf("create ping task: %d %v", code, taskOut)
+	}
+	taskID := taskOut["id"].(string)
+
+	curMinute := now.Truncate(time.Minute)
+	for i := 5; i >= 1; i-- {
+		atMs := curMinute.Add(-time.Duration(i) * time.Minute).UnixMilli()
+		if err := p.store.UpsertPingMinute(taskID, srvID, atMs, 32, 36, 2, 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	reportSample := func(cpu float64) {
+		monPayload, _ := json.Marshal(shared.MonitorRequest{
+			Sample: shared.MonitorSample{At: p.app.monitorNow(), CPU: cpu, NetUp: 120, NetDown: 340},
+		})
+		monReq := httptest.NewRequest("POST", "/agent/monitor", bytes.NewReader(monPayload))
+		monReq.Header.Set("X-Server-ID", srvID)
+		monReq.Header.Set("Authorization", "Bearer "+srvTok)
+		signAgentRequest(t, monReq, srvTok, monPayload)
+		monRec := httptest.NewRecorder()
+		p.handler.ServeHTTP(monRec, monReq)
+		if monRec.Code != 200 {
+			t.Fatalf("POST /agent/monitor: %d %s", monRec.Code, monRec.Body.String())
+		}
+	}
+
+	if code, _, _ := p.do("PUT", "/api/settings/status-page", map[string]any{
+		"enabled":     true,
+		"title":       "Status",
+		"showTraffic": true,
+		"showPing":    true,
+	}, nil); code != 200 {
+		t.Fatalf("enable status page failed: %d", code)
+	}
+
+	statusMux := p.app.StatusHandler()
+	fetchStatus := func(ip string) map[string]any {
+		res := statusServe(statusMux, "GET", "/api/public/status", nil, ip)
+		if res.Code != 200 {
+			t.Fatalf("GET /api/public/status: %d %s", res.Code, res.Body.String())
+		}
+		var out struct {
+			Servers []map[string]any `json:"servers"`
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		if len(out.Servers) != 1 {
+			t.Fatalf("expected 1 server, got %d", len(out.Servers))
+		}
+		return out.Servers[0]
+	}
+
+	baseBuilds := p.app.statusSnapshotBuilds.Load()
+	baseQueries := p.store.publicPingQueries.Load()
+
+	// Initial build at T0: builds snapshot once and executes ping query once.
+	reportSample(15)
+	s0 := fetchStatus("198.51.100.30:1001")
+	if got := p.app.statusSnapshotBuilds.Load() - baseBuilds; got != 1 {
+		t.Fatalf("initial snapshot builds=%d, want 1", got)
+	}
+	if got := p.store.publicPingQueries.Load() - baseQueries; got != 1 {
+		t.Fatalf("initial ping queries=%d, want 1", got)
+	}
+	if pingList, ok := s0["ping"].([]any); !ok || len(pingList) != 5 {
+		t.Fatalf("expected 5 cached ping buckets on initial build, got %v", s0["ping"])
+	}
+
+	// Multiple snapshot rebuilds (>2s snapshot TTL) within 30s must reuse the cached ping summary.
+	t0 := now
+	for idx, step := range []struct {
+		offset time.Duration
+		cpu    float64
+	}{
+		{3 * time.Second, 25},
+		{10 * time.Second, 35},
+		{25 * time.Second, 45},
+	} {
+		setNow(t0.Add(step.offset))
+		reportSample(step.cpu)
+		srvItem := fetchStatus(fmt.Sprintf("198.51.100.%d:1002", 31+idx))
+		wantBuilds := int64(2 + idx)
+		if got := p.app.statusSnapshotBuilds.Load() - baseBuilds; got != wantBuilds {
+			t.Fatalf("step %d (%s): snapshot builds=%d, want %d", idx, step.offset, got, wantBuilds)
+		}
+		if got := p.store.publicPingQueries.Load() - baseQueries; got != 1 {
+			t.Fatalf("step %d (%s): expected ping summary cache hit (queries=%d, want 1)", idx, step.offset, got)
+		}
+		sampleMap := srvItem["sample"].(map[string]any)
+		if sampleMap["cpu"] != step.cpu {
+			t.Fatalf("step %d: expected fresh cpu=%.0f in rebuilt snapshot, got %v", idx, step.cpu, sampleMap["cpu"])
+		}
+		if pingList, ok := srvItem["ping"].([]any); !ok || len(pingList) != 5 {
+			t.Fatalf("step %d: expected 5 ping buckets from cache, got %v", idx, srvItem["ping"])
+		}
+	}
+
+	// invalidatePublicStatusSnapshot must invalidate the 30s ping summary cache too.
+	setNow(t0.Add(26 * time.Second))
+	p.app.invalidatePublicStatusSnapshot()
+	fetchStatus("198.51.100.40:1003")
+	if got := p.app.statusSnapshotBuilds.Load() - baseBuilds; got != 5 {
+		t.Fatalf("after invalidate: snapshot builds=%d, want 5", got)
+	}
+	if got := p.store.publicPingQueries.Load() - baseQueries; got != 2 {
+		t.Fatalf("after invalidate: expected ping query re-execution (queries=%d, want 2)", got)
+	}
+
+	// Advancing past 30s ping summary TTL must re-query on the next snapshot rebuild.
+	setNow(t0.Add(26*time.Second + 31*time.Second))
+	fetchStatus("198.51.100.41:1004")
+	if got := p.app.statusSnapshotBuilds.Load() - baseBuilds; got != 6 {
+		t.Fatalf("after 30s expiry: snapshot builds=%d, want 6", got)
+	}
+	if got := p.store.publicPingQueries.Load() - baseQueries; got != 3 {
+		t.Fatalf("after 30s expiry: expected ping query re-execution (queries=%d, want 3)", got)
 	}
 }

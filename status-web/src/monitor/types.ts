@@ -34,19 +34,31 @@ export type MonitorCardCycleTraffic = {
   type: SharedTrafficLimitType;
 };
 
+export type PublicPingBucket = {
+  at: string;
+  ms: number;
+  loss: number;
+};
+
 export type MonitorCardViewModel = {
   id: string;
   name: string;
+  group?: string;
   country: string;
   locationText: string;
   online: boolean;
   supported: boolean;
   unsupportedMessage?: string;
   hostLine?: string;
+  os?: string;
+  ipv4?: boolean;
+  ipv6?: boolean;
   cpuCores?: number;
   sample?: MonitorCardSample;
   showTraffic?: boolean;
+  showPing?: boolean;
   cycleTraffic?: MonitorCardCycleTraffic;
+  ping?: PublicPingBucket[];
   expiresAt?: string;
   publicNote?: string;
 };

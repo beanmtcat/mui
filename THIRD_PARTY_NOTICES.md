@@ -125,7 +125,7 @@ THIS SOFTWARE.
 
 ## Monitor page visual theme
 
-Portions of the Monitor and Status page styles and tone helpers (`web/src/monitor/*`, `web/src/styles/monitor.css`, and `status-web/src/monitor/*`) are adapted from `Komari-Theme-LuminaPlus` (`Misaka Drive`, author `beanmtcat`, derived from `komari-theme-Lumina` by `stqfdyr`), distributed under the Apache License, Version 2.0:
+Portions of the Monitor and Status page styles, cockpit telemetry, card/filter components, and tone helpers (`web/src/monitor/*`, `web/src/styles/monitor.css`, and `status-web/src/*`) are adapted from `Komari-Theme-LuminaPlus` (`Misaka Drive`, author `beanmtcat`, derived from `komari-theme-Lumina` by `stqfdyr`), distributed under the Apache License, Version 2.0:
 
 Copyright 2025-2026 beanmtcat and komari-theme-Lumina contributors
 
@@ -140,3 +140,7 @@ distributed under the License is distributed on an "AS IS" BASIS,
 WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
+
+## Public status page OS logos
+
+The operating system and platform icons bundled under `status-web/src/os-logos/` are copied from `Komari-Theme-LuminaPlus/public/images/logo/` (`Komari-Theme-LuminaPlus`, Apache License, Version 2.0). All operating system, distribution, and hardware/vendor names, logos, and trademarks (including Linux, Ubuntu, Debian, Alpine, Fedora, Red Hat, CentOS, AlmaLinux, Rocky Linux, Arch Linux, Gentoo, openSUSE, OpenWrt, FreeBSD, macOS, Windows, Synology, QNAP, Proxmox, Armbian, Manjaro, NixOS, Alibaba Cloud, Huawei, etc.) remain the property of their respective owners and are used solely for server operating system identification.

@@ -95,6 +95,9 @@ type App struct {
 	statusCfg              storedStatusPageSettings
 	statusSnapshotBody     []byte
 	statusSnapshotExpires  time.Time
+	statusPingSummary      map[string][]PublicServerPingBucket
+	statusPingExpires      time.Time
+	statusPingCacheReady   bool
 	statusHistoryCache     map[string]publicHistoryCacheEntry
 	statusFlightsMu        sync.Mutex
 	statusFlights          map[string]*publicFlightCall

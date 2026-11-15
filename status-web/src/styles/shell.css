@@ -1,0 +1,173 @@
+.statusPage {
+  min-height: 100vh;
+  width: 100%;
+  overflow-x: hidden;
+  color: var(--mon-text-primary);
+  background:
+    radial-gradient(
+      1100px 560px at 50% -8%,
+      color-mix(in srgb, var(--mon-accent-500) 6%, transparent) 0%,
+      transparent 60%
+    ),
+    #f4f4f5;
+}
+
+:root[data-theme="dark"] .statusPage {
+  background: #212830;
+}
+
+.statusShell {
+  max-width: 1580px;
+  margin: 0 auto;
+  padding: 14px clamp(12px, 2.2vw, 32px) 36px;
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.statusCentered {
+  min-height: 100vh;
+  align-content: center;
+  justify-items: center;
+  position: relative;
+}
+
+.statusThemeFloat {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+}
+
+.statusDisabledCard {
+  width: min(100%, 420px);
+  padding: 36px 24px;
+  border-radius: 18px;
+  border: 1px solid var(--mon-border-strong);
+  background: var(--mon-surface);
+  text-align: center;
+  box-shadow: 0 20px 42px -34px rgba(0, 0, 0, 0.35);
+}
+
+.statusDisabledCard h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--mon-text-secondary);
+}
+
+.statusBrandBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 18px;
+  min-height: 38px;
+  min-width: 0;
+}
+
+.statusBrandTitleGroup {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.statusBrandTitle {
+  margin: 0;
+  font-size: clamp(19px, 1.8vw, 22px);
+  font-weight: 800;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+  color: var(--mon-text-primary);
+  overflow-wrap: anywhere;
+}
+
+.statusBrandDesc {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--mon-text-tertiary);
+  overflow-wrap: anywhere;
+}
+
+.statusThemeToggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--mon-border-strong) 56%, transparent);
+  background: var(--mon-surface);
+  color: var(--mon-text-secondary);
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    background 160ms ease,
+    border-color 160ms ease,
+    color 160ms ease,
+    transform 160ms ease;
+}
+
+.statusThemeToggle:hover {
+  border-color: var(--mon-border-strong);
+  background: var(--mon-hover-bg);
+  color: var(--mon-text-primary);
+}
+
+.statusThemeToggle:active {
+  transform: scale(0.96);
+}
+
+.statusBanner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--mon-status-warning) 42%, transparent);
+  background: var(--mon-tag-amber-bg);
+  color: var(--mon-tag-amber-fg);
+  font-size: 12.5px;
+  line-height: 1.45;
+  min-width: 0;
+}
+
+.statusEmpty {
+  padding: 40px 20px;
+  border-radius: 16px;
+  border: 1px solid var(--mon-border);
+  background: var(--mon-surface);
+  text-align: center;
+  font-size: 13.5px;
+  color: var(--mon-text-tertiary);
+}
+
+@media (max-width: 680px) {
+  .statusShell {
+    padding: 10px 10px 28px;
+    gap: 10px;
+  }
+
+  .statusBrandBar {
+    min-height: 32px;
+    gap: 8px 12px;
+  }
+
+  .statusBrandTitle {
+    font-size: 17px;
+  }
+
+  .statusBrandDesc {
+    font-size: 12px;
+  }
+
+  .statusThemeToggle {
+    height: 30px;
+    padding: 0 10px;
+  }
+}

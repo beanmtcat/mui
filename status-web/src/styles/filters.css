@@ -1,0 +1,359 @@
+/* Cockpit-docked filter & search toolbar (aligned with LuminaPlus .home-cockpit-toolbar) */
+
+.home-cockpit-toolbar {
+  position: relative;
+  z-index: 12;
+  grid-column: 1 / -1;
+  grid-row: 3;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 36px;
+  margin: 0 -10px;
+  padding: 2px 10px;
+  border-top: 1px solid rgba(107, 154, 201, 0.14);
+  border-bottom-left-radius: inherit;
+  border-bottom-right-radius: inherit;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(19, 42, 69, 0.3) 26%,
+    rgba(19, 42, 69, 0.3) 74%,
+    transparent
+  );
+}
+
+:root:not([data-theme="dark"]) .home-cockpit-toolbar {
+  border-top-color: rgba(47, 118, 173, 0.14);
+  background: linear-gradient(
+    90deg,
+    transparent,
+    rgba(58, 124, 174, 0.09) 26%,
+    rgba(58, 124, 174, 0.09) 74%,
+    transparent
+  );
+}
+
+.statusToolbarInner {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(max-content, 1fr);
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+}
+
+.statusToolbarSpacer {
+  display: block;
+  min-width: 0;
+}
+
+.statusToolbarCenter {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+}
+
+.statusToolbarCenter::-webkit-scrollbar,
+.home-group-tabs::-webkit-scrollbar,
+.home-region-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.home-group-tabs,
+.home-region-chips {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+}
+
+.statusToolbarDivider {
+  flex: 0 0 auto;
+  width: 1px;
+  height: 15px;
+  margin: 0 2px;
+  background: rgba(107, 154, 201, 0.22);
+}
+
+:root:not([data-theme="dark"]) .statusToolbarDivider {
+  background: rgba(47, 118, 173, 0.22);
+}
+
+.home-group-tabs button,
+.home-region-chip {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  min-height: 28px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #93a6bb;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  scroll-snap-align: start;
+  transition:
+    color 140ms ease,
+    background 140ms ease,
+    box-shadow 140ms ease;
+}
+
+.home-group-tabs button {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.home-region-chip {
+  gap: 4px;
+  padding: 0 6px;
+}
+
+.home-group-tabs button:hover,
+.home-region-chip:hover {
+  color: #e4eef9;
+  background: rgba(107, 154, 201, 0.12);
+}
+
+.home-group-tabs button[data-active="true"],
+.home-region-chip[data-active="true"] {
+  color: var(--cockpit-cyan);
+  background: transparent;
+  box-shadow: inset 0 -2px 0 var(--cockpit-cyan);
+}
+
+:root:not([data-theme="dark"]) .home-group-tabs button,
+:root:not([data-theme="dark"]) .home-region-chip {
+  color: #4f6c84;
+}
+
+:root:not([data-theme="dark"]) .home-group-tabs button:hover,
+:root:not([data-theme="dark"]) .home-region-chip:hover {
+  color: #133148;
+  background: rgba(47, 118, 173, 0.1);
+}
+
+:root:not([data-theme="dark"]) .home-group-tabs button[data-active="true"],
+:root:not([data-theme="dark"]) .home-region-chip[data-active="true"] {
+  color: var(--cockpit-cyan);
+  box-shadow: inset 0 -2px 0 var(--cockpit-cyan);
+}
+
+.home-region-chip-flag {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.home-region-chip-code {
+  letter-spacing: 0.02em;
+}
+
+.home-region-chip-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 15px;
+  padding: 0 4px;
+  border-radius: 5px;
+  background: rgba(131, 153, 178, 0.16);
+  color: #7d92a8;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+
+:root:not([data-theme="dark"]) .home-region-chip-count {
+  background: rgba(47, 118, 173, 0.13);
+  color: #4f6c84;
+}
+
+.home-region-chip[data-active="true"] .home-region-chip-count {
+  background: color-mix(in srgb, var(--cockpit-cyan) 18%, transparent);
+  color: var(--cockpit-cyan);
+}
+
+.statusToolbarRight {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  min-width: 0;
+}
+
+.statusSearchTrigger {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid rgba(107, 154, 201, 0.24);
+  border-radius: 7px;
+  background: rgba(12, 22, 36, 0.56);
+  color: #a9bdcf;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.statusSearchTrigger:hover {
+  color: #f1f5fa;
+  border-color: rgba(120, 220, 247, 0.45);
+}
+
+:root:not([data-theme="dark"]) .statusSearchTrigger {
+  border-color: rgba(47, 118, 173, 0.24);
+  background: rgba(255, 255, 255, 0.65);
+  color: #3f607b;
+}
+
+.statusSearchBox {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: clamp(146px, 14vw, 196px);
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid rgba(107, 154, 201, 0.22);
+  border-radius: 7px;
+  background: rgba(9, 17, 29, 0.52);
+  color: #8fa6bd;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.statusSearchBox:focus-within {
+  border-color: var(--cockpit-cyan);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--cockpit-cyan) 36%, transparent);
+}
+
+:root:not([data-theme="dark"]) .statusSearchBox {
+  border-color: rgba(47, 118, 173, 0.24);
+  background: rgba(255, 255, 255, 0.72);
+  color: #54728c;
+}
+
+.statusSearchInput {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: #edf4fc;
+  font-size: 11.5px;
+  outline: none;
+}
+
+:root:not([data-theme="dark"]) .statusSearchInput {
+  color: #16334a;
+}
+
+.statusSearchInput::placeholder {
+  color: #71879e;
+}
+
+:root:not([data-theme="dark"]) .statusSearchInput::placeholder {
+  color: #6b88a0;
+}
+
+.statusSearchClear {
+  display: inline-grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(131, 153, 178, 0.24);
+  color: #d6e4f2;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+:root:not([data-theme="dark"]) .statusSearchClear {
+  background: rgba(47, 118, 173, 0.18);
+  color: #264865;
+}
+
+.statusSearchBox[data-has-value="false"] .statusSearchClear {
+  display: none;
+}
+
+@media (max-width: 680px) {
+  .home-cockpit-toolbar {
+    height: 34px;
+    /* The resource row above is hidden on phones; pull up over its empty gap. */
+    margin: -6px -8px 0;
+    padding: 2px 8px;
+  }
+
+  .statusToolbarInner {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 5px;
+  }
+
+  .statusToolbarSpacer {
+    display: none;
+  }
+
+  .home-group-tabs button {
+    min-height: 26px;
+    padding: 0 6px;
+    font-size: 10px;
+  }
+
+  .home-region-chip {
+    min-height: 26px;
+    padding: 0 5px;
+    font-size: 10px;
+  }
+
+  .home-region-chip-count {
+    display: none;
+  }
+
+  .statusSearchTrigger {
+    display: inline-flex;
+  }
+
+  .statusSearchBox {
+    display: none;
+  }
+
+  .statusToolbarInner[data-search-open="true"] {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .statusToolbarInner[data-search-open="true"] .statusToolbarCenter,
+  .statusToolbarInner[data-search-open="true"] .statusSearchTrigger {
+    display: none;
+  }
+
+  .statusToolbarInner[data-search-open="true"] .statusToolbarRight {
+    width: 100%;
+    justify-self: stretch;
+  }
+
+  .statusToolbarInner[data-search-open="true"] .statusSearchBox {
+    display: flex;
+    width: 100%;
+    height: 26px;
+  }
+
+  .statusToolbarInner[data-search-open="true"] .statusSearchClear {
+    display: inline-grid;
+  }
+}

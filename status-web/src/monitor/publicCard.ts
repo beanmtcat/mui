@@ -1,6 +1,7 @@
 import type {
   MonitorCardSample,
   MonitorCardViewModel,
+  PublicPingBucket,
   SharedPingPoint,
   SharedTrafficLimitType,
 } from "./types";
@@ -22,6 +23,8 @@ export type PublicServerItem = {
   city?: string;
   online: boolean;
   hostMonitor: boolean;
+  ipv4: boolean;
+  ipv6: boolean;
   os?: string;
   arch?: string;
   virtualization?: string;
@@ -32,6 +35,7 @@ export type PublicServerItem = {
   diskTotal?: number;
   sample?: MonitorCardSample;
   cycleTraffic?: PublicCycleTraffic;
+  ping?: PublicPingBucket[];
   expiresAt?: string;
   publicNote?: string;
 };
@@ -52,7 +56,11 @@ export type PublicPingTaskSeries = {
   records: SharedPingPoint[];
 };
 
-export function toPublicCardViewModel(srv: PublicServerItem, showTraffic: boolean): MonitorCardViewModel {
+export function toPublicCardViewModel(
+  srv: PublicServerItem,
+  showTraffic: boolean,
+  showPing = true,
+): MonitorCardViewModel {
   const loc = [srv.region, srv.city].filter(Boolean).join(" · ") || srv.country;
   const hostLine = [
     srv.cpuName,
@@ -66,16 +74,22 @@ export function toPublicCardViewModel(srv: PublicServerItem, showTraffic: boolea
   return {
     id: srv.id,
     name: srv.name,
+    group: srv.group?.trim() || undefined,
     country: srv.country,
     locationText: loc,
     online: srv.online,
     supported: srv.hostMonitor,
     unsupportedMessage: "暂未启用实时采集。",
     hostLine: hostLine || undefined,
+    os: srv.os,
+    ipv4: srv.ipv4,
+    ipv6: srv.ipv6,
     cpuCores: srv.cpuCores,
     sample: srv.sample,
     showTraffic,
+    showPing,
     cycleTraffic: showTraffic && srv.cycleTraffic ? srv.cycleTraffic : undefined,
+    ping: showPing && srv.ping && srv.ping.length > 0 ? srv.ping : undefined,
     expiresAt: srv.expiresAt,
     publicNote: srv.publicNote,
   };

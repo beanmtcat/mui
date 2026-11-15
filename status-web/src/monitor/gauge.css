@@ -1,23 +1,24 @@
-/* Counterpart in web/src/monitor/gauge.css — keep metric gauge & traffic strip styles in sync across both apps. */
+/* Compact metric gauges and unified 3-cell info strip for public status cards. */
 
 .monScope .monCardStack {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
+  margin-bottom: auto;
   min-width: 0;
 }
 
 .monScope .monMetricGrid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 14px;
+  gap: 7px 12px;
   min-width: 0;
 }
 
 .monScope .monMetricItem {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3.5px;
   min-width: 0;
 }
 
@@ -32,11 +33,11 @@
 .monScope .monMetricLabel {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 4px;
   min-width: 0;
-  font-size: 11.5px;
+  font-size: 11px;
   font-weight: 650;
-  line-height: 1.2;
+  line-height: 1.15;
   color: var(--mon-text-secondary);
 }
 
@@ -54,30 +55,21 @@
 }
 
 .monScope .monMetricValue strong {
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 720;
   letter-spacing: -0.02em;
+  line-height: 1.1;
 }
 
 .monScope .monMetricValue small {
-  font-size: 10.5px;
+  font-size: 10px;
   font-weight: 600;
   color: var(--mon-text-tertiary);
 }
 
-.monScope .monMetricDetail {
-  font-size: 11px;
-  line-height: 1.2;
-  color: var(--mon-text-tertiary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
 .monScope .monGaugeTrack {
   min-width: 0;
-  height: 7px;
+  height: 6px;
   overflow: hidden;
   background: linear-gradient(
     to right,
@@ -119,153 +111,105 @@
   }
 }
 
-.monScope .monSectionDivider {
-  padding-top: 9px;
-  border-top: 1px solid var(--mon-hairline);
+.monScope .monInfoStrip {
+  display: grid;
+  grid-template-columns: repeat(var(--mon-info-cols, 3), minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--mon-border-subtle);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--mon-fill-tertiary) 78%, transparent);
   min-width: 0;
 }
 
-.monScope .monTrafficGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 12px;
-}
-
-.monScope .monTrafficStat {
+.monScope .monInfoTile {
   display: flex;
   flex-direction: column;
+  justify-content: center;
+  gap: 3px;
+  min-width: 0;
+  padding: 6px 8px;
+}
+
+.monScope .monInfoTile + .monInfoTile {
+  border-left: 1px solid var(--mon-border-subtle);
+}
+
+.monScope .monInfoRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 4px;
   min-width: 0;
-  padding: 7px 9px;
-  border-radius: 8px;
-  background: var(--mon-fill-tertiary);
-  border: 1px solid var(--mon-border-subtle);
+  font-size: 11px;
+  line-height: 1.15;
 }
 
-.monScope .monTrafficHead {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 6px;
-  min-width: 0;
-}
-
-.monScope .monTrafficDir {
+.monScope .monInfoRowIcon {
   display: inline-flex;
   align-items: center;
-  gap: 3px;
-  font-size: 11.5px;
-  font-weight: 650;
-  color: var(--mon-text-secondary);
-  flex-shrink: 0;
+  flex: 0 0 auto;
+  color: var(--mon-text-tertiary);
 }
 
-.monScope .monTrafficIconUp {
-  display: inline-flex;
+.monScope .monInfoUp {
   color: var(--mon-traffic-up);
 }
 
-.monScope .monTrafficIconDown {
-  display: inline-flex;
+.monScope .monInfoDown {
   color: var(--mon-traffic-down);
 }
 
-.monScope .monTrafficRate {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 2px;
-  min-width: 0;
-  font-size: 13px;
-  font-weight: 720;
-  letter-spacing: -0.02em;
-  white-space: nowrap;
-}
-
-.monScope .monTrafficRate small {
-  font-size: 10.5px;
-  font-weight: 600;
-  opacity: 0.88;
-}
-
-.monScope .monTrafficFoot {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--mon-text-tertiary);
-  min-width: 0;
-}
-
-.monScope .monTrafficFoot strong {
-  color: var(--mon-text-secondary);
-  font-weight: 650;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.monScope .monMetaGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 6px 12px;
-}
-
-.monScope .monMetaItem {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  min-width: 0;
-  font-size: 11.5px;
-}
-
-.monScope .monMetaLabel {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--mon-text-tertiary);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.monScope .monMetaValue {
-  color: var(--mon-text-primary);
-  font-weight: 650;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
-}
-
-.monScope .monMetaValue[data-tone="online"] {
-  color: var(--mon-ink-success);
-}
-
-.monScope .monMetaValue[data-tone="muted"] {
-  color: var(--mon-text-tertiary);
-}
-
-.monScope .monMetaValue small {
-  margin-left: 2px;
+.monScope .monInfoRowLabel {
+  flex: 0 0 auto;
   font-size: 10px;
   font-weight: 600;
   color: var(--mon-text-tertiary);
 }
 
+.monScope .monInfoRowValue {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--mon-text-primary);
+}
+
+.monScope .monInfoRowValue[data-muted="true"] {
+  color: var(--mon-text-tertiary);
+  font-weight: 600;
+}
+
+.monScope .monInfoRowValue small {
+  margin-left: 2px;
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--mon-text-tertiary);
+}
+
+.monScope .monInfoRowSub {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--mon-text-tertiary);
+}
 
 @media (max-width: 480px) {
   .monScope .monMetricGrid {
-    gap: 9px 10px;
+    gap: 6px 10px;
   }
 
-  .monScope .monTrafficGrid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
+  .monScope .monInfoTile {
+    padding: 5px 6px;
   }
 
-  .monScope .monMetaGrid {
-    grid-template-columns: minmax(0, 1fr);
-    gap: 5px;
+  .monScope .monInfoRowValue {
+    font-size: 10.5px;
   }
 }

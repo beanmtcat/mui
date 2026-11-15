@@ -431,16 +431,25 @@ export const MonitorServerCard = memo(function MonitorServerCard({
               </div>
             </div>
           ) : (
-            <div className="monitorCyclePlain">
-              <span className="monQuotaLabel">
-                <DatabaseIcon />
-                <span>本周期用量</span>
-              </span>
-              <strong className="monTabular">
-                {ct.rx !== undefined && ct.tx !== undefined
+            <div className="monQuotaBlock" data-tone="normal">
+              <div className="monQuotaHead">
+                <span className="monQuotaLabel">
+                  <DatabaseIcon />
+                  <span>本周期（{trafficLimitTypeShortLabels[cycleType] || "上行+下行"}）</span>
+                </span>
+                <strong className="monQuotaUsage monTabular">
+                  {ct.rx !== undefined && ct.tx !== undefined
                   ? `${formatBytes(ct.rx + ct.tx)}（↑ ${formatBytes(ct.tx)} · ↓ ${formatBytes(ct.rx)}）`
-                  : `${formatBytes(cycleUsed)}（${trafficLimitTypeShortLabels[cycleType] || "上行+下行"}）`}
-              </strong>
+                  : formatBytes(cycleUsed)}{" "}
+                / 不限
+                </strong>
+              </div>
+              {/* No limit: keep the empty track so every card has the same height. */}
+              <div className="monQuotaTrack" aria-hidden="true">
+                {TRAFFIC_QUOTA_SEGMENT_COLORS.map((_, i) => (
+                  <span key={i} className="monQuotaSegment" style={{ background: "var(--mon-progress-bg)" }} />
+                ))}
+              </div>
             </div>
           )}
         </div>

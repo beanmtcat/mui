@@ -33,8 +33,9 @@ type Store struct {
 	surgeTemplateMu sync.Mutex
 	cycleLocksMu    sync.Mutex
 	cycleLocks      map[string]*sync.Mutex
-	timeLoc         *time.Location
-	serversCalls    atomic.Int64
+	timeLoc           *time.Location
+	serversCalls      atomic.Int64
+	publicPingQueries atomic.Int64
 }
 
 // checkSecretStrength requires length plus character-class diversity. The key

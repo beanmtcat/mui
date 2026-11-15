@@ -7,9 +7,9 @@
   --mon-surface-sunken: #f4f4f5;
   --mon-hover-bg: #f4f4f5;
 
-  --mon-border: rgba(24, 24, 27, 0.09);
+  --mon-border: rgba(24, 24, 27, 0.08);
   --mon-border-subtle: rgba(24, 24, 27, 0.06);
-  --mon-border-strong: rgba(24, 24, 27, 0.16);
+  --mon-border-strong: rgba(24, 24, 27, 0.13);
   --mon-hairline: rgba(24, 24, 27, 0.08);
 
   --mon-text-primary: #18181b;
@@ -107,24 +107,24 @@
 }
 
 :root[data-theme="dark"] .monScope {
-  --mon-surface: #181e26;
-  --mon-surface-elev: #1e2530;
-  --mon-surface-sunken: #11161d;
-  --mon-hover-bg: #232b36;
+  --mon-surface: #262c36;
+  --mon-surface-elev: #2a313c;
+  --mon-surface-sunken: #151b23;
+  --mon-hover-bg: #2f3742;
 
-  --mon-border: #313843;
-  --mon-border-subtle: rgba(56, 64, 76, 0.76);
-  --mon-border-strong: #58606d;
-  --mon-hairline: rgba(56, 64, 76, 0.72);
+  --mon-border: #3d444d;
+  --mon-border-subtle: rgba(61, 68, 77, 0.7);
+  --mon-border-strong: #656c76;
+  --mon-hairline: rgba(61, 68, 77, 0.7);
 
-  --mon-text-primary: #e2e8f0;
+  --mon-text-primary: #d1d7e0;
   --mon-text-secondary: #b7bdc8;
   --mon-text-tertiary: #9198a1;
 
-  --mon-fill-secondary: rgba(101, 108, 118, 0.22);
-  --mon-fill-tertiary: rgba(101, 108, 118, 0.13);
+  --mon-fill-secondary: rgba(101, 108, 118, 0.2);
+  --mon-fill-tertiary: rgba(101, 108, 118, 0.12);
 
-  --mon-progress-bg: #2c333d;
+  --mon-progress-bg: #343b45;
   --mon-progress-cpu: #539bf5;
   --mon-progress-memory: #b083f0;
   --mon-progress-swap: #986ee2;

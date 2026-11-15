@@ -11,19 +11,16 @@ export function readInitialStatusTheme(): StatusTheme {
   } catch {
     // Ignore storage access errors in restricted browsing modes.
   }
-  if (
-    typeof window !== "undefined" &&
-    typeof window.matchMedia === "function" &&
-    window.matchMedia("(prefers-color-scheme: dark)").matches
-  ) {
-    return "dark";
-  }
-  return "light";
+  return "dark";
+}
+
+export function syncStatusTheme(theme: StatusTheme) {
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.style.colorScheme = theme;
 }
 
 export function applyStatusTheme(theme: StatusTheme) {
-  document.documentElement.dataset.theme = theme;
-  document.documentElement.style.colorScheme = theme;
+  syncStatusTheme(theme);
   try {
     window.localStorage.setItem(STORAGE_KEY, theme);
   } catch {

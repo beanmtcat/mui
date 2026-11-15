@@ -82,6 +82,17 @@ export function latencyHeatColor(ms: number | null | undefined): string {
   return "var(--mon-latency-critical)";
 }
 
+export function lossHeatColor(lossPct: number | null | undefined): string {
+  if (lossPct == null || !Number.isFinite(lossPct) || lossPct < 0) {
+    return "var(--mon-text-tertiary)";
+  }
+  if (lossPct <= 0) return "var(--mon-latency-excellent)";
+  if (lossPct <= 2) return "var(--mon-latency-good)";
+  if (lossPct <= 8) return "var(--mon-latency-moderate)";
+  if (lossPct <= 20) return "var(--mon-latency-elevated)";
+  return "var(--mon-latency-critical)";
+}
+
 const TRAFFIC_QUOTA_STOPS = [
   { pos: 0, h: 150, s: 58, l: 45 },
   { pos: 0.1, h: 150, s: 58, l: 45 },
