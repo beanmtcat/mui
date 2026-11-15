@@ -324,10 +324,15 @@ ARM64 服务器将 amd64 换成 arm64。已是当前构建、Agent 不支持自�
 		`CREATE TABLE IF NOT EXISTS mui_server_cycle_traffic (server_id TEXT NOT NULL, cycle_start_ms BIGINT NOT NULL, rx BIGINT NOT NULL, tx BIGINT NOT NULL, PRIMARY KEY(server_id, cycle_start_ms))`,
 		`CREATE INDEX IF NOT EXISTS mui_idx_server_cycle_traffic_start ON mui_server_cycle_traffic(cycle_start_ms)`,
 	},
+	{
+		// Creates mui_status_assets with driver-specific binary column
+		// (BYTEA on PostgreSQL, BLOB on SQLite); executed via dataMigrations[29].
+	},
 }
 
 var dataMigrations = map[int64]func(*sql.Tx, string) error{
 	23: migrateSurgeTemplateNameKeys,
+	29: migrateStatusAssetsTable,
 }
 
 func columnExists(tx *sql.Tx, driver, table, column string) (bool, error) {
@@ -397,6 +402,22 @@ func migrateSurgeTemplateNameKeys(tx *sql.Tx, driver string) error {
 		}
 	}
 	_, err = tx.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS mui_idx_surge_templates_name_key ON mui_surge_templates(name_key)`)
+	return err
+}
+
+func statusAssetsTableDDL(driver string) string {
+	dataType := "BLOB"
+	if driver == "pgx" {
+		dataType = "BYTEA"
+	}
+	return fmt.Sprintf(
+		`CREATE TABLE IF NOT EXISTS mui_status_assets (key TEXT PRIMARY KEY, mime TEXT NOT NULL, data %s NOT NULL, etag TEXT NOT NULL, updated_ms BIGINT NOT NULL)`,
+		dataType,
+	)
+}
+
+func migrateStatusAssetsTable(tx *sql.Tx, driver string) error {
+	_, err := tx.Exec(statusAssetsTableDDL(driver))
 	return err
 }
 

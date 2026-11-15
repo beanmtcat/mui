@@ -42,6 +42,12 @@ export type PublicServerItem = {
   publicNote?: string;
 };
 
+export type PublicStatusBackground = {
+  version: string;
+  cardOpacity: number;
+  blur: number;
+};
+
 export type PublicStatusResponse = {
   title: string;
   description: string;
@@ -49,6 +55,7 @@ export type PublicStatusResponse = {
   showPing: boolean;
   generatedAt: string;
   servers: PublicServerItem[];
+  background?: PublicStatusBackground;
 };
 
 export type PublicPingTaskSeries = {

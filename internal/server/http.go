@@ -93,6 +93,8 @@ type App struct {
 	statusCacheGen         uint64
 	statusCfgLoaded        bool
 	statusCfg              storedStatusPageSettings
+	statusBgLoaded         bool
+	statusBg               *statusAsset
 	statusSnapshotBody     []byte
 	statusSnapshotExpires  time.Time
 	statusPingSummary      publicPingSummary
@@ -246,6 +248,9 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/settings/telegram/test", a.require(a.telegramTest))
 	mux.HandleFunc("GET /api/settings/status-page", a.require(a.statusPageSetting))
 	mux.HandleFunc("PUT /api/settings/status-page", a.require(a.statusPageSetting))
+	mux.HandleFunc("GET /api/settings/status-page/background", a.require(a.statusPageBackground))
+	mux.HandleFunc("PUT /api/settings/status-page/background", a.require(a.statusPageBackground))
+	mux.HandleFunc("DELETE /api/settings/status-page/background", a.require(a.statusPageBackground))
 	mux.HandleFunc("GET /api/monitor", a.require(a.monitorOverview))
 	mux.HandleFunc("GET /api/monitor/{serverId}/records", a.require(a.monitorServerRecords))
 	mux.HandleFunc("GET /api/ping-tasks", a.require(a.pingTasks))

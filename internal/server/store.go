@@ -36,6 +36,7 @@ type Store struct {
 	timeLoc           *time.Location
 	serversCalls      atomic.Int64
 	publicPingQueries atomic.Int64
+	statusAssetReads  atomic.Int64
 }
 
 // checkSecretStrength requires length plus character-class diversity. The key

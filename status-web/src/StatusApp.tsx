@@ -149,6 +149,7 @@ export function StatusApp() {
       onToggleTheme={toggleTheme}
       disconnected={disconnected}
       hasData={Boolean(data)}
+      background={data?.background}
     >
       {pageState === "loading" && !data ? (
         <section className="statusEmpty">正在加载状态数据…</section>

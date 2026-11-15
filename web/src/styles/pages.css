@@ -552,6 +552,63 @@ form.totpBox {
   align-items: center;
   gap: 8px;
 }
+.statusBgBox {
+  gap: 12px;
+}
+.statusBgFileInput {
+  display: none;
+}
+.statusBgRow {
+  display: grid;
+  gap: 6px;
+}
+.statusBgActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.statusBgActions button.dangerText {
+  color: var(--bad);
+}
+.statusBgHint {
+  margin: 0;
+  font-size: 12px;
+}
+.statusBgPreview {
+  width: 240px;
+  max-width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+}
+.statusBgPreviewImg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.statusSliderRow {
+  display: grid;
+  gap: 6px;
+}
+.statusSliderHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+}
+.statusSliderHead strong {
+  font-variant-numeric: tabular-nums;
+}
+.statusSliderRow input[type="range"] {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
 @media (max-width: 560px) {
   .telegramFieldsGrid {
     grid-template-columns: 1fr;

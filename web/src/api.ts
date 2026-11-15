@@ -274,6 +274,10 @@ export type StatusPageSettings = {
   description: string;
   showTraffic: boolean;
   showPing: boolean;
+  cardOpacity: number;
+  backgroundBlur: number;
+  backgroundSet: boolean;
+  backgroundVersion: string;
   listenConfigured: boolean;
   statusUrl: string;
 };

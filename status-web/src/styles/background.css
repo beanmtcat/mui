@@ -1,0 +1,218 @@
+.statusBgLayer {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  background: transparent;
+}
+
+.statusPage[data-has-bg="true"] .statusBgLayer {
+  background: #f4f4f5;
+}
+
+:root[data-theme="dark"] .statusPage[data-has-bg="true"] .statusBgLayer {
+  background: #212830;
+}
+
+.statusBgImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  opacity: 0;
+  filter: blur(var(--status-bg-blur, 0px));
+  transform: scale(var(--status-bg-scale, 1));
+  transform-origin: center;
+  will-change: opacity;
+  transition: opacity 220ms ease;
+}
+
+.statusBgImage[data-loaded="true"] {
+  opacity: 1;
+}
+
+.statusBgScrim {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 220ms ease;
+  background:
+    radial-gradient(
+      1100px 560px at 50% -8%,
+      rgba(255, 255, 255, 0.28) 0%,
+      transparent 62%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(244, 246, 250, 0.42) 0%,
+      rgba(241, 244, 249, 0.32) 48%,
+      rgba(238, 242, 247, 0.44) 100%
+    );
+}
+
+:root[data-theme="dark"] .statusBgScrim {
+  background:
+    radial-gradient(
+      1000px 540px at 50% -10%,
+      rgba(34, 118, 210, 0.12) 0%,
+      transparent 60%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(9, 13, 21, 0.48) 0%,
+      rgba(11, 16, 26, 0.4) 50%,
+      rgba(8, 12, 19, 0.56) 100%
+    );
+}
+
+.statusBgScrim[data-loaded="true"] {
+  opacity: 1;
+}
+
+.statusPage[data-has-bg="true"],
+:root[data-theme="dark"] .statusPage[data-has-bg="true"] {
+  position: relative;
+  background: transparent;
+}
+
+.statusPage[data-has-bg="true"] .statusShell {
+  position: relative;
+  z-index: 1;
+}
+
+.statusPage[data-has-bg="true"] .statusBrandTitle,
+.statusPage[data-has-bg="true"] .statusBrandDesc {
+  text-shadow: 0 1px 10px rgba(255, 255, 255, 0.55);
+}
+
+:root[data-theme="dark"] .statusPage[data-has-bg="true"] .statusBrandTitle,
+:root[data-theme="dark"] .statusPage[data-has-bg="true"] .statusBrandDesc {
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.45);
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .statusPage[data-translucent="true"].monScope .monitorCard {
+    background: color-mix(in srgb, var(--mon-surface) var(--status-card-alpha), transparent);
+    -webkit-backdrop-filter: blur(14px) saturate(1.18);
+    backdrop-filter: blur(14px) saturate(1.18);
+  }
+
+  .statusPage[data-translucent="true"].monScope .monitorCard.offline {
+    background: color-mix(
+      in srgb,
+      color-mix(in srgb, var(--mon-surface-sunken) 48%, var(--mon-surface-elev) 52%)
+        var(--status-card-alpha),
+      transparent
+    );
+    -webkit-backdrop-filter: blur(12px) saturate(1.08);
+    backdrop-filter: blur(12px) saturate(1.08);
+  }
+
+  .statusPage[data-translucent="true"] .home-cockpit-overview {
+    background:
+      radial-gradient(circle at 12% 46%, rgba(55, 137, 214, 0.14), transparent 19%),
+      radial-gradient(circle at 88% 46%, rgba(55, 137, 214, 0.14), transparent 19%),
+      radial-gradient(ellipse at 50% 100%, rgba(42, 112, 184, 0.14), transparent 45%),
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, rgba(10, 15, 24, 0.98) var(--status-card-alpha), transparent),
+        color-mix(in srgb, rgba(5, 9, 16, 0.99) var(--status-card-alpha), transparent)
+      );
+    -webkit-backdrop-filter: blur(16px) saturate(1.22);
+    backdrop-filter: blur(16px) saturate(1.22);
+  }
+
+  :root:not([data-theme="dark"]) .statusPage[data-translucent="true"] .home-cockpit-overview {
+    background:
+      radial-gradient(circle at 12% 46%, rgba(104, 182, 229, 0.22), transparent 19%),
+      radial-gradient(circle at 88% 46%, rgba(104, 182, 229, 0.22), transparent 19%),
+      radial-gradient(ellipse at 50% 100%, rgba(168, 216, 243, 0.28), transparent 46%),
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, rgba(248, 252, 255, 0.96) var(--status-card-alpha), transparent),
+        color-mix(in srgb, rgba(231, 242, 250, 0.98) var(--status-card-alpha), transparent)
+      );
+    -webkit-backdrop-filter: blur(16px) saturate(1.2);
+    backdrop-filter: blur(16px) saturate(1.2);
+  }
+
+  .statusPage[data-translucent="true"] .statusModalPanel {
+    background: color-mix(in srgb, var(--mon-surface) var(--status-surface-alpha), transparent);
+    -webkit-backdrop-filter: blur(18px) saturate(1.2);
+    backdrop-filter: blur(18px) saturate(1.2);
+  }
+
+  .statusPage[data-translucent="true"] .statusModalHead {
+    background: color-mix(
+      in srgb,
+      var(--mon-surface-elev) var(--status-surface-alpha),
+      transparent
+    );
+  }
+
+  .statusPage[data-translucent="true"] .statusEmpty,
+  .statusPage[data-translucent="true"] .statusThemeToggle {
+    background: color-mix(in srgb, var(--mon-surface) var(--status-surface-alpha), transparent);
+    -webkit-backdrop-filter: blur(14px) saturate(1.16);
+    backdrop-filter: blur(14px) saturate(1.16);
+  }
+
+  .statusPage[data-translucent="true"] .statusThemeToggle:hover {
+    background: color-mix(in srgb, var(--mon-hover-bg) var(--status-surface-alpha), transparent);
+  }
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  .statusPage[data-translucent="true"].monScope .monitorCard,
+  .statusPage[data-translucent="true"] .statusModalPanel,
+  .statusPage[data-translucent="true"] .statusEmpty,
+  .statusPage[data-translucent="true"] .statusThemeToggle {
+    background: var(--mon-surface);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .statusPage[data-translucent="true"].monScope .monitorCard.offline {
+    background: color-mix(in srgb, var(--mon-surface-sunken) 48%, var(--mon-surface-elev) 52%);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  .statusPage[data-translucent="true"] .statusModalHead {
+    background: var(--mon-surface-elev);
+  }
+
+  .statusPage[data-translucent="true"] .statusThemeToggle:hover {
+    background: var(--mon-hover-bg);
+  }
+
+  .statusPage[data-translucent="true"] .home-cockpit-overview {
+    background:
+      radial-gradient(circle at 12% 46%, rgba(55, 137, 214, 0.14), transparent 19%),
+      radial-gradient(circle at 88% 46%, rgba(55, 137, 214, 0.14), transparent 19%),
+      radial-gradient(ellipse at 50% 100%, rgba(42, 112, 184, 0.14), transparent 45%),
+      linear-gradient(180deg, rgba(10, 15, 24, 0.98), rgba(5, 9, 16, 0.99));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  :root:not([data-theme="dark"]) .statusPage[data-translucent="true"] .home-cockpit-overview {
+    background:
+      radial-gradient(circle at 12% 46%, rgba(104, 182, 229, 0.24), transparent 19%),
+      radial-gradient(circle at 88% 46%, rgba(104, 182, 229, 0.24), transparent 19%),
+      radial-gradient(ellipse at 50% 100%, rgba(168, 216, 243, 0.32), transparent 46%),
+      linear-gradient(180deg, rgba(248, 252, 255, 0.96), rgba(231, 242, 250, 0.98));
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .statusBgImage,
+  .statusBgScrim {
+    transition: none;
+  }
+}

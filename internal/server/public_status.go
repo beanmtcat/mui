@@ -75,13 +75,20 @@ type PublicServerItem struct {
 	PublicNote     string                   `json:"publicNote,omitempty"`
 }
 
+type PublicStatusBackground struct {
+	Version     string `json:"version"`
+	CardOpacity int    `json:"cardOpacity"`
+	Blur        int    `json:"blur"`
+}
+
 type PublicStatusResponse struct {
-	Title       string             `json:"title"`
-	Description string             `json:"description"`
-	ShowTraffic bool               `json:"showTraffic"`
-	ShowPing    bool               `json:"showPing"`
-	GeneratedAt time.Time          `json:"generatedAt"`
-	Servers     []PublicServerItem `json:"servers"`
+	Title       string                  `json:"title"`
+	Description string                  `json:"description"`
+	ShowTraffic bool                    `json:"showTraffic"`
+	ShowPing    bool                    `json:"showPing"`
+	GeneratedAt time.Time               `json:"generatedAt"`
+	Background  *PublicStatusBackground `json:"background,omitempty"`
+	Servers     []PublicServerItem      `json:"servers"`
 }
 
 type PublicMonitorRecord struct {
@@ -130,6 +137,7 @@ type publicHistoryCacheEntry struct {
 func (a *App) StatusHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/public/status", a.publicStatus)
+	mux.HandleFunc("GET /api/public/background", a.publicBackground)
 	mux.HandleFunc("GET /api/public/servers/{publicId}/records", a.publicServerRecords)
 	mux.HandleFunc("GET /api/public/servers/{publicId}/pings", a.publicServerPings)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -498,12 +506,26 @@ func (a *App) buildPublicStatusSnapshot(cfg storedStatusPageSettings, now time.T
 		items = append(items, item)
 	}
 
+	bg, err := a.cachedStatusBackground()
+	if err != nil {
+		return nil, err
+	}
+	var bgResp *PublicStatusBackground
+	if bg != nil {
+		bgResp = &PublicStatusBackground{
+			Version:     bg.ETag,
+			CardOpacity: cfg.CardOpacity,
+			Blur:        cfg.BackgroundBlur,
+		}
+	}
+
 	resp := PublicStatusResponse{
 		Title:       cfg.Title,
 		Description: cfg.Description,
 		ShowTraffic: cfg.ShowTraffic,
 		ShowPing:    cfg.ShowPing,
 		GeneratedAt: now,
+		Background:  bgResp,
 		Servers:     items,
 	}
 	return json.Marshal(resp)

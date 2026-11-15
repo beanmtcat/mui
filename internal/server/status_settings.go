@@ -15,41 +15,57 @@ import (
 const (
 	maxStatusTitleRunes       = 60
 	maxStatusDescriptionRunes = 300
+	minStatusCardOpacity      = 40
+	maxStatusCardOpacity      = 100
+	defaultStatusCardOpacity  = 100
+	minStatusBackgroundBlur   = 0
+	maxStatusBackgroundBlur   = 20
+	defaultStatusBgBlur       = 0
 )
 
 type storedStatusPageSettings struct {
-	Enabled     bool   `json:"enabled"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	ShowTraffic bool   `json:"showTraffic"`
-	ShowPing    bool   `json:"showPing"`
+	Enabled        bool   `json:"enabled"`
+	Title          string `json:"title"`
+	Description    string `json:"description"`
+	ShowTraffic    bool   `json:"showTraffic"`
+	ShowPing       bool   `json:"showPing"`
+	CardOpacity    int    `json:"cardOpacity"`
+	BackgroundBlur int    `json:"backgroundBlur"`
 }
 
 type StatusPageSettingsResponse struct {
-	Enabled          bool   `json:"enabled"`
-	Title            string `json:"title"`
-	Description      string `json:"description"`
-	ShowTraffic      bool   `json:"showTraffic"`
-	ShowPing         bool   `json:"showPing"`
-	ListenConfigured bool   `json:"listenConfigured"`
-	StatusURL        string `json:"statusUrl"`
+	Enabled           bool   `json:"enabled"`
+	Title             string `json:"title"`
+	Description       string `json:"description"`
+	ShowTraffic       bool   `json:"showTraffic"`
+	ShowPing          bool   `json:"showPing"`
+	CardOpacity       int    `json:"cardOpacity"`
+	BackgroundBlur    int    `json:"backgroundBlur"`
+	BackgroundSet     bool   `json:"backgroundSet"`
+	BackgroundVersion string `json:"backgroundVersion"`
+	ListenConfigured  bool   `json:"listenConfigured"`
+	StatusURL         string `json:"statusUrl"`
 }
 
 type statusPageSettingsInput struct {
-	Enabled     *bool   `json:"enabled"`
-	Title       *string `json:"title"`
-	Description *string `json:"description"`
-	ShowTraffic *bool   `json:"showTraffic"`
-	ShowPing    *bool   `json:"showPing"`
+	Enabled        *bool   `json:"enabled"`
+	Title          *string `json:"title"`
+	Description    *string `json:"description"`
+	ShowTraffic    *bool   `json:"showTraffic"`
+	ShowPing       *bool   `json:"showPing"`
+	CardOpacity    *int    `json:"cardOpacity"`
+	BackgroundBlur *int    `json:"backgroundBlur"`
 }
 
 func defaultStoredStatusPageSettings() storedStatusPageSettings {
 	return storedStatusPageSettings{
-		Enabled:     false,
-		Title:       "服务状态",
-		Description: "",
-		ShowTraffic: true,
-		ShowPing:    true,
+		Enabled:        false,
+		Title:          "服务状态",
+		Description:    "",
+		ShowTraffic:    true,
+		ShowPing:       true,
+		CardOpacity:    defaultStatusCardOpacity,
+		BackgroundBlur: defaultStatusBgBlur,
 	}
 }
 
@@ -113,6 +129,12 @@ func (s *Store) loadStoredStatusPageSettings() (storedStatusPageSettings, error)
 	if strings.TrimSpace(cfg.Title) == "" {
 		cfg.Title = "服务状态"
 	}
+	if cfg.CardOpacity < minStatusCardOpacity || cfg.CardOpacity > maxStatusCardOpacity {
+		cfg.CardOpacity = defaultStatusCardOpacity
+	}
+	if cfg.BackgroundBlur < minStatusBackgroundBlur || cfg.BackgroundBlur > maxStatusBackgroundBlur {
+		cfg.BackgroundBlur = defaultStatusBgBlur
+	}
 	return cfg, nil
 }
 
@@ -152,6 +174,8 @@ func (a *App) invalidatePublicStatusCache() {
 	a.statusCacheMu.Lock()
 	a.statusCacheGen++
 	a.statusCfgLoaded = false
+	a.statusBgLoaded = false
+	a.statusBg = nil
 	a.statusSnapshotBody = nil
 	a.statusSnapshotExpires = time.Time{}
 	a.statusPingSummary = publicPingSummary{}
@@ -173,16 +197,29 @@ func (a *App) invalidatePublicStatusSnapshot() {
 	a.statusCacheMu.Unlock()
 }
 
-func (a *App) toStatusPageSettingsResponse(cfg storedStatusPageSettings) StatusPageSettingsResponse {
-	return StatusPageSettingsResponse{
-		Enabled:          cfg.Enabled,
-		Title:            cfg.Title,
-		Description:      cfg.Description,
-		ShowTraffic:      cfg.ShowTraffic,
-		ShowPing:         cfg.ShowPing,
-		ListenConfigured: a.statusListenConfigured,
-		StatusURL:        a.statusURL,
+func (a *App) toStatusPageSettingsResponse(cfg storedStatusPageSettings) (StatusPageSettingsResponse, error) {
+	bg, err := a.cachedStatusBackground()
+	if err != nil {
+		return StatusPageSettingsResponse{}, err
 	}
+	bgSet := bg != nil
+	bgVersion := ""
+	if bg != nil {
+		bgVersion = bg.ETag
+	}
+	return StatusPageSettingsResponse{
+		Enabled:           cfg.Enabled,
+		Title:             cfg.Title,
+		Description:       cfg.Description,
+		ShowTraffic:       cfg.ShowTraffic,
+		ShowPing:          cfg.ShowPing,
+		CardOpacity:       cfg.CardOpacity,
+		BackgroundBlur:    cfg.BackgroundBlur,
+		BackgroundSet:     bgSet,
+		BackgroundVersion: bgVersion,
+		ListenConfigured:  a.statusListenConfigured,
+		StatusURL:         a.statusURL,
+	}, nil
 }
 
 func (a *App) statusPageSetting(w http.ResponseWriter, r *http.Request) {
@@ -192,7 +229,12 @@ func (a *App) statusPageSetting(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
-		writeJSON(w, 200, a.toStatusPageSettingsResponse(cfg))
+		resp, err := a.toStatusPageSettingsResponse(cfg)
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		writeJSON(w, 200, resp)
 		return
 	}
 
@@ -231,6 +273,20 @@ func (a *App) statusPageSetting(w http.ResponseWriter, r *http.Request) {
 	if in.ShowPing != nil {
 		cfg.ShowPing = *in.ShowPing
 	}
+	if in.CardOpacity != nil {
+		if *in.CardOpacity < minStatusCardOpacity || *in.CardOpacity > maxStatusCardOpacity {
+			errorJSON(w, 400, fmt.Sprintf("卡片不透明度需为 %d–%d 的整数", minStatusCardOpacity, maxStatusCardOpacity))
+			return
+		}
+		cfg.CardOpacity = *in.CardOpacity
+	}
+	if in.BackgroundBlur != nil {
+		if *in.BackgroundBlur < minStatusBackgroundBlur || *in.BackgroundBlur > maxStatusBackgroundBlur {
+			errorJSON(w, 400, fmt.Sprintf("背景模糊需为 %d–%d 的整数", minStatusBackgroundBlur, maxStatusBackgroundBlur))
+			return
+		}
+		cfg.BackgroundBlur = *in.BackgroundBlur
+	}
 
 	if err := a.Store.saveStoredStatusPageSettings(cfg); err != nil {
 		errorJSON(w, 500, err.Error())
@@ -248,7 +304,12 @@ func (a *App) statusPageSetting(w http.ResponseWriter, r *http.Request) {
 	a.statusHistoryCache = nil
 	a.statusCacheMu.Unlock()
 
-	detail := fmt.Sprintf("enabled=%v showTraffic=%v showPing=%v", cfg.Enabled, cfg.ShowTraffic, cfg.ShowPing)
+	detail := fmt.Sprintf("enabled=%v showTraffic=%v showPing=%v cardOpacity=%d backgroundBlur=%d", cfg.Enabled, cfg.ShowTraffic, cfg.ShowPing, cfg.CardOpacity, cfg.BackgroundBlur)
 	a.auditRequest(r, "settings.status_page", "status_page", detail)
-	writeJSON(w, 200, a.toStatusPageSettingsResponse(cfg))
+	resp, err := a.toStatusPageSettingsResponse(cfg)
+	if err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, resp)
 }

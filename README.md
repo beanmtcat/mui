@@ -111,7 +111,7 @@ CREATE DATABASE mui WITH OWNER mui ENCODING 'UTF8';
 - **启用步骤**：
   1. 在 `deploy/.env` 中设置 `MUI_STATUS_LISTEN=:8088`（后端容器内的第二个 HTTP 监听，只注册 `/api/public/*` 和 `/healthz`，无需映射到宿主机端口）及可选的 `MUI_STATUS_URL=https://status.example.com`（仅用于在管理端“设置”页展示状态页链接）。
   2. 带 `--profile status` 启动容器：`docker compose --env-file .env -f compose.yaml --profile status up -d --build`；使用远程发布脚本时传 `./deploy/publish.sh --with-status`（或在 `deploy/publish.env` 设 `WITH_STATUS=1`），仅更新状态页前端可传 `./deploy/publish.sh --service status`。
-  3. 登录管理面板，在“设置 → 公开状态页”开启开关，并在需要公开的服务器编辑弹窗“公开状态页”分组勾选“公开展示”。
+  3. 登录管理面板，在“设置 → 公开状态页”开启开关，按需上传背景图片（仅支持 JPEG/PNG/WebP、大小不超过 3 MiB）并调整卡片不透明度与背景模糊，再在需要公开的服务器编辑弹窗“公开状态页”分组勾选“公开展示”。
 - **隔离边界**：未配置 `MUI_STATUS_LISTEN` 或关闭开关时，公开接口一律返回 404（不会退回到主监听）；配置了 `MUI_STATUS_LISTEN` 后，主监听上的 `/api/public/*` 固定返回 404。公开接口只返回派生公开 ID（与内部服务器 ID 不可互推且不能用于管理或 Agent 接口）、名称、地区、硬件配置、采样与历史曲线、延迟任务名称（不含探测目标）、到期日与公开备注，绝不返回公网 IP、域名、内部备注或标签，并默认携带 `X-Robots-Tag: noindex`。
 
 ### 多域名访问

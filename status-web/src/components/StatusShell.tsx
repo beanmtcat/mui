@@ -1,5 +1,7 @@
-import type { ReactNode } from "react";
+import { useState, type CSSProperties, type ReactNode } from "react";
+import type { PublicStatusBackground } from "../monitor/publicCard";
 import type { StatusTheme } from "../theme";
+import { StatusBackgroundLayer } from "./StatusBackgroundLayer";
 import { MoonIcon, SunIcon } from "./ThemeIcons";
 
 export function StatusShell({
@@ -9,6 +11,7 @@ export function StatusShell({
   onToggleTheme,
   disconnected,
   hasData,
+  background,
   children,
 }: {
   title: string;
@@ -17,10 +20,44 @@ export function StatusShell({
   onToggleTheme: () => void;
   disconnected: boolean;
   hasData: boolean;
+  background?: PublicStatusBackground;
   children: ReactNode;
 }) {
+  const [bgActive, setBgActive] = useState(false);
+
+  const hasBgVersion = Boolean(background?.version?.trim());
+  const isBgActive = hasBgVersion && bgActive;
+  const rawOpacity = background?.cardOpacity ?? 100;
+  const clampedOpacity = Math.min(
+    100,
+    Math.max(40, Math.round(Number.isFinite(rawOpacity) ? rawOpacity : 100)),
+  );
+  const rawBlur = background?.blur ?? 0;
+  const clampedBlur = Math.min(
+    20,
+    Math.max(0, Math.round(Number.isFinite(rawBlur) ? rawBlur : 0)),
+  );
+  const isTranslucent = isBgActive && clampedOpacity < 100;
+  const surfaceAlpha = Math.min(96, clampedOpacity + 8);
+  const bgScale = clampedBlur > 0 ? (1 + clampedBlur * 0.006).toFixed(3) : "1";
+
+  const pageStyle: CSSProperties | undefined = isBgActive
+    ? ({
+        "--status-card-alpha": `${clampedOpacity}%`,
+        "--status-surface-alpha": `${surfaceAlpha}%`,
+        "--status-bg-blur": `${clampedBlur}px`,
+        "--status-bg-scale": bgScale,
+      } as CSSProperties)
+    : undefined;
+
   return (
-    <div className="statusPage monScope">
+    <div
+      className="statusPage monScope"
+      data-has-bg={isBgActive ? "true" : undefined}
+      data-translucent={isTranslucent ? "true" : undefined}
+      style={pageStyle}
+    >
+      <StatusBackgroundLayer background={background} onActiveChange={setBgActive} />
       <div className="statusShell">
         <header className="statusBrandBar">
           <div className="statusBrandTitleGroup">
