@@ -206,6 +206,59 @@
 }
 
 /* Admin Panel Toolbar & Body */
+.monitorPage .monitorTabBar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--mon-hairline);
+}
+
+.monitorPage .monitorTabs {
+  margin-bottom: -1px;
+  box-shadow: none;
+}
+
+.monitorPage .monitorTabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 13px 14px;
+  font-size: 13.5px;
+}
+
+.monitorPage .monitorTabCount {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--mon-fill-tertiary);
+  color: var(--mon-text-secondary);
+  font-size: 11.5px;
+  font-weight: 650;
+  line-height: 1.35;
+}
+
+.monitorPage .monitorTabs button.active .monitorTabCount {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+
+.monitorPage .monitorTabBar .monitorToolbar {
+  padding: 8px 0;
+}
+
+.monitorPage .monitorTabHint {
+  margin: 0;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--mon-hairline);
+}
+
+.monitorPage .monitorPingEmpty {
+  margin: 0;
+  padding: 24px 18px;
+}
+
 .monitorPage .monitorToolbar {
   display: flex;
   flex-wrap: wrap;
@@ -283,6 +336,22 @@
 @media (max-width: 640px) {
   .monitorPage .panelHead {
     padding: 13px 14px;
+  }
+
+  .monitorPage .monitorTabBar {
+    padding: 0 14px;
+  }
+
+  .monitorPage .monitorTabs {
+    width: 100%;
+    margin-bottom: 0;
+    box-shadow: inset 0 -1px 0 var(--mon-hairline);
+  }
+
+  .monitorPage .monitorTabHint,
+  .monitorPage .monitorPingEmpty {
+    padding-left: 14px;
+    padding-right: 14px;
   }
 
   .monitorPage .monitorPanelBody,

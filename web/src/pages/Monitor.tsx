@@ -42,6 +42,12 @@ const RANGES: { id: MonitorRange; label: string }[] = [
   { id: "30d", label: "30 天" },
 ];
 
+const MONITOR_TABS = [
+  { id: "hosts", label: "主机实时监控" },
+  { id: "ping", label: "TCP 延迟监测任务" },
+] as const;
+type MonitorSubTab = (typeof MONITOR_TABS)[number]["id"];
+
 export default function Monitor() {
   const { servers, trafficLimitThreshold, ensureTrafficLimitThreshold, refreshTick, act, setConfirmation, screenshotMode, redactScreenshot, protect } = useApp();
   const redact = useCallback(
@@ -54,9 +60,13 @@ export default function Monitor() {
   const [selectedId, setSelectedId] = useUrlParam("server");
   const [rangeParam, setRangeParam] = useUrlParam("range");
   const [groupFilter, setGroupFilter] = useUrlParam("group");
+  const [sectionParam, setSectionParam] = useUrlParam("section");
   const range: MonitorRange = RANGES.some((r) => r.id === rangeParam)
     ? (rangeParam as MonitorRange)
     : "24h";
+  const subTab: MonitorSubTab = MONITOR_TABS.some((t) => t.id === sectionParam)
+    ? (sectionParam as MonitorSubTab)
+    : "hosts";
 
   const [overview, setOverview] = useState<MonitorOverviewItem[]>([]);
   const [loadingOverview, setLoadingOverview] = useState(true);
@@ -381,119 +391,237 @@ export default function Monitor() {
       )}
 
       <section className="panel monitorMainPanel">
-        <div className="panelHead">
-          <div>
-            <h2>主机实时监控</h2>
-            <p className="hint monTabular">
-              共 {onlineManagedServers.length} 台在线管理服务器，当前在线 {onlineCount} 台 · 每 5 秒自动刷新
-            </p>
+        <div className="monitorTabBar">
+          <div className="settingsTabs monitorTabs" role="tablist" aria-label="监控分类">
+            {MONITOR_TABS.map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                role="tab"
+                id={`monitor-tab-${t.id}`}
+                aria-selected={subTab === t.id}
+                aria-controls={`monitor-panel-${t.id}`}
+                className={subTab === t.id ? "active" : ""}
+                onClick={() => setSectionParam(t.id === "hosts" ? "" : t.id)}
+              >
+                <span>{t.label}</span>
+                <span className="monitorTabCount monTabular">
+                  {t.id === "hosts"
+                    ? `${onlineCount}/${onlineManagedServers.length}`
+                    : `${pingTasks.length}/32`}
+                </span>
+              </button>
+            ))}
           </div>
           <div className="toolbarActions monitorToolbar">
-            <select
-              aria-label="按分组筛选监控服务器"
-              value={groupFilter}
-              onChange={(e) => setGroupFilter(e.target.value)}
-            >
-              <option value="">全部分组</option>
-              {groupOptions.map((opt) => (
-                <option key={opt.value} value={opt.value}>
-                  {opt.label}
-                </option>
-              ))}
-            </select>
-            {groupFilter && (
-              <button type="button" className="ghost" onClick={() => setGroupFilter("")}>
-                清空分组
+            {subTab === "hosts" ? (
+              <>
+                <select
+                  aria-label="按分组筛选监控服务器"
+                  value={groupFilter}
+                  onChange={(e) => setGroupFilter(e.target.value)}
+                >
+                  <option value="">全部分组</option>
+                  {groupOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+                {groupFilter && (
+                  <button type="button" className="ghost" onClick={() => setGroupFilter("")}>
+                    清空分组
+                  </button>
+                )}
+              </>
+            ) : (
+              <button
+                type="button"
+                className="primary"
+                disabled={pingTasks.length >= 32}
+                onClick={() => setPingDialog({ ...emptyPingDraft })}
+              >
+                新建延迟任务
               </button>
             )}
-            <button
-              type="button"
-              className="primary"
-              disabled={pingTasks.length >= 32}
-              onClick={() => setPingDialog({ ...emptyPingDraft })}
-            >
-              新建延迟任务
-            </button>
           </div>
         </div>
 
-        <div className="monitorPanelBody">
-          {loadingOverview && onlineManagedServers.length === 0 ? (
-            <p className="hint">正在加载监控数据…</p>
-          ) : onlineManagedServers.length === 0 ? (
-            <p className="hint">暂无在线 Agent 管理的服务器。</p>
-          ) : groupedServers.length === 0 ? (
-            <p className="hint">当前分组下没有符合条件的服务器。</p>
+        <div
+          className="settingsTabPanel"
+          role="tabpanel"
+          id="monitor-panel-hosts"
+          aria-labelledby="monitor-tab-hosts"
+          hidden={subTab !== "hosts"}
+        >
+          <div className="monitorPanelBody">
+            {loadingOverview && onlineManagedServers.length === 0 ? (
+              <p className="hint">正在加载监控数据…</p>
+            ) : onlineManagedServers.length === 0 ? (
+              <p className="hint">暂无在线 Agent 管理的服务器。</p>
+            ) : groupedServers.length === 0 ? (
+              <p className="hint">当前分组下没有符合条件的服务器。</p>
+            ) : (
+              groupedServers.map(({ group, items }) => (
+                <div className="monitorGroupSection" key={group}>
+                  <div className="monitorGroupHead">
+                    <strong>{redact(group)}</strong>
+                    <span className="monTabular">{items.length} 台</span>
+                  </div>
+                  <div className="monitorGrid">
+                    {items.map((srv) => {
+                      const card = buildAdminMonitorCard(
+                        srv,
+                        overviewByServer.get(srv.id),
+                        trafficLimitThreshold,
+                        redact,
+                      );
+                      const hasBadges = Boolean(srv.alertMuted || (srv.autoRenew && srv.billingCycle));
+                      return (
+                        <MonitorServerCard
+                          key={srv.id}
+                          card={card}
+                          active={selectedServer?.id === srv.id}
+                          onSelect={setSelectedId}
+                          headerBadgesSlot={
+                            hasBadges ? (
+                              <>
+                                {srv.alertMuted && (
+                                  <span
+                                    className="monTagChip"
+                                    data-tone="gray"
+                                    title="已静音离线与资源高占用告警"
+                                  >
+                                    静音
+                                  </span>
+                                )}
+                                {srv.autoRenew && srv.billingCycle && (
+                                  <span className="monTagChip" data-tone="blue">
+                                    自动续期
+                                  </span>
+                                )}
+                              </>
+                            ) : undefined
+                          }
+                          footerActionSlot={
+                            srv.billingCycle ? (
+                              <button
+                                type="button"
+                                className="ghost monitorRenewBtn"
+                                disabled={!srv.expiresAt || srv.status === "revoked"}
+                                title={
+                                  !srv.expiresAt
+                                    ? "请先在服务器设置中填写到期日"
+                                    : srv.status === "revoked"
+                                      ? "凭据已吊销，无法续期"
+                                      : undefined
+                                }
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  confirmRenew(srv);
+                                }}
+                              >
+                                续期一个周期
+                              </button>
+                            ) : undefined
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+
+        <div
+          className="settingsTabPanel"
+          role="tabpanel"
+          id="monitor-panel-ping"
+          aria-labelledby="monitor-tab-ping"
+          hidden={subTab !== "ping"}
+        >
+          <p className="monitorTabHint hint">
+            由各在线服务器按设定间隔发起公网 TCP 握手测速，自动拒绝私网与保留地址。
+          </p>
+          {pingTasks.length === 0 ? (
+            <p className="monitorPingEmpty hint">
+              暂未配置延迟监测任务，点击右上角「新建延迟任务」开始添加。
+            </p>
           ) : (
-            groupedServers.map(({ group, items }) => (
-              <div className="monitorGroupSection" key={group}>
-                <div className="monitorGroupHead">
-                  <strong>{redact(group)}</strong>
-                  <span className="monTabular">{items.length} 台</span>
-                </div>
-                <div className="monitorGrid">
-                  {items.map((srv) => {
-                    const card = buildAdminMonitorCard(
-                      srv,
-                      overviewByServer.get(srv.id),
-                      trafficLimitThreshold,
-                      redact,
-                    );
-                    const hasBadges = Boolean(srv.alertMuted || (srv.autoRenew && srv.billingCycle));
-                    return (
-                      <MonitorServerCard
-                        key={srv.id}
-                        card={card}
-                        active={selectedServer?.id === srv.id}
-                        onSelect={setSelectedId}
-                        headerBadgesSlot={
-                          hasBadges ? (
-                            <>
-                              {srv.alertMuted && (
-                                <span
-                                  className="monTagChip"
-                                  data-tone="gray"
-                                  title="已静音离线与资源高占用告警"
-                                >
-                                  静音
-                                </span>
-                              )}
-                              {srv.autoRenew && srv.billingCycle && (
-                                <span className="monTagChip" data-tone="blue">
-                                  自动续期
-                                </span>
-                              )}
-                            </>
-                          ) : undefined
-                        }
-                        footerActionSlot={
-                          srv.billingCycle ? (
-                            <button
-                              type="button"
-                              className="ghost monitorRenewBtn"
-                              disabled={!srv.expiresAt || srv.status === "revoked"}
-                              title={
-                                !srv.expiresAt
-                                  ? "请先在服务器设置中填写到期日"
-                                  : srv.status === "revoked"
-                                    ? "凭据已吊销，无法续期"
-                                    : undefined
-                              }
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                confirmRenew(srv);
-                              }}
-                            >
-                              续期一个周期
-                            </button>
-                          ) : undefined
-                        }
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-            ))
+            <div className="tableWrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>名称</th>
+                    <th>目标地址</th>
+                    <th>检测间隔</th>
+                    <th>执行服务器</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pingTasks.map((t) => (
+                    <tr key={t.id}>
+                      <td>
+                        <strong>{redact(t.name)}</strong>
+                      </td>
+                      <td>
+                        <code>{redact(t.target)}</code>
+                      </td>
+                      <td>{t.intervalSeconds} 秒</td>
+                      <td>
+                        {t.serverIds.length === 0
+                          ? "全部支持监控的服务器"
+                          : t.serverIds
+                              .map((id) => {
+                                const s = servers.find((srv) => srv.id === id);
+                                return s ? redact(s.name) : id;
+                              })
+                              .join("、")}
+                      </td>
+                      <td className="actions">
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() =>
+                            setPingDialog({
+                              id: t.id,
+                              name: t.name,
+                              target: t.target,
+                              intervalDraft: String(t.intervalSeconds),
+                              serverIds: [...t.serverIds],
+                            })
+                          }
+                        >
+                          编辑
+                        </button>
+                        <button
+                          type="button"
+                          className="danger"
+                          onClick={() =>
+                            setConfirmation({
+                              title: "删除延迟监测任务",
+                              message: `确认删除任务“${t.name}”及其历史延迟记录吗？`,
+                              confirmLabel: "删除",
+                              onConfirm: () => {
+                                void act(async () => {
+                                  await mutation(`/api/ping-tasks/${t.id}`, "DELETE");
+                                  await fetchPingTasks();
+                                }, "监测任务已删除");
+                              },
+                            })
+                          }
+                        >
+                          删除
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           )}
         </div>
       </section>
@@ -572,102 +700,6 @@ export default function Monitor() {
           </div>
         </ModalShell>
       )}
-
-      <section className="panel">
-        <div className="panelHead">
-          <div>
-            <h2>TCP 延迟监测任务（{pingTasks.length} / 32）</h2>
-            <p className="hint">
-              由各在线服务器按设定间隔发起公网 TCP 握手测速，自动拒绝私网与保留地址。
-            </p>
-          </div>
-          <button
-            type="button"
-            className="primary"
-            disabled={pingTasks.length >= 32}
-            onClick={() => setPingDialog({ ...emptyPingDraft })}
-          >
-            新建任务
-          </button>
-        </div>
-
-        {pingTasks.length === 0 ? (
-          <p className="hint">暂未配置延迟监测任务。</p>
-        ) : (
-          <div className="tableWrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>名称</th>
-                  <th>目标地址</th>
-                  <th>检测间隔</th>
-                  <th>执行服务器</th>
-                  <th>操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pingTasks.map((t) => (
-                  <tr key={t.id}>
-                    <td>
-                      <strong>{redact(t.name)}</strong>
-                    </td>
-                    <td>
-                      <code>{redact(t.target)}</code>
-                    </td>
-                    <td>{t.intervalSeconds} 秒</td>
-                    <td>
-                      {t.serverIds.length === 0
-                        ? "全部支持监控的服务器"
-                        : t.serverIds
-                            .map((id) => {
-                              const s = servers.find((srv) => srv.id === id);
-                              return s ? redact(s.name) : id;
-                            })
-                            .join("、")}
-                    </td>
-                    <td className="actions">
-                      <button
-                        type="button"
-                        className="ghost"
-                        onClick={() =>
-                          setPingDialog({
-                            id: t.id,
-                            name: t.name,
-                            target: t.target,
-                            intervalDraft: String(t.intervalSeconds),
-                            serverIds: [...t.serverIds],
-                          })
-                        }
-                      >
-                        编辑
-                      </button>
-                      <button
-                        type="button"
-                        className="danger"
-                        onClick={() =>
-                          setConfirmation({
-                            title: "删除延迟监测任务",
-                            message: `确认删除任务“${t.name}”及其历史延迟记录吗？`,
-                            confirmLabel: "删除",
-                            onConfirm: () => {
-                              void act(async () => {
-                                await mutation(`/api/ping-tasks/${t.id}`, "DELETE");
-                                await fetchPingTasks();
-                              }, "监测任务已删除");
-                            },
-                          })
-                        }
-                      >
-                        删除
-                      </button>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
 
       {pingDialog && (
         <PingTaskDialog
