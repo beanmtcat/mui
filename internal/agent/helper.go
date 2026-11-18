@@ -306,6 +306,7 @@ func hostStatus() HostStatus {
 		}
 	}
 	status.ForwardConnections = readForwardConnections()
+	status.RelayStates = readRelaySnapshot()
 	if ports, err := sshPorts(); err == nil {
 		for port := range ports {
 			status.SSHPorts = append(status.SSHPorts, port)

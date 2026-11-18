@@ -123,7 +123,26 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 	if err != nil {
 		return state, err
 	}
+	var relayWorld routeWorld
+	var overrides relayOverrides
+	var downstream downstreamTopology
+	relayNow := time.Now()
+	if shared.VersionAtLeast(server.AgentVersion, shared.RelayHealthVersion) && slices.ContainsFunc(forwards, isRouteForward) {
+		if relayWorld, err = a.loadRouteWorld(); err != nil {
+			return state, err
+		}
+		if overrides, err = a.Store.relayOverrides(); err != nil {
+			return state, err
+		}
+		downstream = relayWorld.downstreamHints(relayNow, false)
+	}
 	for _, forward := range forwards {
+		if relayWorld.servers != nil && isRouteForward(forward) {
+			relayWorld.assignRelayTargets(&forward, overrides, relayNow)
+			if len(downstream.routes) > 0 {
+				relayWorld.assignRelayDownstream(&forward, downstream)
+			}
+		}
 		// Client observation is decided per job from the current routes, never
 		// stored: a stored flag would rewrite every route forward (and bump every
 		// hop's revision, including offline exports) when the panel upgrades.

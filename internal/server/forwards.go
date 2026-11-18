@@ -37,6 +37,7 @@ func (a *App) forwards(w http.ResponseWriter, r *http.Request) {
 	in.RouteIDs = nil
 	in.ManualBasePolicy, in.ManualBaseSources = "", ""
 	in.ManualBaseTargets = nil
+	stripRelayTargetMetadata(in.Targets)
 	in.Deleting = false
 	in.Status = "pending"
 	if err := normalizeForward(&in); err != nil {
@@ -104,6 +105,7 @@ func (a *App) forwardByID(w http.ResponseWriter, r *http.Request) {
 	in.RouteIDs = nil
 	in.ManualBasePolicy, in.ManualBaseSources = "", ""
 	in.ManualBaseTargets = nil
+	stripRelayTargetMetadata(in.Targets)
 	in.Deleting, in.Status, in.Error = false, "pending", ""
 	if err := normalizeForward(&in); err != nil {
 		errorJSON(w, 400, err.Error())

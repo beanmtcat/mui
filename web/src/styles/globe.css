@@ -466,3 +466,21 @@
   }
 }
 
+
+.globeLinkActive.relay-degraded,
+.globeLinkActive.relay-probation {
+  stroke: #ffb65c;
+}
+.globeLinkActive.relay-probation {
+  stroke-dasharray: 5 3;
+}
+.globeLinkActive.relay-down {
+  stroke: #ff7279;
+  stroke-dasharray: 3 3;
+}
+.globeLegendLine.degraded {
+  border-top-color: #ffb65c;
+}
+.globeLegendLine.down {
+  border-top-color: #ff7279;
+}

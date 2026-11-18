@@ -17,3 +17,4 @@ deploy/tls/*
 .claude
 deploy/publish.env
 deploy/.secrets/
+.DS_Store

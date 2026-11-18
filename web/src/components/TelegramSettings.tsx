@@ -5,6 +5,7 @@ import { setError } from "../app/feedback";
 import { useBusy } from "../app/ui";
 
 const defaultEvents: TelegramEvents = {
+  relayState: { enabled: true },
   serverOffline: { enabled: true, offlineMinutes: 3 },
   applyFailed: { enabled: true },
   certExpiring: { enabled: true },
@@ -42,6 +43,7 @@ function normalizeLoadedSettings(v: TelegramSettings): TelegramSettings {
       trafficLimit: { ...defaultEvents.trafficLimit, ...v.events?.trafficLimit },
       trafficReport: { ...defaultEvents.trafficReport, ...v.events?.trafficReport },
       security: { ...defaultEvents.security, ...v.events?.security },
+      relayState: { ...defaultEvents.relayState, ...v.events?.relayState },
     },
   };
 }
@@ -94,6 +96,7 @@ function snapshotForm(s: TelegramSettings, d: NumberDrafts) {
     trafficReportWeekly: s.events.trafficReport.weekly,
     trafficReportMonthly: s.events.trafficReport.monthly,
     security: s.events.security.enabled,
+    relayState: s.events.relayState.enabled,
   });
 }
 
@@ -303,6 +306,14 @@ export default function TelegramSettingsCard() {
         <fieldset className="telegramEventsBox">
           <legend>事件与阈值</legend>
 
+          <div className="telegramEventRow">
+            <label className="check">
+              <input type="checkbox" checked={form.events.relayState.enabled}
+                onChange={(e) => updateEvents({ relayState: { enabled: e.target.checked } })} />
+              中转状态
+            </label>
+            <small>手动更改、自动故障和恢复</small>
+          </div>
           <div className="telegramEventRow">
             <label className="check">
               <input

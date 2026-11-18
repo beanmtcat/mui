@@ -15,11 +15,14 @@ import (
 // rule is one running forward: a listener, its destinations and whatever is
 // currently connected through it.
 type rule struct {
+	relayMu      sync.RWMutex // Serialises a rule-wide override change with candidate reads.
 	svc          *Service
 	spec         shared.ForwardRule
 	stats        *counter
 	targets      []*target
 	next         atomic.Uint32 // round-robin position
+	nextTrial    atomic.Uint32
+	quality      *relayQualityGroup
 	listener     io.Closer
 	done         chan struct{}
 	stopOnce     sync.Once
@@ -182,7 +185,11 @@ func (r *rule) retryPreferred() {
 
 func (r *rule) checkHealth(parent context.Context) {
 	defer r.svc.wg.Done()
-	ticker := time.NewTicker(healthInterval)
+	interval := healthInterval
+	if len(r.targets) == 1 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
@@ -190,24 +197,39 @@ func (r *rule) checkHealth(parent context.Context) {
 			return
 		case <-ticker.C:
 		}
+		if r.quality != nil && !r.quality.beginProbe(time.Now()) {
+			r.rebalanceSessions()
+			continue
+		}
+		results := make([]probeResult, len(r.targets))
 		var wg sync.WaitGroup
-		changed := make([]bool, len(r.targets))
 		for i, t := range r.targets {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				ctx, cancel := context.WithTimeout(parent, healthTimeout)
-				ok := r.svc.probe(ctx, t)
-				cancel()
-				changed[i] = t.observe(ok)
+				defer cancel()
+				results[i] = r.svc.probe(ctx, t)
 			}()
 		}
 		wg.Wait()
-		for _, c := range changed {
-			if c {
-				r.rebalanceSessions()
-				break
+		if parent.Err() != nil {
+			return
+		}
+		if r.quality != nil {
+			r.quality.observeProbes(results, time.Now())
+			r.rebalanceSessions()
+			continue
+		}
+		var changed bool
+		for i, result := range results {
+			if r.targets[i].observe(result.ok) {
+				_, manual := r.targets[i].relayStatus(time.Now())
+				changed = changed || !manual
 			}
+		}
+		if changed {
+			r.rebalanceSessions()
 		}
 	}
 }
@@ -215,12 +237,20 @@ func (r *rule) checkHealth(parent context.Context) {
 // rebalanceSessions closes UDP sessions that should no longer use their
 // destination; the client's next datagram opens one on the right destination.
 func (r *rule) rebalanceSessions() {
-	preferred := r.candidates()[0]
+	if r.spec.Network != "udp" {
+		return
+	}
+	candidates := r.relayCandidates(false)
+	var preferred *target
+	if len(candidates) > 0 {
+		preferred = candidates[0]
+	}
 	r.dropSessions(func(session *udpSession) bool {
-		if !session.target.up() {
-			return preferred.up()
+		state, manual := session.target.relayStatus(time.Now())
+		if state == shared.RelayDown {
+			return manual || preferred != nil && preferred.effectiveUsable()
 		}
-		return r.spec.Balance != "round-robin" && session.target != preferred
+		return r.quality == nil && !manual && state == shared.RelayNormal && preferred != nil && r.spec.Balance != "round-robin" && session.target != preferred && preferred.effectiveUsable()
 	})
 }
 
@@ -239,38 +269,8 @@ func (r *rule) dropSessions(stale func(*udpSession) bool) {
 	}
 }
 
-// candidates lists the destinations in the order a new connection tries them:
-// healthy ones first (in configuration order for failover, rotated for
-// round-robin), then the rest as a last resort.
-func (r *rule) candidates() []*target {
-	if len(r.targets) == 1 {
-		return r.targets
-	}
-	healthy := make([]*target, 0, len(r.targets))
-	var down []*target
-	for _, t := range r.targets {
-		if t.up() {
-			healthy = append(healthy, t)
-		} else {
-			down = append(down, t)
-		}
-	}
-	ordered := append(healthy, down...)
-	count := len(healthy)
-	if count == 0 {
-		count = len(ordered)
-	}
-	if r.spec.Balance == "round-robin" && count > 1 {
-		start := int(r.next.Add(1)-1) % count
-		rotated := append([]*target{}, ordered[start:count]...)
-		rotated = append(rotated, ordered[:start]...)
-		return append(rotated, ordered[count:]...)
-	}
-	return ordered
-}
-
 func (r *rule) failedTarget(t *target) {
-	if len(r.targets) < 2 || r.stopped() {
+	if len(r.targets) < 2 && r.spec.RouteID == "" || r.stopped() {
 		return
 	}
 	cooldown := time.Duration(0)
@@ -278,6 +278,10 @@ func (r *rule) failedTarget(t *target) {
 		cooldown = 2 * healthInterval
 	}
 	if t.markDownFor(cooldown) {
+		state, manual := t.relayStatus(time.Now())
+		if state != shared.RelayDown || manual {
+			return
+		}
 		r.rebalanceSessions()
 	}
 }

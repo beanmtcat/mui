@@ -51,6 +51,7 @@ type TelegramTrafficReport struct {
 }
 
 type TelegramEvents struct {
+	RelayState           TelegramToggleEvent        `json:"relayState"`
 	ServerOffline        TelegramServerOfflineEvent `json:"serverOffline"`
 	ApplyFailed          TelegramToggleEvent        `json:"applyFailed"`
 	CertExpiring         TelegramToggleEvent        `json:"certExpiring"`
@@ -92,6 +93,7 @@ type telegramRuntimeConfig struct {
 
 func defaultTelegramEvents() TelegramEvents {
 	return TelegramEvents{
+		RelayState:           TelegramToggleEvent{Enabled: true},
 		ServerOffline:        TelegramServerOfflineEvent{Enabled: true, OfflineMinutes: 3},
 		ApplyFailed:          TelegramToggleEvent{Enabled: true},
 		CertExpiring:         TelegramToggleEvent{Enabled: true},
@@ -138,6 +140,8 @@ func (c telegramRuntimeConfig) eventEnabled(event string) bool {
 		return c.Events.TrafficReport.Daily || c.Events.TrafficReport.Weekly || c.Events.TrafficReport.Monthly
 	case "resource":
 		return c.Events.Resource.Enabled
+	case "relayState":
+		return c.Events.RelayState.Enabled
 	case "security":
 		return c.Events.Security.Enabled
 	default:
@@ -262,6 +266,9 @@ func telegramResponseFromStored(stored storedTelegramSettings) TelegramSettingsR
 }
 
 type telegramEventsInput struct {
+	RelayState *struct {
+		Enabled *bool `json:"enabled"`
+	} `json:"relayState"`
 	ServerOffline *struct {
 		Enabled        *bool `json:"enabled"`
 		OfflineMinutes *int  `json:"offlineMinutes"`
@@ -373,6 +380,9 @@ func applyTelegramEventsInput(base TelegramEvents, in *telegramEventsInput) (Tel
 			}
 			out.Resource.Threshold = t
 		}
+	}
+	if in.RelayState != nil && in.RelayState.Enabled != nil {
+		out.RelayState.Enabled = *in.RelayState.Enabled
 	}
 	if in.Security != nil && in.Security.Enabled != nil {
 		out.Security.Enabled = *in.Security.Enabled

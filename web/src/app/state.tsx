@@ -20,6 +20,7 @@ import { navigate, parseHash, useServerParam, useTab } from "./url";
 
 export type { Notice };
 export type ModalSpec =
+  | { kind: "relay"; from?: string; to: string; routeId?: string }
   | { kind: "server"; form: ServerForm }
   | { kind: "node"; form: NodeForm; templateId: string }
   | { kind: "template"; form: TemplateForm }

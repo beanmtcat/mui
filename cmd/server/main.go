@@ -130,6 +130,10 @@ func main() {
 	go func() {
 		for {
 			app.FlushMonitorBuckets(time.Now())
+			app.FlushRelayDownstream()
+			if err := app.ExpireRelayOverrides(); err != nil {
+				log.Println("expire relay overrides:", err)
+			}
 			if err := app.ExpireUpgrades(); err != nil {
 				log.Println("expire upgrades:", err)
 			}
@@ -140,6 +144,7 @@ func main() {
 	go func() {
 		for {
 			app.EvaluateAlerts()
+			app.FlushRelayAlerts(time.Now())
 			time.Sleep(30 * time.Second)
 		}
 	}()

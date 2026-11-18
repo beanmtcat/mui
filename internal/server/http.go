@@ -60,54 +60,57 @@ type App struct {
 	downloadsByIP map[string]int
 	// releaseKey, when set, is pinned by agents at install time; upgrades must
 	// then carry a manifest signed by its private half.
-	releaseKey             ed25519.PublicKey
-	releaseKeyB64          string
-	expirySyncMu           sync.Mutex
-	expirySyncAt           atomic.Int64
-	startedAt              time.Time
-	tgMu                   sync.Mutex
-	tgQueue                []telegramNotice
-	tgDropped              uint64
-	tgRunning              bool
-	tgStop                 chan struct{}
-	tgIdle                 chan struct{}
-	tgSentTimes            []time.Time
-	tgClient               *http.Client
-	alertEvalMu            sync.Mutex
-	resourceSince          map[string]time.Time
-	monitorMu              sync.RWMutex
-	latestSamples          map[string]latestMonitorSample
-	minuteAccumMu          sync.Mutex
-	minuteAccums           map[string]*monitorMinuteAccum
-	pingAccumMu            sync.Mutex
-	pingAccums             map[string]*pingMinuteAccum
-	pingTasksMu            sync.RWMutex
-	pingTasksLoaded        bool
-	pingTasksCache         []MonitorPingTask
-	monitorNow             func() time.Time
-	monitorErrMu           sync.Mutex
-	monitorErrLast         map[string]time.Time
-	statusListenConfigured bool
-	statusURL              string
-	statusCacheMu          sync.RWMutex
-	statusCacheGen         uint64
-	statusCfgLoaded        bool
-	statusCfg              storedStatusPageSettings
-	statusBgLoaded         bool
-	statusBg               *statusAsset
-	statusSnapshotBody     []byte
-	statusSnapshotExpires  time.Time
-	statusCDNBody          []byte
-	statusCDNExpires       time.Time
-	statusPingSummary      publicPingSummary
-	statusPingExpires      time.Time
-	statusPingCacheReady   bool
-	statusHistoryCache     map[string]publicHistoryCacheEntry
-	statusFlightsMu        sync.Mutex
-	statusFlights          map[string]*publicFlightCall
-	statusSnapshotBuilds   atomic.Int64
-	statusHistoryBuilds    atomic.Int64
-	statusBuildHook        func(key string)
+	releaseKey                ed25519.PublicKey
+	releaseKeyB64             string
+	expirySyncMu              sync.Mutex
+	expirySyncAt              atomic.Int64
+	startedAt                 time.Time
+	relayAlertsMu             sync.Mutex
+	relayDownstreamDispatchMu sync.Mutex
+	relayAlerts               map[relayLine]relayAlertWindowState
+	tgMu                      sync.Mutex
+	tgQueue                   []telegramNotice
+	tgDropped                 uint64
+	tgRunning                 bool
+	tgStop                    chan struct{}
+	tgIdle                    chan struct{}
+	tgSentTimes               []time.Time
+	tgClient                  *http.Client
+	alertEvalMu               sync.Mutex
+	resourceSince             map[string]time.Time
+	monitorMu                 sync.RWMutex
+	latestSamples             map[string]latestMonitorSample
+	minuteAccumMu             sync.Mutex
+	minuteAccums              map[string]*monitorMinuteAccum
+	pingAccumMu               sync.Mutex
+	pingAccums                map[string]*pingMinuteAccum
+	pingTasksMu               sync.RWMutex
+	pingTasksLoaded           bool
+	pingTasksCache            []MonitorPingTask
+	monitorNow                func() time.Time
+	monitorErrMu              sync.Mutex
+	monitorErrLast            map[string]time.Time
+	statusListenConfigured    bool
+	statusURL                 string
+	statusCacheMu             sync.RWMutex
+	statusCacheGen            uint64
+	statusCfgLoaded           bool
+	statusCfg                 storedStatusPageSettings
+	statusBgLoaded            bool
+	statusBg                  *statusAsset
+	statusSnapshotBody        []byte
+	statusSnapshotExpires     time.Time
+	statusCDNBody             []byte
+	statusCDNExpires          time.Time
+	statusPingSummary         publicPingSummary
+	statusPingExpires         time.Time
+	statusPingCacheReady      bool
+	statusHistoryCache        map[string]publicHistoryCacheEntry
+	statusFlightsMu           sync.Mutex
+	statusFlights             map[string]*publicFlightCall
+	statusSnapshotBuilds      atomic.Int64
+	statusHistoryBuilds       atomic.Int64
+	statusBuildHook           func(key string)
 }
 
 func NewApp(s *Store, publicURL string) (*App, error) {
@@ -270,6 +273,9 @@ func (a *App) Handler() http.Handler {
 	mux.HandleFunc("POST /api/help", a.require(a.helpArticles))
 	mux.HandleFunc("PATCH /api/help/{id}", a.require(a.helpArticleByID))
 	mux.HandleFunc("DELETE /api/help/{id}", a.require(a.helpArticleByID))
+	mux.HandleFunc("GET /api/relay-overrides", a.require(a.relayOverrideAPI))
+	mux.HandleFunc("PUT /api/relay-overrides", a.require(a.relayOverrideAPI))
+	mux.HandleFunc("DELETE /api/relay-overrides", a.require(a.relayOverrideAPI))
 	mux.HandleFunc("GET /api/servers", a.require(a.servers))
 	mux.HandleFunc("POST /api/servers", a.require(a.servers))
 	mux.HandleFunc("PATCH /api/servers/{id}", a.require(a.serverByID))

@@ -23,6 +23,7 @@ func (s *Store) PutRoute(v shared.Route) error {
 	v.Status = ""
 	v.Error = ""
 	v.EdgeLatencies = nil
+	v.RelayEdges = nil
 	_, err := s.DB.Exec(`INSERT INTO mui_routes(id,data) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET data=excluded.data`, v.ID, Marshal(v))
 	return err
 }
@@ -65,13 +66,21 @@ func (a *App) routes(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
+		overrides, err := a.Store.relayOverrides()
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+		now := time.Now()
+		downstream := world.downstreamHints(now, true)
 		_, _, routeErrors := world.desiredRouteForwards()
 		for i := range world.routes {
 			world.routes[i].Status = routeStatus(world.routes[i], world.forwards)
 			if reason := routeErrors[world.routes[i].ID]; reason != "" {
 				world.routes[i].Status, world.routes[i].Error = "error", reason
 			}
-			world.routes[i].EdgeLatencies = routeEdgeLatencies(world.routes[i], world, time.Now())
+			world.routes[i].EdgeLatencies = routeEdgeLatencies(world.routes[i], world, now)
+			world.routes[i].RelayEdges = routeRelayEdges(world.routes[i], world, overrides, now, downstream)
 			if (world.routes[i].Status == "active" || world.routes[i].Status == "exported") && !offlineRouteReady(world.routes[i], world.servers) {
 				world.routes[i].Status = "pending"
 			}
@@ -213,6 +222,15 @@ func (a *App) saveRoute(w http.ResponseWriter, r *http.Request, in shared.Route,
 	_, _, routeErrors := prospective.desiredRouteForwards()
 	if reason := routeErrors[in.ID]; reason != "" {
 		errorJSON(w, 409, reason)
+		return
+	}
+	overrides, err := a.Store.relayOverrides()
+	if err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
+	if world.blockedByRelayOverrides(in, overrides, time.Now()) {
+		errorJSON(w, 400, "链路含有现在或覆盖到期后无可用目标的跳。请先调整手动中转状态。")
 		return
 	}
 	if err = a.Store.PutRoute(in); err != nil {

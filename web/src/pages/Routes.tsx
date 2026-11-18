@@ -1,12 +1,14 @@
 import { Fragment, useMemo, useState } from "react";
-import { mutation, type Node, type Route } from "../api";
+import { mutation, type Node, type RelayEdge, type Route } from "../api";
 import { useApp } from "../app/context";
 import { manualFirewall } from "../app/helpers";
 import { ActionMenu, Empty, HelpTip, ModalShell, parseSort, sortRows, Status, statusLabels } from "../app/ui";
 import { useUrlParam } from "../app/url";
 import { hopUsesInternal, linkTone, routeAddress, RouteMap, routeKeys, type RoutePoint } from "./RouteMap";
 
-type Edge = { from: string; to: string; point?: RoutePoint };
+import RelayEdgeControl, { relayTones } from "./RelayEdgeControl";
+
+type Edge = { from: string; to: string; point?: RoutePoint; relay?: RelayEdge };
 
 const hostHeight = 44, hostGap = 6, trackPad = 16;
 
@@ -31,32 +33,32 @@ function RouteLine({ route, node, onServer, onNode }: {
     ...route.hops.map((hop) => ({ kind: "transit", members: hop.serverIds, tag: hop.serverIds.length > 1 ? hop.balance === "round-robin" ? "轮询" : "主备" : "" })),
     { kind: "exit", members: node ? [node.serverId] : [], tag: "" },
   ];
-  const connections = stages.slice(0, -1).map((stage, i) => stage.members.flatMap((from) => stages[i + 1].members.map((to) => ({
+  const relayEdges = new Map(route.relayEdges?.map((edge) => [`${edge.fromServerId}:${edge.toServerId}`, edge]));
+  const connections: Edge[][] = stages.slice(0, -1).map((stage, i) => stage.members.flatMap((from) => stages[i + 1].members.map((to) => ({
     from, to, point: route.edgeLatencies?.find((point) => point.fromServerId === from && point.toServerId === to),
+    relay: relayEdges.get(`${from}:${to}`),
   }))));
   const tallest = Math.max(...stages.map((stage) => stage.members.length), 1);
   const height = tallest * hostHeight + (tallest - 1) * hostGap + trackPad * 2;
   return protect(<div className="routeTrackViewport">
     <div className="routeTrack" role="group" style={{ height }} aria-label={`链路路径：${stages.map((stage) => stage.members.map(serverName).join(" / ") || "已删除节点").join(" → ")}`}>
       {stages.map((stage, i) => <Fragment key={`${stage.kind}-${i}`}>
-        {i > 0 && <div className="routeFan" style={{ minWidth: connections[i - 1].length > 1 ? 104 : 76 }}>
+        {i > 0 && <div className="routeFan" style={{ minWidth: route.enabled ? (connections[i - 1].length > 1 ? 184 : 132) : 76 }}>
           <svg viewBox={`0 0 100 ${height}`} preserveAspectRatio="none" aria-hidden="true">
-            {connections[i - 1].map(({ from, to, point }) => {
+            {connections[i - 1].map(({ from, to, point, relay }) => {
               const y1 = hostCenter(stages[i - 1].members.indexOf(from), stages[i - 1].members.length, height);
               const y2 = hostCenter(stage.members.indexOf(to), stage.members.length, height);
-              return <path key={`${from}-${to}`} d={`M0 ${y1} C50 ${y1} 50 ${y2} 100 ${y2}`} vectorEffect="non-scaling-stroke" className={`routeFanLine tone-${linkTone([point], route.enabled)}`} />;
+              return <path key={`${from}-${to}`} d={`M0 ${y1} C50 ${y1} 50 ${y2} 100 ${y2}`} vectorEffect="non-scaling-stroke" className={`routeFanLine tone-${route.enabled && relay?.reported ? relayTones[relay.reported.state] : linkTone([point], route.enabled)}`} />;
             })}
           </svg>
-          {route.enabled && connections[i - 1].map(({ from, to, point }, n, list) => {
+          {route.enabled && connections[i - 1].map(({ from, to, point, relay }, n, list) => {
             const y1 = hostCenter(stages[i - 1].members.indexOf(from), stages[i - 1].members.length, height);
             const y2 = hostCenter(stage.members.indexOf(to), stage.members.length, height);
             // Lines from one host part near the far end, lines into one near the
             // start. Crossing lines spread their labels along the curves instead.
             const t = list.length < 2 ? .5 : stages[i - 1].members.length === 1 ? .72 : stage.members.length === 1 ? .28 : .3 + .4 * n / (list.length - 1);
-            return <span key={`${from}-${to}`} className={`routeFanLabel tone-${linkTone([point], true)}`} style={{ left: `${t * 100}%`, top: y1 + (y2 - y1) * (3 * t * t - 2 * t * t * t) }}
-              title={point ? `${serverName(from)} → ${serverName(to)}，测量于 ${new Date(point.at).toLocaleString()}` : `${serverName(from)} → ${serverName(to)}，尚无有效测量数据`}>
-              <span className="routeFanPair">{serverName(from)} → {serverName(to)}</span> <strong>{latencyLabel(point)}</strong>
-            </span>;
+            return <RelayEdgeControl key={`${from}-${to}`} from={from} to={to} routeId={route.id} edge={relay} latency={latencyLabel(point)}
+              tone={linkTone([point], true)} style={{ left: `clamp(60px, ${t * 100}%, calc(100% - 60px))`, top: y1 + (y2 - y1) * (3 * t * t - 2 * t * t * t) }} />;
           })}
         </div>}
         <div className={`routeStage ${stage.kind}`}>

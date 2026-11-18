@@ -166,6 +166,36 @@ func TestOpenRCInstallForwardReloadAndJobs(t *testing.T) {
 		_ = udp.Close()
 		t.Fatal("UDP listener missing")
 	}
+	// A relay-only change through the actual helper apply must preserve the
+	// running forwarder. A service restart changes this OpenRC child PID.
+	state.Revision++
+	state.Forwards[1].RouteID = "relay-test"
+	if err := applyDesiredInternal(state, nil); err != nil {
+		t.Fatal(err)
+	}
+	const forwardPIDFile = "/run/openrc/options/mui-forward/child_pid"
+	beforeRelay, err := os.ReadFile(forwardPIDFile)
+	if err != nil || len(beforeRelay) == 0 {
+		t.Fatalf("no forwarder PID: %v", err)
+	}
+	state.Revision++
+	state.Forwards[1].Targets[0].ServerID = "relay-target"
+	state.Forwards[1].Targets[0].Override = shared.RelayDegraded
+	if err := applyDesiredInternal(state, nil); err != nil {
+		t.Fatal(err)
+	}
+	afterRelay, err := os.ReadFile(forwardPIDFile)
+	if err != nil || string(afterRelay) != string(beforeRelay) {
+		t.Fatalf("relay-only apply restarted forwarder: %q → %q (%v)", beforeRelay, afterRelay, err)
+	}
+	state.Revision++
+	state.Forwards[1].Targets[0].Downstream = shared.RelayDown
+	if err := applyDesiredInternal(state, nil); err != nil {
+		t.Fatal(err)
+	}
+	if afterDownstream, err := os.ReadFile(forwardPIDFile); err != nil || string(afterDownstream) != string(beforeRelay) {
+		t.Fatalf("downstream-only apply restarted forwarder: %q → %q (%v)", beforeRelay, afterDownstream, err)
+	}
 	marker := filepath.Join(dir, "scheduled")
 	if err := scheduleServiceJob("mui-test-cancel", time.Second, "/bin/sh", "-c", `printf bad > "$1"`, "sh", marker); err != nil {
 		t.Fatal(err)

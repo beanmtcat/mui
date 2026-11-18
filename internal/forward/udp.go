@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"mui/internal/shared"
 )
 
 // ---- UDP
@@ -104,9 +106,17 @@ func (r *rule) openSession(listener *net.UDPConn, client netip.AddrPort) *udpSes
 	r.svc.clients.record(r.spec, src, time.Now())
 	session := &udpSession{conn: conn, target: target, remote: remote}
 	session.last.Store(time.Now().UnixNano())
+	r.relayMu.RLock()
+	if state, manual := target.relayStatus(time.Now()); manual && state == shared.RelayDown {
+		r.relayMu.RUnlock()
+		_ = conn.Close()
+		r.release(src, &r.svc.udpTotal)
+		return nil
+	}
 	r.mu.Lock()
 	r.sessions[client] = session
 	r.mu.Unlock()
+	r.relayMu.RUnlock()
 	if r.stopped() {
 		_ = conn.Close()
 	}

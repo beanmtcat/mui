@@ -47,7 +47,7 @@ var (
 	tcpIdleTimeout    = time.Hour
 	tcpInitialTimeout = 2 * time.Minute
 	udpIdleTimeout    = 2 * time.Minute
-	sweepInterval  = 30 * time.Second
+	sweepInterval     = 30 * time.Second
 	// How often a quiet TCP relay stops waiting to publish what it has moved.
 	relayTick = 10 * time.Second
 	// How often a destination given as a host name is looked up again.
@@ -88,25 +88,26 @@ type Service struct {
 
 	// Rules that share a destination (a route's TCP and UDP forwards) share
 	// its health probe instead of each connecting on its own.
-	probeMu sync.Mutex
-	probes  map[string]*probe
+	probeMu       sync.Mutex
+	probes        map[string]*probe
+	qualityGroups map[string]*relayQualityGroup
 }
 
 type probe struct {
-	at   time.Time
-	done chan struct{}
-	ok   bool
+	at     time.Time
+	done   chan struct{}
+	result probeResult
 }
 
 // probe connects to a destination once per half health interval, whichever
 // rule asks; concurrent askers wait for the same attempt.
-func (s *Service) probe(ctx context.Context, t *target) bool {
+func (s *Service) probe(ctx context.Context, t *target) probeResult {
 	key := t.host + "\x00" + strconv.Itoa(t.port)
 	s.probeMu.Lock()
 	if p := s.probes[key]; p != nil && time.Since(p.at) < healthInterval/2 {
 		s.probeMu.Unlock()
 		<-p.done
-		return p.ok
+		return p.result
 	}
 	if s.probes == nil || len(s.probes) > 1024 {
 		s.probes = map[string]*probe{} // Forget destinations no rule uses any more.
@@ -115,12 +116,13 @@ func (s *Service) probe(ctx context.Context, t *target) bool {
 	s.probes[key] = p
 	s.probeMu.Unlock()
 	conn, err := t.dialTCP(ctx)
+	elapsed := time.Since(p.at)
 	if err == nil {
 		_ = conn.Close()
 	}
-	p.ok = err == nil
+	p.result = probeResult{at: p.at, elapsed: elapsed, ok: err == nil}
 	close(p.done)
-	return p.ok
+	return p.result
 }
 
 // Start binds every enabled rule before returning.
@@ -172,6 +174,7 @@ func (s *Service) Reload(rules []shared.ForwardRule) error {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	defer s.pruneRelayQualityGroups()
 	select {
 	case <-s.closed:
 		return errors.New("forward service is closed")
@@ -180,7 +183,7 @@ func (s *Service) Reload(rules []shared.ForwardRule) error {
 	// Snapshot the running rules so a failed start can roll back to them.
 	oldSpecs := make(map[string]shared.ForwardRule, len(s.rules))
 	for id, running := range s.rules {
-		oldSpecs[id] = running.spec
+		oldSpecs[id] = running.specWithRelayTargets()
 	}
 	// Pre-validation, before anything is stopped: two wanted rules must not
 	// share one listen address.
@@ -271,6 +274,9 @@ func (s *Service) Reload(rules []shared.ForwardRule) error {
 		s.rules[id] = startedRule
 		started = append(started, id)
 	}
+	for _, id := range order {
+		s.rules[id].updateRelayTargets(wanted[id].Targets)
+	}
 	return nil
 }
 
@@ -314,7 +320,7 @@ func sameEndpoints(a, b shared.ForwardRule) bool {
 		return false
 	}
 	for i := range a.Targets {
-		if a.Targets[i] != b.Targets[i] {
+		if a.Targets[i].Host != b.Targets[i].Host || a.Targets[i].Port != b.Targets[i].Port {
 			return false
 		}
 	}
@@ -401,6 +407,9 @@ func (s *Service) startRule(spec shared.ForwardRule, stats *counter) (*rule, err
 	dynamic := false
 	for _, t := range spec.Targets {
 		target := newTarget(t.Host, t.Port)
+		if spec.RouteID != "" {
+			target.updateRelay(t, time.Now())
+		}
 		// A literal target that rejectPrivateAddr refused must never start:
 		// the administrator configured it, but forwarding to it would turn
 		// this host into an SSRF relay. TestAllowLoopbackTarget (set only by
@@ -424,6 +433,12 @@ func (s *Service) startRule(spec shared.ForwardRule, stats *counter) (*rule, err
 	if len(r.targets) == 0 {
 		return nil, fmt.Errorf("转发 %q 没有目标", spec.Name)
 	}
+	r.quality = s.relayQualityFor(spec)
+	if r.quality != nil {
+		for i, target := range r.targets {
+			target.quality = qualityRef{r.quality, i}
+		}
+	}
 	address := forwardAddress(spec)
 	if spec.Network == "tcp" {
 		listener, err := net.Listen("tcp", address)
@@ -442,14 +457,14 @@ func (s *Service) startRule(spec shared.ForwardRule, stats *counter) (*rule, err
 		s.wg.Add(1)
 		go r.serveUDP(listener.(*net.UDPConn))
 	}
-	if dynamic || len(r.targets) > 1 {
+	if dynamic || len(r.targets) > 1 || spec.RouteID != "" && tcpHealth(spec) {
 		ctx, cancel := context.WithCancel(context.Background())
 		r.cancelLookup = cancel
 		if dynamic {
 			s.wg.Add(1)
 			go r.followTargets(ctx)
 		}
-		if len(r.targets) > 1 && tcpHealth(spec) {
+		if (len(r.targets) > 1 || spec.RouteID != "") && tcpHealth(spec) {
 			s.wg.Add(1)
 			go r.checkHealth(ctx)
 		} else if len(r.targets) > 1 && spec.Balance != "round-robin" {

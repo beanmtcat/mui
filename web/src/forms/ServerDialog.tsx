@@ -20,6 +20,7 @@ import {
 } from "../app/helpers";
 import { Advanced, Field, HelpTip, SubmitButton, useBusy } from "../app/ui";
 import { Dialog } from "./Dialog";
+import RelayOverrideDialog from "./RelayOverrideDialog";
 
 const GB_BYTES = 1024 ** 3;
 const TB_BYTES = 1024 ** 4;
@@ -68,6 +69,7 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
   const { servers, nodes, operations, agentReleases, coreReleases, refreshing, refresh, act, closeModal, goTo, setOfflineServer, showInstall } = useApp();
   const initialDrafts = useMemo(() => draftsFromServer(initial), [initial]);
   const [serverForm, setServerForm] = useState(initial);
+  const [relayOpen, setRelayOpen] = useState(false);
   const [drafts, setDrafts] = useState<BillingDrafts>(initialDrafts);
   const { busy, run } = useBusy();
   const existingGroups = useMemo(
@@ -251,10 +253,12 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
   );
   const hasOrganizeInitial = !!(initial.group || initial.sortWeight || initial.alertMuted);
   const hasPublicInitial = !!(initial.publicVisible || initial.publicName || initial.publicNote);
+  if (relayOpen && serverForm.id) return <RelayOverrideDialog to={serverForm.id} onClose={() => setRelayOpen(false)} />;
   return <Dialog title={serverForm.id ? "编辑服务器" : "新建服务器"} value={{ serverForm, drafts }} initial={{ serverForm: initial, drafts: initialDrafts }} busy={busy}>
               <form className="serverForm" onSubmit={submitServer}>
                 <section className="serverFormSection" aria-labelledby="server-basic-title">
                   <h3 id="server-basic-title">基本信息</h3>
+                  {serverForm.id && <button className="ghost" type="button" onClick={() => setRelayOpen(true)}>作为中转</button>}
                   <div className="formGrid">
                     <Field label="服务器名 *">
                       <input

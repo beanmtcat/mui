@@ -30,6 +30,8 @@ type target struct {
 	down     bool
 	streak   int       // consecutive probe results contradicting the current state
 	retryAt  time.Time // passive checks retry after a bounded cooldown
+	relay    relayTargetState
+	quality  qualityRef // Assigned before the target starts serving.
 
 	mu sync.RWMutex
 	// latest is the most recent answer, in resolver order. previous is the one
@@ -41,9 +43,7 @@ type target struct {
 func (t *target) up() bool {
 	t.healthMu.Lock()
 	defer t.healthMu.Unlock()
-	if t.down && !t.retryAt.IsZero() && !time.Now().Before(t.retryAt) {
-		t.down, t.streak, t.retryAt = false, 0, time.Time{}
-	}
+	t.refreshDownLocked(time.Now())
 	return !t.down
 }
 
@@ -59,6 +59,8 @@ func (t *target) observe(ok bool) bool {
 		return false
 	}
 	t.down, t.streak = !ok, 0
+	t.retryAt = time.Time{}
+	t.recordAutoLocked("probe_failed", time.Now())
 	return true
 }
 
@@ -67,6 +69,9 @@ func (t *target) observe(ok bool) bool {
 func (t *target) markDown() bool { return t.markDownFor(0) }
 
 func (t *target) markDownFor(cooldown time.Duration) bool {
+	if t.quality.group != nil {
+		return t.quality.markDown(time.Now())
+	}
 	t.healthMu.Lock()
 	defer t.healthMu.Unlock()
 	was := !t.down
@@ -75,6 +80,9 @@ func (t *target) markDownFor(cooldown time.Duration) bool {
 		t.retryAt = time.Now().Add(cooldown)
 	} else {
 		t.retryAt = time.Time{}
+	}
+	if was {
+		t.recordAutoLocked("dial_failed", time.Now())
 	}
 	return was
 }

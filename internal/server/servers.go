@@ -76,6 +76,8 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 		}
 		for i := range list {
 			list[i].Status = serverStatus(list[i])
+			list[i].RelayStates = nil
+			list[i].RelayDownstream, list[i].RelayDownstreamPending = nil, nil
 			ct := cycleMap[list[i].ID]
 			list[i].CycleTraffic = &ct
 		}
@@ -227,6 +229,7 @@ func (a *App) purgeServer(id string) error {
 		`DELETE FROM mui_nodes WHERE server_id=$1`, `DELETE FROM mui_firewall_rules WHERE server_id=$1`, `DELETE FROM mui_forwards WHERE server_id=$1`,
 		`DELETE FROM mui_operations WHERE server_id=$1`, `DELETE FROM mui_server_traffic WHERE server_id=$1`, `DELETE FROM mui_server_totals WHERE server_id=$1`, `DELETE FROM mui_server_cycle_traffic WHERE server_id=$1`, `DELETE FROM mui_server_applied WHERE server_id=$1`,
 		`DELETE FROM mui_connection_ips WHERE server_id=$1`, `DELETE FROM mui_entry_connection_ips WHERE server_id=$1`,
+		`DELETE FROM mui_relay_overrides WHERE from_server_id=$1 OR to_server_id=$1`,
 		`DELETE FROM mui_servers WHERE id=$1`,
 	} {
 		if _, err = tx.Exec(stmt, id); err != nil {

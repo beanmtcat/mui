@@ -129,8 +129,9 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) 
 	if err := chownMui(DataDir); err != nil {
 		return err
 	}
+	relayOnly := needsForward && wasForwardActive && onlyRelayForwardChanges(previousForward, forwardConfig)
 	forwardUnitChanged := false
-	if needsForward {
+	if needsForward && !relayOnly {
 		var err error
 		if forwardUnitChanged, err = ensureForwardUnit(); err != nil {
 			return err
@@ -244,11 +245,16 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) 
 		// A failed reload can leave some new rules running. Reload the old file
 		// in place first so rules that never changed keep their connections.
 		if forwardActive() && !forwardUnitChanged {
-			if _, err := serviceCommand("reload", "mui-forward.service"); err == nil {
-				if err = waitForwardReady(rollbackRaw); err == nil {
-					return nil
-				}
+			_, err := serviceCommand("reload", "mui-forward.service")
+			if err == nil {
+				err = waitForwardReady(rollbackRaw)
 			}
+			if err == nil || relayOnly {
+				return err
+			}
+		}
+		if relayOnly {
+			return errors.New("forwarder stopped during relay status reload")
 		}
 		if _, err := serviceCommand("restart", "mui-forward.service"); err != nil {
 			return err
@@ -310,20 +316,7 @@ func applyDesiredInternal(state shared.DesiredState, raw []byte) (retErr error) 
 				return fail(err)
 			}
 			_ = os.Remove(ForwardReady)
-			if _, err = serviceCommand("enable", "mui-forward.service"); err != nil {
-				return fail(err)
-			}
-			// A running forwarder applies the new rules in place, so connections of
-			// rules that did not change survive. A process started from an older
-			// unit file may not know how to, and a stopped one has to be started.
-			action := "restart"
-			if wasForwardActive && !forwardUnitChanged {
-				action = "reload"
-			}
-			if _, err = serviceCommand(action, "mui-forward.service"); err != nil {
-				return fail(err)
-			}
-			err = waitForwardReady(forwardRaw)
+			err = applyForwardService(serviceCommand, waitForwardReady, forwardRaw, wasForwardActive, forwardUnitChanged)
 			if err != nil {
 				return fail(err)
 			}

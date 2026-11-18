@@ -494,7 +494,13 @@ func (a *App) agentJob(w http.ResponseWriter, r *http.Request) {
 func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 	id := r.Header.Get("X-Server-ID")
 	unlock := a.lockServer(id)
-	defer unlock()
+	dispatch := false
+	defer func() {
+		unlock()
+		if dispatch {
+			a.dispatchDownstream(id)
+		}
+	}()
 	var in shared.AgentReport
 	if !readJSON(w, r, &in) {
 		return
@@ -564,10 +570,15 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		errorJSON(w, 400, "too many forward connection points")
 		return
 	}
+	if len(in.RelayStates) > shared.MaxRelayReport {
+		errorJSON(w, 400, "too many relay states")
+		return
+	}
 	if len(in.RouteLatencies) > 200 {
 		errorJSON(w, 400, "too many route latency points")
 		return
 	}
+	becameRelayHealth := in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, shared.RelayHealthVersion) && !shared.VersionAtLeast(server.AgentVersion, shared.RelayHealthVersion)
 	becameClientIPs := in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.13") && !shared.VersionAtLeast(server.AgentVersion, "0.6.13")
 	becameRouteUFW := !shared.ManualFirewall(server.FirewallMode) && in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.15") && !shared.VersionAtLeast(server.AgentVersion, "0.6.15")
 	becameShadowTLSDial := in.AgentVersion != "" && shared.VersionAtLeast(in.AgentVersion, "0.6.16") && !shared.VersionAtLeast(server.AgentVersion, "0.6.16")
@@ -713,9 +724,18 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 			server.RouteLatencies = validRouteLatencies(in.RouteLatencies, forwards, now)
 		}
 	}
+	relayChanges, err := a.ingestRelayStates(&server, in.RelayStates, now)
+	if err != nil {
+		errorJSON(w, 500, err.Error())
+		return
+	}
 	if err = a.Store.PutServer(server); err != nil {
 		errorJSON(w, 500, err.Error())
 		return
+	}
+	dispatch = len(server.RelayDownstreamPending) > 0
+	if len(relayChanges) > 0 {
+		a.recordRelayChanges(server, relayChanges, now)
 	}
 	minTrafficAt, maxTrafficAt := trafficTimeWindow(now, server.ClockSkewSeconds)
 	if len(in.Traffic) > 0 {
@@ -981,13 +1001,13 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	if becameForward || becameForwardTCPUDP || becameClientIPs || becameRouteUFW {
+	if becameForward || becameForwardTCPUDP || becameClientIPs || becameRouteUFW || becameRelayHealth {
 		forwards, e := a.Store.Forwards(id)
 		if e != nil {
 			errorJSON(w, 500, e.Error())
 			return
 		}
-		if len(forwards) > 0 {
+		if len(forwards) > 0 && (becameForward || becameForwardTCPUDP || becameClientIPs || becameRouteUFW || slices.ContainsFunc(forwards, isRouteForward)) {
 			if err = a.queueApplyLocked(id, "forwards.apply"); err != nil {
 				errorJSON(w, 500, err.Error())
 				return

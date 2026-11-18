@@ -115,6 +115,7 @@ func RunForward(ctx context.Context) error {
 	}
 	defer os.Remove(ForwardReady)
 	defer os.Remove(ForwardConnections)
+	defer os.Remove(relaySnapshotPath)
 	// SIGHUP applies a changed rule file in place: rules that did not change keep
 	// their listeners and connections. The ready file is only rewritten after a
 	// reload that fully succeeded, which is how the helper learns the outcome.
@@ -151,6 +152,9 @@ func RunForward(ctx context.Context) error {
 		runForwardStats(statsCtx, ForwardStats, instanceID, func() map[string]forward.Counter {
 			if err := writeForwardConnections(ForwardConnections, service.ConnectionSnapshot()); err != nil {
 				fmt.Fprintln(os.Stderr, "forward clients:", err)
+			}
+			if err := writeRelaySnapshot(service.RelaySnapshot()); err != nil {
+				fmt.Fprintln(os.Stderr, "relay states:", err)
 			}
 			return service.Snapshot()
 		}, 5*time.Second)

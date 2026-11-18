@@ -42,6 +42,7 @@ const (
 
 // HostStatus is what the privileged helper can see and the unprivileged agent cannot.
 type HostStatus struct {
+	RelayStates            []shared.RelayState             `json:"relayStates,omitempty"`
 	ForwardConnections     []shared.ForwardConnectionPoint `json:"forwardConnections,omitempty"`
 	OutboundBindingSupport bool                            `json:"outboundBindingSupport"`
 	UFW                    string                          `json:"ufw"`

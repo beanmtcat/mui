@@ -92,6 +92,7 @@ func Run(ctx context.Context) error {
 	latencyCtx, stopLatency := context.WithCancel(ctx)
 	defer stopLatency()
 	latencies := &routeLatencySampler{}
+	relayOffset := 0
 	go latencies.run(latencyCtx)
 	revoked := false
 	markRevoked := func(err error) {
@@ -299,7 +300,7 @@ func Run(ctx context.Context) error {
 			report := shared.AgentReport{OS: osRelease(), Arch: runtime.GOARCH, AgentVersion: Version, AgentBuild: build, BuildDigest: build,
 				ManualFirewallSupport: host.ManualFirewallSupport, AgentSelfUpdate: host.AgentSelfUpdate, NodeFirewallPolicies: host.NodeFirewallPolicies, NodeDomainBlock: host.NodeDomainBlock, NodeSOCKSOutbound: host.NodeSOCKSOutbound, MultiUserStats: host.MultiUserStats, ForwardSupport: host.ForwardSupport, ForwardTCPUDP: host.ForwardTCPUDP, ShadowTLSAuth: host.ShadowTLSAuth, SnellFixedPort: host.SnellFixedPort, SnellV6: host.SnellV6, HostMonitor: host.HostMonitor, AgentProxySupport: host.AgentProxySupport, OutboundBindingSupport: host.OutboundBindingSupport, ReleaseKeyPinned: host.ReleaseKeyPinned,
 				CoreVersion: coreVersions.get(), CoreBuild: coreBuild, CoreDigest: coreBuild, CoreSelfUpdate: host.CoreSelfUpdate,
-				UFWStatus: host.UFW, StatsStatus: statsStatus, Traffic: state.Pending[:batchSize], UserTraffic: state.UserPending[:userBatch], ForwardTraffic: host.ForwardTraffic, ServerTraffic: state.NetworkPending[:networkBatch], Connections: pendingConnections, ForwardConnections: host.ForwardConnections, RouteLatencies: latencies.snapshot(),
+				UFWStatus: host.UFW, StatsStatus: statsStatus, Traffic: state.Pending[:batchSize], UserTraffic: state.UserPending[:userBatch], ForwardTraffic: host.ForwardTraffic, ServerTraffic: state.NetworkPending[:networkBatch], Connections: pendingConnections, ForwardConnections: host.ForwardConnections, RouteLatencies: latencies.snapshot(), RelayStates: relayReportBatch(host.RelayStates, &relayOffset),
 				IPv4: ipv4, ObservedIPv4: cachedObservedIPv4, IPv6: ipv6, AgentTime: &now, HostReported: true, SSHPorts: host.SSHPorts, FirewallConflict: host.Conflict, UFWRules: host.Rules}
 			headers := map[string]string{"X-Server-ID": c.ServerID, "Authorization": "Bearer " + c.Token}
 			var reply struct {

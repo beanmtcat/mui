@@ -94,7 +94,7 @@ func (r *rule) proxyTCP(client *net.TCPConn) {
 		}
 		pair.close()
 	}()
-	upstream := r.dialUpstream()
+	upstream, target := r.dialUpstream()
 	if upstream == nil {
 		return
 	}
@@ -106,24 +106,36 @@ func (r *rule) proxyTCP(client *net.TCPConn) {
 		return
 	}
 	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		relay(upstream, client, &r.stats.up, &pair.last, &pair.transferred)
-	}()
-	relay(client, upstream, &r.stats.down, &pair.last, &pair.transferred)
+	if target.quality.group != nil {
+		observation := relayTCPObservation{target: target.quality, src: sourceOf(client.RemoteAddr()), started: time.Now()}
+		go func() {
+			defer close(done)
+			observation.upload(pair, r)
+		}()
+		observation.download(pair, r)
+	} else {
+		go func() {
+			defer close(done)
+			relay(upstream, client, &r.stats.up, &pair.last, &pair.transferred, nil)
+		}()
+		relay(client, upstream, &r.stats.down, &pair.last, &pair.transferred, nil)
+	}
 	<-done
 }
 
 // dialUpstream connects to the first destination that answers, in candidate
 // order, within ten seconds overall. A destination that refuses is marked down
 // at once when there are others to use.
-func (r *rule) dialUpstream() *net.TCPConn {
+func (r *rule) dialUpstream() (*net.TCPConn, *target) {
 	deadline := time.Now().Add(10 * time.Second)
 	candidates := r.candidates()
 	for i, t := range candidates {
+		if state, manual := t.relayStatus(time.Now()); manual && state == shared.RelayDown {
+			continue
+		}
 		budget := time.Until(deadline)
 		if budget <= 0 {
-			return nil
+			return nil, nil
 		}
 		if left := len(candidates) - i; left > 1 {
 			// Leave time for the remaining destinations.
@@ -133,11 +145,11 @@ func (r *rule) dialUpstream() *net.TCPConn {
 		conn, err := t.dialTCP(ctx)
 		cancel()
 		if err == nil {
-			return conn
+			return conn, t
 		}
 		r.failedTarget(t)
 	}
-	return nil
+	return nil, nil
 }
 
 // relay moves one direction of a connection. Both ends are plain TCP sockets
@@ -150,7 +162,7 @@ func (r *rule) dialUpstream() *net.TCPConn {
 // little it sends. Only the read side has a deadline: it can expire only while
 // waiting for input, when nothing is in flight, so an interruption never loses
 // data.
-func relay(dst, src *net.TCPConn, count, last *atomic.Int64, transferred *atomic.Bool) {
+func relay(dst, src *net.TCPConn, count, last *atomic.Int64, transferred *atomic.Bool, beforeClose func(error)) {
 	for {
 		_ = src.SetReadDeadline(time.Now().Add(relayTick))
 		n, err := io.CopyN(dst, src, copyChunk)
@@ -165,6 +177,9 @@ func relay(dst, src *net.TCPConn, count, last *atomic.Int64, transferred *atomic
 		var netErr net.Error
 		if errors.As(err, &netErr) && netErr.Timeout() {
 			continue
+		}
+		if beforeClose != nil {
+			beforeClose(err)
 		}
 		break
 	}

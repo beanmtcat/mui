@@ -1,10 +1,11 @@
-import type { Node, Route, Server } from "../api";
+import { relaySeverity } from "./relayHealth";
+import type { Node, RelayAutoState, Route, Server } from "../api";
 import countryCenters from "../globe-data/country-centers.json";
 import { cityTable, regionTable, type PlaceEntry } from "./geo-places";
 
 export type Point = [longitude: number, latitude: number];
 export type ServerPlace = { point: Point; precision: "city" | "country" };
-export type RouteSegment = { from: string; to: string; routeIds: string[]; routeNames: string[]; active: boolean };
+export type RouteSegment = { from: string; to: string; routeIds: string[]; routeNames: string[]; active: boolean; relayState?: RelayAutoState };
 export type ScreenPoint<T> = { id: string; point: Point; screen: Point; item: T };
 export type ScreenCluster<T> = {
   key: string;
@@ -135,15 +136,18 @@ export function routeSegments(routes: Route[], nodes: Node[], includeDisabled: b
     if ((!includeDisabled && !route.enabled) || (routeId && route.id !== routeId)) continue;
     const exit = nodeById.get(route.nodeId)?.serverId;
     if (!exit) continue;
+    const edgeStates = new Map(route.relayEdges?.map((edge) => [`${edge.fromServerId}\u0000${edge.toServerId}`, edge.reported?.state]));
     const groups = [[route.entryServerId], ...route.hops.map((hop) => hop.serverIds), [exit]];
     for (let i = 0; i < groups.length - 1; i++) {
       for (const from of groups[i]) for (const to of groups[i + 1]) {
         if (!from || !to || from === to) continue;
         const key = `${from}\u0000${to}`;
-        const current = segments.get(key) || { from, to, routeIds: [], routeNames: [], active: false };
+        const current: RouteSegment = segments.get(key) || { from, to, routeIds: [], routeNames: [], active: false };
         current.routeIds.push(route.id);
         current.routeNames.push(route.name);
         current.active ||= route.enabled;
+        const state = route.enabled ? edgeStates.get(key) : undefined;
+        if (state && (!current.relayState || relaySeverity[state] > relaySeverity[current.relayState])) current.relayState = state;
         segments.set(key, current);
       }
     }

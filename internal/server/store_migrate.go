@@ -328,6 +328,10 @@ ARM64 服务器将 amd64 换成 arm64。已是当前构建、Agent 不支持自�
 		// Creates mui_status_assets with driver-specific binary column
 		// (BYTEA on PostgreSQL, BLOB on SQLite); executed via dataMigrations[29].
 	},
+	{
+		`CREATE TABLE IF NOT EXISTS mui_relay_overrides (from_server_id TEXT NOT NULL, to_server_id TEXT NOT NULL, state TEXT NOT NULL, until_ms BIGINT NOT NULL, note TEXT NOT NULL, updated_ms BIGINT NOT NULL, PRIMARY KEY(from_server_id,to_server_id))`,
+		`CREATE INDEX IF NOT EXISTS mui_idx_relay_overrides_to ON mui_relay_overrides(to_server_id)`,
+	},
 }
 
 var dataMigrations = map[int64]func(*sql.Tx, string) error{

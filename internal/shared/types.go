@@ -32,34 +32,34 @@ type Server struct {
 	AutoSyncPublicIP bool `json:"autoSyncPublicIp,omitempty"`
 	// InternalAddress is how other servers on the same private network or
 	// dedicated line (IPLC/IEPL) reach this one; a route hop can use it.
-	InternalAddress              string     `json:"internalAddress"`
-	OutboundInterface            string     `json:"outboundInterface,omitempty"`
-	OutboundBindingSupport       bool       `json:"outboundBindingSupport,omitempty"`
-	AgentProxySwitchPending      bool       `json:"agentProxySwitchPending,omitempty"`
-	AgentProxyPreviousInternal   bool       `json:"agentProxyPreviousInternal,omitempty"`
-	AgentProxyPreviousSourceMode string     `json:"agentProxyPreviousSourceMode,omitempty"`
-	AgentProxyPreviousNodeID     string     `json:"agentProxyPreviousNodeId,omitempty"`
-	AgentProxyNodeID             string     `json:"agentProxyNodeId,omitempty"`
-	AgentProxyInternal           bool       `json:"agentProxyInternal,omitempty"`
-	AgentProxySourceMode         string     `json:"agentProxySourceMode,omitempty"`
-	AgentProxySupport            bool       `json:"agentProxySupport,omitempty"`
-	FirewallMode                 string     `json:"firewallMode"`
-	ManualFirewallSupport        bool       `json:"manualFirewallSupport"`
-	Status                       string     `json:"status"`
-	OS                           string     `json:"os"`
-	Arch                         string     `json:"arch"`
-	AgentVersion                 string     `json:"agentVersion"`
-	AgentBuild                   string     `json:"agentBuild"`
-	AgentSelfUpdate              bool       `json:"agentSelfUpdate"`
-	NodeFirewallPolicies         bool       `json:"nodeFirewallPolicies"`
-	NodeDomainBlock              bool       `json:"nodeDomainBlock,omitempty"`
-	NodeSOCKSOutbound            bool       `json:"nodeSocksOutbound,omitempty"`
-	MultiUserStats               bool       `json:"multiUserStats"`
-	ForwardTCPUDP                bool       `json:"forwardTcpUdp"`
-	ForwardSupport               bool       `json:"forwardSupport"`
-	ShadowTLSAuth                bool       `json:"shadowTlsAuth"`
-	SnellFixedPort               bool       `json:"snellFixedPort"`
-	SnellV6                      bool       `json:"snellV6"`
+	InternalAddress              string               `json:"internalAddress"`
+	OutboundInterface            string               `json:"outboundInterface,omitempty"`
+	OutboundBindingSupport       bool                 `json:"outboundBindingSupport,omitempty"`
+	AgentProxySwitchPending      bool                 `json:"agentProxySwitchPending,omitempty"`
+	AgentProxyPreviousInternal   bool                 `json:"agentProxyPreviousInternal,omitempty"`
+	AgentProxyPreviousSourceMode string               `json:"agentProxyPreviousSourceMode,omitempty"`
+	AgentProxyPreviousNodeID     string               `json:"agentProxyPreviousNodeId,omitempty"`
+	AgentProxyNodeID             string               `json:"agentProxyNodeId,omitempty"`
+	AgentProxyInternal           bool                 `json:"agentProxyInternal,omitempty"`
+	AgentProxySourceMode         string               `json:"agentProxySourceMode,omitempty"`
+	AgentProxySupport            bool                 `json:"agentProxySupport,omitempty"`
+	FirewallMode                 string               `json:"firewallMode"`
+	ManualFirewallSupport        bool                 `json:"manualFirewallSupport"`
+	Status                       string               `json:"status"`
+	OS                           string               `json:"os"`
+	Arch                         string               `json:"arch"`
+	AgentVersion                 string               `json:"agentVersion"`
+	AgentBuild                   string               `json:"agentBuild"`
+	AgentSelfUpdate              bool                 `json:"agentSelfUpdate"`
+	NodeFirewallPolicies         bool                 `json:"nodeFirewallPolicies"`
+	NodeDomainBlock              bool                 `json:"nodeDomainBlock,omitempty"`
+	NodeSOCKSOutbound            bool                 `json:"nodeSocksOutbound,omitempty"`
+	MultiUserStats               bool                 `json:"multiUserStats"`
+	ForwardTCPUDP                bool                 `json:"forwardTcpUdp"`
+	ForwardSupport               bool                 `json:"forwardSupport"`
+	ShadowTLSAuth                bool                 `json:"shadowTlsAuth"`
+	SnellFixedPort               bool                 `json:"snellFixedPort"`
+	SnellV6                      bool                 `json:"snellV6"`
 	HostMonitor                  bool                 `json:"hostMonitor,omitempty"`
 	ReleaseKeyPinned             bool                 `json:"releaseKeyPinned"`
 	ExpiresAt                    *time.Time           `json:"expiresAt,omitempty"`
@@ -79,25 +79,28 @@ type Server struct {
 	PublicNote                   string               `json:"publicNote,omitempty"`
 	PublicVisible                bool                 `json:"publicVisible,omitempty"`
 	PublicName                   string               `json:"publicName,omitempty"`
-	AppliedRevision              int64      `json:"appliedRevision"`
-	CoreVersion                  string     `json:"coreVersion"`
-	CoreBuild                    string     `json:"coreBuild"`
-	CoreSelfUpdate               bool       `json:"coreSelfUpdate"`
-	UFWStatus                    string     `json:"ufwStatus"`
-	StatsStatus                  string     `json:"statsStatus"`
-	NetworkRx                    int64      `json:"networkRx"`
-	NetworkTx                    int64      `json:"networkTx"`
-	LastSeen                     *time.Time `json:"lastSeen"`
-	Revision                     int64      `json:"revision"`
+	AppliedRevision              int64                `json:"appliedRevision"`
+	CoreVersion                  string               `json:"coreVersion"`
+	CoreBuild                    string               `json:"coreBuild"`
+	CoreSelfUpdate               bool                 `json:"coreSelfUpdate"`
+	UFWStatus                    string               `json:"ufwStatus"`
+	StatsStatus                  string               `json:"statsStatus"`
+	NetworkRx                    int64                `json:"networkRx"`
+	NetworkTx                    int64                `json:"networkTx"`
+	LastSeen                     *time.Time           `json:"lastSeen"`
+	Revision                     int64                `json:"revision"`
 	// Reported by the agent; never edited by the administrator.
 	DetectedIPv4 string `json:"detectedIpv4"`
 	DetectedIPv6 string `json:"detectedIpv6"`
 	// Recent TCP connect timings from this server to the next route hop.
-	RouteLatencies   []RouteLatency `json:"routeLatencies,omitempty"`
-	ClockSkewSeconds int64          `json:"clockSkewSeconds"`
-	SSHPorts         []int          `json:"sshPorts"`
-	FirewallConflict string         `json:"firewallConflict"`
-	UFWRules         []string       `json:"ufwRules"`
+	RouteLatencies         []RouteLatency                   `json:"routeLatencies,omitempty"`
+	RelayStates            []RelayStateSample               `json:"relayStates,omitempty"`
+	RelayDownstream        map[string]RelayDownstreamStatus `json:"relayDownstream,omitempty"`
+	RelayDownstreamPending map[string]time.Time             `json:"relayDownstreamPending,omitempty"`
+	ClockSkewSeconds       int64                            `json:"clockSkewSeconds"`
+	SSHPorts               []int                            `json:"sshPorts"`
+	FirewallConflict       string                           `json:"firewallConflict"`
+	UFWRules               []string                         `json:"ufwRules"`
 }
 
 type Node struct {
@@ -199,8 +202,12 @@ type FirewallRule struct {
 
 // ForwardTarget is one destination of a forward.
 type ForwardTarget struct {
-	Host string `json:"host"`
-	Port int    `json:"port"`
+	Host          string     `json:"host"`
+	Port          int        `json:"port"`
+	ServerID      string     `json:"serverId,omitempty"`
+	Override      string     `json:"override,omitempty"`
+	OverrideUntil *time.Time `json:"overrideUntil,omitempty"`
+	Downstream    string     `json:"downstream,omitempty"`
 }
 
 // ForwardRule terminates an inbound TCP connection or UDP association on the
@@ -324,6 +331,7 @@ type Route struct {
 	Error string `json:"error,omitempty"`
 	// Filled in for the list view; never persisted with the route definition.
 	EdgeLatencies []RouteEdgeLatency `json:"edgeLatencies,omitempty"`
+	RelayEdges    []RelayEdge        `json:"relayEdges,omitempty"`
 }
 
 type RouteLatency struct {
@@ -568,6 +576,7 @@ type ServerTrafficPoint struct {
 type AgentReport struct {
 	ForwardConnections     []ForwardConnectionPoint `json:"forwardConnections,omitempty"`
 	RouteLatencies         []RouteLatency           `json:"routeLatencies,omitempty"`
+	RelayStates            []RelayState             `json:"relayStates,omitempty"`
 	ObservedIPv4           string                   `json:"observedIpv4,omitempty"`
 	OutboundBindingSupport bool                     `json:"outboundBindingSupport,omitempty"`
 	ManualFirewallSupport  bool                     `json:"manualFirewallSupport,omitempty"`

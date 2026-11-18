@@ -19,7 +19,7 @@ import { ActionMenu, Empty, HelpTip, parseSort, SortHeader, sortRows, Status, Ta
 import { useUrlParam } from "../app/url";
 
 export default function Servers() {
-  const { servers, nodes, forwards, operations, agentReleases, coreReleases, upgradingAgentIDs, updatingAgentIDs, serverWarnings, trafficLimitThreshold, ensureTrafficLimitThreshold, goTo, act, copy, runBatch, setConfirmation, setAgentDownloads, setOfflineServer, openServer, showInstall, deleteServer, matches, protect } = useApp();
+  const { openModal, servers, nodes, forwards, operations, agentReleases, coreReleases, upgradingAgentIDs, updatingAgentIDs, serverWarnings, trafficLimitThreshold, ensureTrafficLimitThreshold, goTo, act, copy, runBatch, setConfirmation, setAgentDownloads, setOfflineServer, openServer, showInstall, deleteServer, matches, protect } = useApp();
   useEffect(() => {
     ensureTrafficLimitThreshold();
   }, [ensureTrafficLimitThreshold]);
@@ -266,6 +266,7 @@ export default function Servers() {
                           <button onClick={() => openServer(s)}>编辑</button>
                           {s.managementMode === "offline" && <button onClick={() => setOfflineServer(s)}>离线配置</button>}
                           <ActionMenu>
+                          <button type="button" onClick={() => openModal({ kind: "relay", to: s.id })}>作为中转</button>
                           {!!s.billingCycle && (
                             <button
                               disabled={!s.expiresAt || s.status === "revoked"}

@@ -230,6 +230,24 @@ export type SurgeTemplate = { id: string; name: string; template: string; custom
 export type RouteSourceMode = "auto" | "public" | "internal";
 export type RouteSourceFamily = "ipv4" | "ipv6" | "both";
 export type RouteHop = { serverIds: string[]; balance: "failover" | "round-robin"; internal: boolean; addressModes?: Record<string, "public" | "internal">; sourceMode?: RouteSourceMode; sourceFamily?: RouteSourceFamily };
+export type RelayStatus = "normal" | "degraded" | "down";
+export type RelayAutoState = RelayStatus | "probation";
+export type RelayReport = {
+  forwardId: string; serverId: string; host: string; port: number;
+  state: RelayAutoState; source: "manual" | "auto"; autoState: RelayAutoState;
+  reason: "probe_failed" | "dial_failed" | "manual" | "healthy" | "slow_handshake" | "probe_loss" | "blackhole" | "recovering" | "downstream_down";
+  since: string; autoSince?: string; autoReason?: RelayReport["reason"];
+  stats?: { probeSuccesses: number; medianMs: number; baselineMs: number; passiveBadPercent: number; passiveSamples: number };
+};
+export type RelayOverride = { fromServerId: string; toServerId: string; state: RelayStatus; until?: string; note: string };
+export type RelayEdge = {
+  fromServerId: string;
+  toServerId: string;
+  reported?: RelayReport;
+  override?: RelayOverride;
+  availability?: "offline" | "upgrade";
+  downstreamFlapping?: boolean;
+};
 export type Route = {
   id: string;
   name: string;
@@ -246,10 +264,12 @@ export type Route = {
   notes: string;
   status?: string;
   error?: string;
+  relayEdges?: RelayEdge[];
   edgeLatencies?: { fromServerId: string; toServerId: string; tcpMs: number; ok: boolean; at: string }[];
 };
 export type AuditEntry = { id: string; at: string; action: string; target: string; detail: string; ip: string };
 export type TelegramEvents = {
+  relayState: { enabled: boolean };
   serverOffline: { enabled: boolean; offlineMinutes: number };
   applyFailed: { enabled: boolean };
   certExpiring: { enabled: boolean };

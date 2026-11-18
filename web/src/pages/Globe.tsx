@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { geoDistance, geoEquirectangular, geoGraticule10, geoInterpolate, geoOrthographic, geoPath, type GeoProjection } from "d3-geo";
 import type { FeatureCollection, LineString } from "geojson";
-import type { Server } from "../api";
+import type { RelayAutoState, Server } from "../api";
+import { relayStatusLabels } from "../app/relayHealth";
 import { useApp } from "../app/context";
 import { clusterScreenPoints, routeSegments, serverPlace, type Point, type ScreenCluster, type ScreenPoint } from "../app/geo";
 import { Status } from "../app/ui";
@@ -362,7 +363,7 @@ export default function Globe() {
   }), [path]);
 
   const linkItems = useMemo(() => {
-    const items: { key: string; d: string; active: boolean; title: string }[] = [];
+    const items: { key: string; d: string; active: boolean; relayState?: RelayAutoState; title: string }[] = [];
     for (const segment of segments) {
       const from = locations.get(segment.from)?.point, to = locations.get(segment.to)?.point;
       if (!from || !to) continue;
@@ -379,7 +380,7 @@ export default function Globe() {
         const line: LineString = { type: "LineString", coordinates: Array.from({ length: 33 }, (_, i) => between(i / 32)) };
         d = path(line) || "";
       }
-      if (d) items.push({ key: `${segment.from}:${segment.to}`, d, active: segment.active, title: `${serverName(segment.from)} → ${serverName(segment.to)} · ${segment.routeNames.join("、")}` });
+      if (d) items.push({ key: `${segment.from}:${segment.to}`, d, active: segment.active, relayState: segment.relayState, title: `${serverName(segment.from)} → ${serverName(segment.to)} · ${segment.routeNames.join("、")}${segment.relayState ? ` · ${relayStatusLabels[segment.relayState]}` : ""}` });
     }
     return items;
   }, [segments, locations, mode, center, size, projection, path, serverName]);
@@ -707,7 +708,7 @@ export default function Globe() {
             <path className="globeGraticule" d={grid} />
             <g className="globeLand">{landPaths.map((d, index) => <path key={index} d={d} />)}</g>
             <g className="globeLinks">{linkItems.map((link) => (
-              <path key={link.key} d={link.d} className={link.active ? "globeLinkActive" : "globeLinkDisabled"}>
+              <path key={link.key} d={link.d} className={link.active ? `globeLinkActive${link.relayState ? ` relay-${link.relayState}` : ""}` : "globeLinkDisabled"}>
                 <title>{link.title}</title>
               </path>
             ))}</g>
@@ -775,6 +776,8 @@ export default function Globe() {
           <span><i className="globeLegendDot partial" />部分在线</span>
           <span><i className="globeLegendDot offline" />离线服务器</span>
           <span><i className="globeLegendLine" />启用链路</span>
+          <span><i className="globeLegendLine degraded" />降级或试跑</span>
+          <span><i className="globeLegendLine down" />故障</span>
           <span><i className="globeLegendLine disabled" />停用链路</span>
         </div>
       </div>
