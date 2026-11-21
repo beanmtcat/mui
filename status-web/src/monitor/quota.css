@@ -58,7 +58,8 @@
 .monScope .monTraffic > .monQuotaTrack {
   grid-column: 1;
   grid-row: 2;
-  height: 7px;
+  align-self: center;
+  height: 6px;
 }
 
 .monScope .monTrafficUptime {
@@ -75,10 +76,12 @@
 .monScope .monTrafficValue {
   grid-column: 2;
   grid-row: 2;
+  align-self: center;
   justify-self: end;
   color: var(--mon-text-secondary);
   font-size: 11px;
   font-weight: 640;
+  line-height: 1.2;
   white-space: nowrap;
 }
 

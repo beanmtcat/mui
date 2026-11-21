@@ -49,6 +49,59 @@ function niceCeiling(peak: number, fixedMax?: number) {
   return ([1, 2, 5, 10].find((step) => step * magnitude >= peak) || 10) * magnitude;
 }
 
+function findNearestXIndex(
+  svgX: number,
+  count: number,
+  xAt: (index: number) => number,
+): number {
+  let best = 0;
+  let bestDist = Math.abs(xAt(0) - svgX);
+  for (let i = 1; i < count; i++) {
+    const dist = Math.abs(xAt(i) - svgX);
+    if (dist < bestDist) {
+      best = i;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+function resolveVisibleKeys(
+  hidden: Readonly<Record<string, boolean>>,
+  keys: readonly string[],
+): Set<string> {
+  const visible = new Set<string>();
+  for (const k of keys) {
+    if (!hidden[k]) visible.add(k);
+  }
+  if (visible.size === 0) {
+    for (const k of keys) visible.add(k);
+  }
+  return visible;
+}
+
+function toggleSeriesVisibility(
+  prev: Readonly<Record<string, boolean>>,
+  keys: readonly string[],
+  key: string,
+): Record<string, boolean> {
+  if (keys.length <= 1) return {};
+  const visible = resolveVisibleKeys(prev, keys);
+  const isCurrentlyVisible = visible.has(key);
+  // Clicking the sole remaining visible series restores all series.
+  if (isCurrentlyVisible && visible.size <= 1) {
+    return {};
+  }
+  const next: Record<string, boolean> = {};
+  for (const k of keys) {
+    const nextVisible = k === key ? !isCurrentlyVisible : visible.has(k);
+    if (!nextVisible) {
+      next[k] = true;
+    }
+  }
+  return next;
+}
+
 export function MonitorSeriesChart<T extends { at: string }>({
   title,
   subtitle,
@@ -62,6 +115,8 @@ export function MonitorSeriesChart<T extends { at: string }>({
   formatValue,
   emptyLabel = "暂无采样数据",
   extraReadout,
+  hiddenKeys,
+  onToggleSeries,
 }: {
   title: string;
   subtitle?: string;
@@ -74,24 +129,51 @@ export function MonitorSeriesChart<T extends { at: string }>({
   formatAxis: (v: number) => string;
   formatValue: (v: number) => string;
   emptyLabel?: string;
-  extraReadout?: (point: T) => string | null;
+  extraReadout?: (point: T, visibleKeys: ReadonlySet<string>) => string | null;
+  hiddenKeys?: Readonly<Record<string, boolean>>;
+  onToggleSeries?: (key: string) => void;
 }) {
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [internalHidden, setInternalHidden] = useState<Record<string, boolean>>({});
+  const effectiveHidden = hiddenKeys ?? internalHidden;
+  const seriesKeys = series.map((s) => s.key);
+  const visibleSet = resolveVisibleKeys(effectiveHidden, seriesKeys);
+  const visibleSeries = series.filter((s) => visibleSet.has(s.key));
+  const canToggle = series.length > 1;
+  const handleToggle = (key: string) => {
+    if (!canToggle) return;
+    if (onToggleSeries) {
+      onToggleSeries(key);
+      return;
+    }
+    setInternalHidden((prev) => toggleSeriesVisibility(prev, seriesKeys, key));
+  };
+
   const width = 720;
   const height = 180;
 
   let peak = 0;
   for (const p of points) {
-    for (const s of series) {
+    for (const s of visibleSeries) {
       const v = s.value(p);
       if (v !== null && Number.isFinite(v) && v > peak) peak = v;
     }
   }
-  const ceiling = niceCeiling(peak, fixedCeiling);
-  const x = (index: number) =>
-    points.length <= 1
-      ? width / 2
-      : 6 + (index / (points.length - 1)) * (width - 12);
+  const effectiveCeiling = visibleSeries.length === series.length ? fixedCeiling : undefined;
+  const ceiling = niceCeiling(peak, effectiveCeiling);
+  const pointTimes = points.map((p) => new Date(p.at).getTime());
+  const firstTime = pointTimes.length > 0 ? pointTimes[0] : NaN;
+  const lastTime = pointTimes.length > 0 ? pointTimes[pointTimes.length - 1] : NaN;
+  const timeSpan = lastTime - firstTime;
+  const hasTimeScale =
+    points.length > 1 && pointTimes.every((t) => Number.isFinite(t)) && timeSpan > 0;
+  const x = (index: number) => {
+    if (points.length <= 1) return width / 2;
+    if (hasTimeScale) {
+      return 6 + ((pointTimes[index] - firstTime) / timeSpan) * (width - 12);
+    }
+    return 6 + (index / (points.length - 1)) * (width - 12);
+  };
   const y = (value: number) =>
     height - 6 - (Math.max(0, Math.min(ceiling, value)) / ceiling) * (height - 12);
 
@@ -118,16 +200,37 @@ export function MonitorSeriesChart<T extends { at: string }>({
         : Math.min(hoverIndex, points.length - 1);
   const selected = selectedIndex >= 0 ? points[selectedIndex] : undefined;
 
-  const tickIndices =
-    points.length === 0
-      ? []
-      : [
-          0,
-          Math.floor((points.length - 1) * 0.25),
-          Math.floor((points.length - 1) * 0.5),
-          Math.floor((points.length - 1) * 0.75),
-          points.length - 1,
-        ].filter((idx, pos, arr) => idx >= 0 && idx < points.length && arr.indexOf(idx) === pos);
+  const xTicks: { key: string; label: string; optional: boolean }[] = (() => {
+    if (points.length === 0) return [];
+    if (points.length === 1) {
+      return [{ key: "0", label: formatChartTime(points[0].at, range), optional: false }];
+    }
+    if (hasTimeScale) {
+      const fractions =
+        timeSpan >= 4 * 60_000
+          ? [0, 0.25, 0.5, 0.75, 1]
+          : timeSpan >= 2 * 60_000
+            ? [0, 0.5, 1]
+            : [0, 1];
+      return fractions.map((f, pos) => ({
+        key: String(pos),
+        label: formatChartTime(new Date(firstTime + timeSpan * f).toISOString(), range),
+        optional: fractions.length === 5 && (pos === 1 || pos === 3),
+      }));
+    }
+    const tickIndices = [
+      0,
+      Math.floor((points.length - 1) * 0.25),
+      Math.floor((points.length - 1) * 0.5),
+      Math.floor((points.length - 1) * 0.75),
+      points.length - 1,
+    ].filter((idx, pos, arr) => idx >= 0 && idx < points.length && arr.indexOf(idx) === pos);
+    return tickIndices.map((idx, pos) => ({
+      key: String(idx),
+      label: formatChartTime(points[idx].at, range),
+      optional: pos === 1 || pos === 3,
+    }));
+  })();
 
   const cardStyle = {
     ...(accent ? { "--mon-chart-accent": accent } : {}),
@@ -142,14 +245,36 @@ export function MonitorSeriesChart<T extends { at: string }>({
           {subtitle && <span className="monitorChartSub">{subtitle}</span>}
         </div>
         <div className="trafficLegend monitorLegend">
-          {series.map((s) => (
-            <span
-              key={s.key}
-              className={`monSeries-${s.tone}${s.dashed ? " is-dashed" : ""}`}
-            >
-              {s.label}
-            </span>
-          ))}
+          {series.map((s) => {
+            const isHidden = !visibleSet.has(s.key);
+            if (!canToggle) {
+              return (
+                <span
+                  key={s.key}
+                  className={`monSeries-${s.tone}${s.dashed ? " is-dashed" : ""}`}
+                >
+                  {s.label}
+                </span>
+              );
+            }
+            const titleText = isHidden
+              ? `点击显示「${s.label}」`
+              : visibleSeries.length <= 1
+                ? "点击恢复全部指标"
+                : `点击隐藏「${s.label}」`;
+            return (
+              <button
+                key={s.key}
+                type="button"
+                className={`monitorLegendBtn monSeries-${s.tone}${s.dashed ? " is-dashed" : ""}${isHidden ? " is-hidden" : ""}`}
+                aria-pressed={!isHidden}
+                title={titleText}
+                onClick={() => handleToggle(s.key)}
+              >
+                {s.label}
+              </button>
+            );
+          })}
         </div>
       </div>
       <div className="trafficPlotRow">
@@ -167,17 +292,18 @@ export function MonitorSeriesChart<T extends { at: string }>({
             onMouseMove={(event) => {
               if (!points.length) return;
               const bounds = event.currentTarget.getBoundingClientRect();
-              const ratio = (event.clientX - bounds.left) / Math.max(1, bounds.width);
-              setHoverIndex(
-                Math.max(0, Math.min(points.length - 1, Math.round(ratio * (points.length - 1)))),
+              const ratio = Math.max(
+                0,
+                Math.min(1, (event.clientX - bounds.left) / Math.max(1, bounds.width)),
               );
+              setHoverIndex(findNearestXIndex(ratio * width, points.length, x));
             }}
             onMouseLeave={() => setHoverIndex(null)}
           >
             {[6, height / 2, height - 6].map((atY) => (
               <line key={atY} className="trafficGridLine" x1="0" x2={width} y1={atY} y2={atY} />
             ))}
-            {series.map((s) => {
+            {visibleSeries.map((s) => {
               const d = buildPath(s);
               return d ? (
                 <path
@@ -188,7 +314,7 @@ export function MonitorSeriesChart<T extends { at: string }>({
               ) : null;
             })}
             {points.length === 1 &&
-              series.map((s) => {
+              visibleSeries.map((s) => {
                 const v = s.value(points[0]);
                 return v !== null ? (
                   <circle
@@ -209,7 +335,7 @@ export function MonitorSeriesChart<T extends { at: string }>({
                   y1="6"
                   y2={height - 6}
                 />
-                {series.map((s) => {
+                {visibleSeries.map((s) => {
                   const v = s.value(selected);
                   return v !== null ? (
                     <circle
@@ -227,11 +353,11 @@ export function MonitorSeriesChart<T extends { at: string }>({
           {points.length === 0 && <div className="trafficZero">{emptyLabel}</div>}
         </div>
       </div>
-      {tickIndices.length > 0 && (
+      {xTicks.length > 0 && (
         <div className="trafficXAxis">
-          {tickIndices.map((idx, pos) => (
-            <span className={pos === 1 || pos === 3 ? "optional" : ""} key={idx}>
-              {formatChartTime(points[idx].at, range)}
+          {xTicks.map((tick) => (
+            <span className={tick.optional ? "optional" : ""} key={tick.key}>
+              {tick.label}
             </span>
           ))}
         </div>
@@ -239,7 +365,7 @@ export function MonitorSeriesChart<T extends { at: string }>({
       {selected && (
         <div className="trafficReadout monitorReadout">
           <strong>{formatChartTime(selected.at, range)}</strong>
-          {series.map((s) => {
+          {visibleSeries.map((s) => {
             const v = s.value(selected);
             return (
               <span key={s.key}>
@@ -247,7 +373,10 @@ export function MonitorSeriesChart<T extends { at: string }>({
               </span>
             );
           })}
-          {extraReadout && extraReadout(selected) && <span>{extraReadout(selected)}</span>}
+          {(() => {
+            const extraText = extraReadout ? extraReadout(selected, visibleSet) : null;
+            return extraText ? <span>{extraText}</span> : null;
+          })()}
         </div>
       )}
     </div>
@@ -289,8 +418,10 @@ export const MonitorMetricsCharts = memo(function MonitorMetricsCharts({
         ]}
         formatAxis={(v) => formatBytes(v)}
         formatValue={(v) => formatBytes(v)}
-        extraReadout={(p) =>
-          p.ramTotal > 0 ? `占比 ${((p.ramUsed / p.ramTotal) * 100).toFixed(1)}%` : null
+        extraReadout={(p, visibleKeys) =>
+          visibleKeys.has("ram") && p.ramTotal > 0
+            ? `占比 ${((p.ramUsed / p.ramTotal) * 100).toFixed(1)}%`
+            : null
         }
       />
       <MonitorSeriesChart
@@ -305,7 +436,12 @@ export const MonitorMetricsCharts = memo(function MonitorMetricsCharts({
         ]}
         formatAxis={(v) => `${formatBytes(v)}/s`}
         formatValue={(v) => `${formatBytes(v)}/s`}
-        extraReadout={(p) => `峰值 ↑ ${formatBytes(p.netUpPeak)}/s · ↓ ${formatBytes(p.netDownPeak)}/s`}
+        extraReadout={(p, visibleKeys) => {
+          const parts: string[] = [];
+          if (visibleKeys.has("up")) parts.push(`↑ ${formatBytes(p.netUpPeak)}/s`);
+          if (visibleKeys.has("down")) parts.push(`↓ ${formatBytes(p.netDownPeak)}/s`);
+          return parts.length > 0 ? `峰值 ${parts.join(" · ")}` : null;
+        }}
       />
       <MonitorSeriesChart
         title="连接数与进程数"
@@ -341,12 +477,18 @@ export const PingCombinedChart = memo(function PingCombinedChart({
   tasks: { id: string; name: string; records: SharedPingPoint[] }[];
   range: MonitorRange;
 }) {
+  const [hiddenKeys, setHiddenKeys] = useState<Record<string, boolean>>({});
+  const taskKeys = tasks.map((t) => t.id);
+  const visibleTaskSet = resolveVisibleKeys(hiddenKeys, taskKeys);
+  const visibleTaskCount = visibleTaskSet.size;
+
   const byTime = new Map<number, CombinedPingPoint>();
   let totalSent = 0;
   let totalLost = 0;
   let okCount = 0;
   let weightedMs = 0;
   tasks.forEach((task, taskIndex) => {
+    if (!visibleTaskSet.has(task.id)) return;
     for (const r of task.records) {
       const key = new Date(r.at).getTime();
       if (!Number.isFinite(key)) continue;
@@ -376,7 +518,11 @@ export const PingCombinedChart = memo(function PingCombinedChart({
 
   const avgMs = okCount > 0 ? weightedMs / okCount : null;
   const latColor = avgMs !== null ? latencyHeatColor(avgMs) : "var(--mon-latency-excellent)";
-  const subParts: string[] = [`${tasks.length} 个任务`];
+  const subParts: string[] = [
+    visibleTaskCount === tasks.length
+      ? `${tasks.length} 个任务`
+      : `已选 ${visibleTaskCount}/${tasks.length} 个任务`,
+  ];
   if (avgMs !== null) subParts.push(`均值 ${avgMs.toFixed(0)} ms`);
   if (totalSent > 0) {
     subParts.push(`丢包率 ${((totalLost / totalSent) * 100).toFixed(1)}%（${totalLost}/${totalSent}）`);
@@ -391,6 +537,10 @@ export const PingCombinedChart = memo(function PingCombinedChart({
         latencyColor={latColor}
         points={points}
         range={range}
+        hiddenKeys={hiddenKeys}
+        onToggleSeries={(key) =>
+          setHiddenKeys((prev) => toggleSeriesVisibility(prev, taskKeys, key))
+        }
         series={tasks.map((task, taskIndex) => ({
           key: task.id,
           label: task.name,
@@ -401,10 +551,10 @@ export const PingCombinedChart = memo(function PingCombinedChart({
         formatAxis={(v) => `${Math.round(v)} ms`}
         formatValue={(v) => `${Math.round(v)} ms`}
         emptyLabel="暂无 TCP 延迟记录"
-        extraReadout={(p) => {
+        extraReadout={(p, visibleKeys) => {
           const parts = tasks
             .map((task, taskIndex) =>
-              p.sent[taskIndex] > 0 && p.lost[taskIndex] > 0
+              visibleKeys.has(task.id) && p.sent[taskIndex] > 0 && p.lost[taskIndex] > 0
                 ? `${task.name} ${((p.lost[taskIndex] / p.sent[taskIndex]) * 100).toFixed(0)}%`
                 : null,
             )

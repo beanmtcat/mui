@@ -36,6 +36,13 @@
   color: var(--mon-text-secondary);
 }
 
+.monScope .monitorGridFrame {
+  width: 100%;
+  min-width: 0;
+  container-name: status-grid;
+  container-type: inline-size;
+}
+
 .monScope .monitorGrid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -240,6 +247,12 @@
   white-space: nowrap;
 }
 
+
+@container status-grid (min-width: 1556px) {
+  .monScope .monitorGrid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
 
 @media (max-width: 1100px) {
   .monScope .monitorGrid {

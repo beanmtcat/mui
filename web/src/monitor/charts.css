@@ -64,19 +64,54 @@
   color: var(--mon-text-secondary);
 }
 
-.monitorPage .trafficLegend span {
+.monitorPage .trafficLegend span,
+.monitorPage .trafficLegend button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
 }
 
-.monitorPage .trafficLegend span::before {
+.monitorPage .trafficLegend span::before,
+.monitorPage .trafficLegend button::before {
   content: "";
   display: inline-block;
   width: 12px;
   height: 3px;
   border-radius: 999px;
   background: currentColor;
+  flex-shrink: 0;
+}
+
+.monitorPage .monitorLegendBtn {
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 2px 7px;
+  margin: -2px -4px;
+  border-radius: 6px;
+  font: inherit;
+  font-weight: 500;
+  line-height: 1.35;
+  color: inherit;
+  min-height: 0;
+  box-shadow: none;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+}
+
+.monitorPage .monitorLegendBtn:hover {
+  background: var(--mon-fill-tertiary);
+  color: var(--mon-text-primary);
+}
+
+.monitorPage .monitorLegendBtn:focus-visible {
+  outline: 2px solid var(--mon-accent-500);
+  outline-offset: 1px;
+}
+
+.monitorPage .monitorLegendBtn.is-hidden {
+  opacity: 0.42;
+  text-decoration: line-through;
 }
 
 .monitorPage .trafficPlotRow {
@@ -221,35 +256,35 @@
 }
 
 /* Semantic Chart Series Tones */
-.monitorPage .monitorLegend span.monSeries-cpu::before { background: var(--mon-progress-cpu); }
+.monitorPage .monitorLegend .monSeries-cpu::before { background: var(--mon-progress-cpu); }
 .monitorPage .trafficLine.monSeries-cpu { stroke: var(--mon-progress-cpu); }
 .monitorPage .trafficDot.monSeries-cpu { fill: var(--mon-progress-cpu); }
 
-.monitorPage .monitorLegend span.monSeries-memory::before { background: var(--mon-progress-memory); }
+.monitorPage .monitorLegend .monSeries-memory::before { background: var(--mon-progress-memory); }
 .monitorPage .trafficLine.monSeries-memory { stroke: var(--mon-progress-memory); }
 .monitorPage .trafficDot.monSeries-memory { fill: var(--mon-progress-memory); }
 
-.monitorPage .monitorLegend span.monSeries-swap::before { background: var(--mon-progress-swap); }
+.monitorPage .monitorLegend .monSeries-swap::before { background: var(--mon-progress-swap); }
 .monitorPage .trafficLine.monSeries-swap { stroke: var(--mon-progress-swap); }
 .monitorPage .trafficDot.monSeries-swap { fill: var(--mon-progress-swap); }
 
-.monitorPage .monitorLegend span.monSeries-up::before { background: var(--mon-traffic-up); }
+.monitorPage .monitorLegend .monSeries-up::before { background: var(--mon-traffic-up); }
 .monitorPage .trafficLine.monSeries-up { stroke: var(--mon-traffic-up); }
 .monitorPage .trafficDot.monSeries-up { fill: var(--mon-traffic-up); }
 
-.monitorPage .monitorLegend span.monSeries-down::before { background: var(--mon-traffic-down); }
+.monitorPage .monitorLegend .monSeries-down::before { background: var(--mon-traffic-down); }
 .monitorPage .trafficLine.monSeries-down { stroke: var(--mon-traffic-down); }
 .monitorPage .trafficDot.monSeries-down { fill: var(--mon-traffic-down); }
 
-.monitorPage .monitorLegend span.monSeries-network::before { background: var(--mon-progress-network); }
+.monitorPage .monitorLegend .monSeries-network::before { background: var(--mon-progress-network); }
 .monitorPage .trafficLine.monSeries-network { stroke: var(--mon-progress-network); }
 .monitorPage .trafficDot.monSeries-network { fill: var(--mon-progress-network); }
 
-.monitorPage .monitorLegend span.monSeries-load::before { background: var(--mon-progress-load); }
+.monitorPage .monitorLegend .monSeries-load::before { background: var(--mon-progress-load); }
 .monitorPage .trafficLine.monSeries-load { stroke: var(--mon-progress-load); }
 .monitorPage .trafficDot.monSeries-load { fill: var(--mon-progress-load); }
 
-.monitorPage .monitorLegend span.monSeries-latency::before {
+.monitorPage .monitorLegend .monSeries-latency::before {
   background: var(--mon-chart-latency, var(--mon-latency-excellent));
 }
 .monitorPage .trafficLine.monSeries-latency {
@@ -259,7 +294,7 @@
   fill: var(--mon-chart-latency, var(--mon-latency-excellent));
 }
 
-.monitorPage .monitorLegend span.monSeries-latencyMax::before {
+.monitorPage .monitorLegend .monSeries-latencyMax::before {
   background: var(--mon-status-warning);
 }
 .monitorPage .trafficLine.monSeries-latencyMax {

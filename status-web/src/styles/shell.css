@@ -17,7 +17,7 @@
 }
 
 .statusShell {
-  max-width: 1580px;
+  max-width: 1760px;
   margin: 0 auto;
   padding: 14px clamp(12px, 2.2vw, 32px) 36px;
   display: grid;

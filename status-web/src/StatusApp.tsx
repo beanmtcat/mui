@@ -181,16 +181,18 @@ export function StatusApp() {
           ) : filteredServers.length === 0 ? (
             <p className="statusEmpty">没有符合筛选条件的服务器。</p>
           ) : (
-            <section className="monitorGrid" aria-label="服务器实时状态列表">
-              {filteredServers.map((srv) => (
-                <MonitorServerCard
-                  key={srv.id}
-                  card={toPublicCardViewModel(srv, data.showTraffic, data.showPing)}
-                  active={selectedServer?.id === srv.id}
-                  onSelect={setSelectedId}
-                />
-              ))}
-            </section>
+            <div className="monitorGridFrame">
+              <section className="monitorGrid" aria-label="服务器实时状态列表">
+                {filteredServers.map((srv) => (
+                  <MonitorServerCard
+                    key={srv.id}
+                    card={toPublicCardViewModel(srv, data.showTraffic, data.showPing)}
+                    active={selectedServer?.id === srv.id}
+                    onSelect={setSelectedId}
+                  />
+                ))}
+              </section>
+            </div>
           )}
 
           {selectedServer && (

@@ -1,6 +1,7 @@
 import { memo, useId, useMemo, type CSSProperties, type ReactNode } from "react";
 import {
   useAnimatedMetricValue,
+  useAnimatedTelemetryGeometry,
   usePrefersReducedMotion,
   useStableDialCeiling,
   useTelemetryHistory,
@@ -11,7 +12,6 @@ import type { PublicServerItem } from "../monitor/publicCard";
 import {
   buildDialScaleMarks,
   buildRingMarkers,
-  buildTelemetryPaths,
   COCKPIT_DEFAULT_DIAL_CEILING,
   getCockpitNodeStates,
   summarizeCockpitResources,
@@ -95,20 +95,28 @@ function CockpitTelemetryWing({
   direction,
   title,
   samples,
+  reducedMotion,
 }: {
   direction: "upload" | "download";
   title: string;
   samples: number[];
+  reducedMotion: boolean;
 }) {
   const gradId = useId();
+  const clipId = useId();
   const width = 180;
   const height = 64;
-  const geo = useMemo(() => buildTelemetryPaths(samples, width, height), [samples]);
+  const geo = useAnimatedTelemetryGeometry(samples, width, height, reducedMotion);
   const meanRate = formatByteRate(geo.mean);
   const peakRate = formatByteRate(geo.peak);
+  const clipWidth = Math.max(0, Math.min(width, geo.revealProgress * width));
 
   return (
-    <div className="home-cockpit-telemetry" data-direction={direction}>
+    <div
+      className="home-cockpit-telemetry"
+      data-direction={direction}
+      data-animating={geo.transitioning ? "true" : "false"}
+    >
       <header>
         <span>{title}</span>
         <i>{direction === "upload" ? "↑" : "↓"}</i>
@@ -120,15 +128,22 @@ function CockpitTelemetryWing({
             <stop offset="0%" stopColor="currentColor" stopOpacity="0.34" />
             <stop offset="100%" stopColor="currentColor" stopOpacity="0.02" />
           </linearGradient>
+          <clipPath id={clipId}>
+            <rect x="0" y="-6" width={clipWidth.toFixed(1)} height={height + 12} />
+          </clipPath>
         </defs>
         <line className="home-cockpit-telemetry-grid" x1="0" y1={height * 0.25} x2={width} y2={height * 0.25} />
         <line className="home-cockpit-telemetry-grid" x1="0" y1={height * 0.5} x2={width} y2={height * 0.5} />
         <line className="home-cockpit-telemetry-grid" x1="0" y1={height * 0.75} x2={width} y2={height * 0.75} />
-        <path className="home-cockpit-telemetry-area" fill={`url(#${gradId})`} d={geo.areaPath} />
-        <path className="home-cockpit-telemetry-line" d={geo.linePath} />
-        <path className="home-cockpit-telemetry-pulse" d={geo.linePath} />
-        <circle className="home-cockpit-telemetry-end-ring" cx={geo.endX} cy={geo.endY} r="4.2" />
-        <circle className="home-cockpit-telemetry-end-dot" cx={geo.endX} cy={geo.endY} r="2.2" />
+        <g transform={`translate(${width} 0) scale(-1 1)`}>
+          <g clipPath={`url(#${clipId})`}>
+            <path className="home-cockpit-telemetry-area" fill={`url(#${gradId})`} d={geo.areaPath} />
+            <path className="home-cockpit-telemetry-line" d={geo.linePath} />
+            <path className="home-cockpit-telemetry-pulse" d={geo.linePath} />
+          </g>
+          <circle className="home-cockpit-telemetry-end-ring" cx={geo.endX} cy={geo.endY} r="4.2" />
+          <circle className="home-cockpit-telemetry-end-dot" cx={geo.endX} cy={geo.endY} r="2.2" />
+        </g>
       </svg>
 
       <div className="home-cockpit-telemetry-stats monTabular">
@@ -251,7 +266,12 @@ export const StatusCockpit = memo(function StatusCockpit({
         reducedMotion={reducedMotion}
       />
 
-      <CockpitTelemetryWing direction="upload" title="上行趋势" samples={upSamples} />
+      <CockpitTelemetryWing
+        direction="upload"
+        title="上行趋势"
+        samples={upSamples}
+        reducedMotion={reducedMotion}
+      />
 
       <div className="home-cockpit-center-panel">
         <div className="home-cockpit-center-topline">
@@ -342,7 +362,12 @@ export const StatusCockpit = memo(function StatusCockpit({
         </div>
       </div>
 
-      <CockpitTelemetryWing direction="download" title="下行趋势" samples={downSamples} />
+      <CockpitTelemetryWing
+        direction="download"
+        title="下行趋势"
+        samples={downSamples}
+        reducedMotion={reducedMotion}
+      />
 
       <CockpitDial
         direction="down"

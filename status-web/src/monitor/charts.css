@@ -59,19 +59,54 @@
   color: var(--mon-text-secondary);
 }
 
-.monScope .trafficLegend span {
+.monScope .trafficLegend span,
+.monScope .trafficLegend button {
   display: inline-flex;
   align-items: center;
   gap: 5px;
 }
 
-.monScope .trafficLegend span::before {
+.monScope .trafficLegend span::before,
+.monScope .trafficLegend button::before {
   content: "";
   display: inline-block;
   width: 12px;
   height: 3px;
   border-radius: 999px;
   background: currentColor;
+  flex-shrink: 0;
+}
+
+.monScope .monitorLegendBtn {
+  border: 1px solid transparent;
+  background: transparent;
+  padding: 2px 7px;
+  margin: -2px -4px;
+  border-radius: 5px;
+  font: inherit;
+  font-weight: 500;
+  line-height: 1.35;
+  color: inherit;
+  min-height: 0;
+  box-shadow: none;
+  cursor: pointer;
+  user-select: none;
+  transition: opacity 0.14s ease, background-color 0.14s ease, color 0.14s ease;
+}
+
+.monScope .monitorLegendBtn:hover {
+  background: var(--mon-fill-tertiary);
+  color: var(--mon-text-primary);
+}
+
+.monScope .monitorLegendBtn:focus-visible {
+  outline: 2px solid var(--mon-accent-500);
+  outline-offset: 1px;
+}
+
+.monScope .monitorLegendBtn.is-hidden {
+  opacity: 0.42;
+  text-decoration: line-through;
 }
 
 .monScope .trafficPlotRow {
@@ -215,35 +250,35 @@
   color: var(--mon-text-primary);
 }
 
-.monScope .monitorLegend span.monSeries-cpu::before { background: var(--mon-progress-cpu); }
+.monScope .monitorLegend .monSeries-cpu::before { background: var(--mon-progress-cpu); }
 .monScope .trafficLine.monSeries-cpu { stroke: var(--mon-progress-cpu); }
 .monScope .trafficDot.monSeries-cpu { fill: var(--mon-progress-cpu); }
 
-.monScope .monitorLegend span.monSeries-memory::before { background: var(--mon-progress-memory); }
+.monScope .monitorLegend .monSeries-memory::before { background: var(--mon-progress-memory); }
 .monScope .trafficLine.monSeries-memory { stroke: var(--mon-progress-memory); }
 .monScope .trafficDot.monSeries-memory { fill: var(--mon-progress-memory); }
 
-.monScope .monitorLegend span.monSeries-swap::before { background: var(--mon-progress-swap); }
+.monScope .monitorLegend .monSeries-swap::before { background: var(--mon-progress-swap); }
 .monScope .trafficLine.monSeries-swap { stroke: var(--mon-progress-swap); }
 .monScope .trafficDot.monSeries-swap { fill: var(--mon-progress-swap); }
 
-.monScope .monitorLegend span.monSeries-up::before { background: var(--mon-traffic-up); }
+.monScope .monitorLegend .monSeries-up::before { background: var(--mon-traffic-up); }
 .monScope .trafficLine.monSeries-up { stroke: var(--mon-traffic-up); }
 .monScope .trafficDot.monSeries-up { fill: var(--mon-traffic-up); }
 
-.monScope .monitorLegend span.monSeries-down::before { background: var(--mon-traffic-down); }
+.monScope .monitorLegend .monSeries-down::before { background: var(--mon-traffic-down); }
 .monScope .trafficLine.monSeries-down { stroke: var(--mon-traffic-down); }
 .monScope .trafficDot.monSeries-down { fill: var(--mon-traffic-down); }
 
-.monScope .monitorLegend span.monSeries-network::before { background: var(--mon-progress-network); }
+.monScope .monitorLegend .monSeries-network::before { background: var(--mon-progress-network); }
 .monScope .trafficLine.monSeries-network { stroke: var(--mon-progress-network); }
 .monScope .trafficDot.monSeries-network { fill: var(--mon-progress-network); }
 
-.monScope .monitorLegend span.monSeries-load::before { background: var(--mon-progress-load); }
+.monScope .monitorLegend .monSeries-load::before { background: var(--mon-progress-load); }
 .monScope .trafficLine.monSeries-load { stroke: var(--mon-progress-load); }
 .monScope .trafficDot.monSeries-load { fill: var(--mon-progress-load); }
 
-.monScope .monitorLegend span.monSeries-latency::before {
+.monScope .monitorLegend .monSeries-latency::before {
   background: var(--mon-chart-latency, var(--mon-latency-excellent));
 }
 .monScope .trafficLine.monSeries-latency {
@@ -253,7 +288,7 @@
   fill: var(--mon-chart-latency, var(--mon-latency-excellent));
 }
 
-.monScope .monitorLegend span.monSeries-latencyMax::before {
+.monScope .monitorLegend .monSeries-latencyMax::before {
   background: var(--mon-status-warning);
 }
 .monScope .trafficLine.monSeries-latencyMax {

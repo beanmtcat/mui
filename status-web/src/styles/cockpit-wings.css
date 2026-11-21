@@ -103,6 +103,7 @@
   stroke: currentColor;
   stroke-width: 0.8;
   opacity: 0.34;
+  transition: opacity 240ms ease, stroke-width 240ms ease;
 }
 
 .home-cockpit-telemetry-end-dot {
@@ -110,6 +111,16 @@
   stroke: currentColor;
   stroke-width: 1.2;
   filter: drop-shadow(0 0 4px currentColor);
+  transition: filter 240ms ease;
+}
+
+.home-cockpit-telemetry[data-animating="true"] .home-cockpit-telemetry-end-ring {
+  opacity: 0.72;
+  stroke-width: 1.15;
+}
+
+.home-cockpit-telemetry[data-animating="true"] .home-cockpit-telemetry-end-dot {
+  filter: drop-shadow(0 0 6px currentColor);
 }
 
 .home-cockpit-telemetry[data-direction="download"] { color: #7f9fff; }
@@ -390,5 +401,5 @@
 
 @keyframes cockpit-dial-values-boot { from { --cockpit-angle: 132deg; --cockpit-progress: 0deg; } }
 @keyframes cockpit-dial-scan { from { opacity: 0; transform: rotate(-100deg); } to { opacity: 0.26; transform: rotate(260deg); } }
-@keyframes cockpit-telemetry-flow { to { stroke-dashoffset: -52; } }
+@keyframes cockpit-telemetry-flow { to { stroke-dashoffset: 52; } }
 @keyframes cockpit-node-ring-scan { to { stroke-dashoffset: -302; } }

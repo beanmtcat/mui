@@ -66,7 +66,7 @@
   display: grid;
   grid-template-columns: repeat(18, minmax(0, 1fr));
   gap: 2px;
-  height: 7px;
+  height: 6px;
   min-width: 0;
 }
 

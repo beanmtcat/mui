@@ -266,6 +266,8 @@
   .home-cockpit-dial-scan,
   .home-cockpit-dial-needle,
   .home-cockpit-telemetry-pulse,
+  .home-cockpit-telemetry-end-ring,
+  .home-cockpit-telemetry-end-dot,
   .home-cockpit-node-ring-sweep,
   .home-cockpit-resource-track i {
     animation: none !important;

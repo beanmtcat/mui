@@ -118,47 +118,106 @@ export type TelemetryGeometry = {
   peak: number;
 };
 
-export function buildTelemetryPaths(
+export function resampleTelemetryY(
   rawValues: number[],
-  width: number,
   height: number,
-): TelemetryGeometry {
+  count = COCKPIT_WING_POINTS,
+): { ys: number[]; mean: number; peak: number } {
   const values =
     rawValues.length === 0 ? [0, 0] : rawValues.length === 1 ? [rawValues[0], rawValues[0]] : rawValues;
 
   let sum = 0;
   let peak = 0;
-  for (const v of values) {
+  const safeValues: number[] = new Array(values.length);
+  for (let i = 0; i < values.length; i += 1) {
+    const v = values[i];
     const safe = Number.isFinite(v) && v > 0 ? v : 0;
+    safeValues[i] = safe;
     sum += safe;
     if (safe > peak) peak = safe;
   }
-  const mean = sum / values.length;
+  const mean = sum / safeValues.length;
 
   const topPad = 4;
   const bottomPad = 3;
   const usableHeight = Math.max(4, height - topPad - bottomPad);
   const scaleMax = peak > 0 ? peak * 1.12 : 1;
+  const n = Math.max(2, count);
 
-  const points = values.map((v, idx) => {
-    const safe = Number.isFinite(v) && v > 0 ? v : 0;
-    const x = values.length <= 1 ? width : (idx / (values.length - 1)) * width;
-    const ratio = peak > 0 ? clamp(safe / scaleMax, 0, 1) : 0;
-    const y = height - bottomPad - ratio * usableHeight;
-    return { x, y };
-  });
+  const sampled: number[] = new Array(n);
+  for (let i = 0; i < n; i += 1) {
+    const pos = (i / (n - 1)) * (safeValues.length - 1);
+    const lo = Math.floor(pos);
+    const hi = Math.min(safeValues.length - 1, Math.ceil(pos));
+    const frac = pos - lo;
+    sampled[i] = safeValues[lo] + (safeValues[hi] - safeValues[lo]) * frac;
+  }
+
+  // Snap each original sample onto its nearest grid slot with max-envelope so
+  // single-point spikes are never attenuated when history is shorter than n.
+  if (safeValues.length !== n) {
+    for (let k = 0; k < safeValues.length; k += 1) {
+      const slot = Math.round((k / (safeValues.length - 1)) * (n - 1));
+      if (safeValues[k] > sampled[slot]) {
+        sampled[slot] = safeValues[k];
+      }
+    }
+  }
+
+  const ys: number[] = new Array(n);
+  for (let i = 0; i < n; i += 1) {
+    const ratio = peak > 0 ? clamp(sampled[i] / scaleMax, 0, 1) : 0;
+    ys[i] = height - bottomPad - ratio * usableHeight;
+  }
+
+  return { ys, mean, peak };
+}
+
+export function buildTelemetryPathsFromY(
+  ys: number[],
+  width: number,
+  height: number,
+): Pick<TelemetryGeometry, "linePath" | "areaPath" | "endX" | "endY"> {
+  const safeYs = ys.length >= 2 ? ys : [height - 3, height - 3];
+  const n = safeYs.length;
+  const dx = width / (n - 1);
+  const points = safeYs.map((y, idx) => ({
+    x: idx * dx,
+    y,
+  }));
+
+  // Fritsch-Butland monotone cubic Hermite tangents: the SVG curve passes
+  // through every sample (including extrema) while staying within each
+  // segment's [min(y_i, y_{i+1}), max(y_i, y_{i+1})] envelope.
+  const secants: number[] = new Array(n - 1);
+  for (let i = 0; i < n - 1; i += 1) {
+    secants[i] = (points[i + 1].y - points[i].y) / dx;
+  }
+  const tangents: number[] = new Array(n);
+  tangents[0] = secants[0];
+  tangents[n - 1] = secants[n - 2];
+  for (let i = 1; i < n - 1; i += 1) {
+    const prevSlope = secants[i - 1];
+    const nextSlope = secants[i];
+    if (prevSlope * nextSlope <= 0) {
+      tangents[i] = 0;
+    } else {
+      tangents[i] = (2 * prevSlope * nextSlope) / (prevSlope + nextSlope);
+    }
+  }
 
   let linePath = `M ${points[0].x.toFixed(1)},${points[0].y.toFixed(1)}`;
-  for (let i = 1; i < points.length; i += 1) {
-    const prev = points[i - 1];
-    const curr = points[i];
-    const midX = ((prev.x + curr.x) / 2).toFixed(1);
-    const midY = ((prev.y + curr.y) / 2).toFixed(1);
-    linePath += ` Q ${prev.x.toFixed(1)},${prev.y.toFixed(1)} ${midX},${midY}`;
+  for (let i = 0; i < n - 1; i += 1) {
+    const p0 = points[i];
+    const p1 = points[i + 1];
+    const c1x = p0.x + dx / 3;
+    const c1y = p0.y + (tangents[i] * dx) / 3;
+    const c2x = p1.x - dx / 3;
+    const c2y = p1.y - (tangents[i + 1] * dx) / 3;
+    linePath += ` C ${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p1.x.toFixed(1)},${p1.y.toFixed(1)}`;
   }
-  const last = points[points.length - 1];
-  linePath += ` L ${last.x.toFixed(1)},${last.y.toFixed(1)}`;
 
+  const last = points[n - 1];
   const areaPath = `${linePath} L ${last.x.toFixed(1)},${height} L ${points[0].x.toFixed(1)},${height} Z`;
 
   return {
@@ -166,6 +225,33 @@ export function buildTelemetryPaths(
     areaPath,
     endX: last.x,
     endY: last.y,
+  };
+}
+
+export function sampleTelemetryYAtProgress(
+  ys: number[],
+  progress: number,
+  fallbackY: number,
+): number {
+  if (ys.length === 0) return fallbackY;
+  if (ys.length === 1) return ys[0];
+  const clamped = clamp(progress, 0, 1);
+  const pos = clamped * (ys.length - 1);
+  const lo = Math.floor(pos);
+  const hi = Math.min(ys.length - 1, Math.ceil(pos));
+  const frac = pos - lo;
+  return ys[lo] + (ys[hi] - ys[lo]) * frac;
+}
+
+export function buildTelemetryPaths(
+  rawValues: number[],
+  width: number,
+  height: number,
+): TelemetryGeometry {
+  const { ys, mean, peak } = resampleTelemetryY(rawValues, height);
+  const paths = buildTelemetryPathsFromY(ys, width, height);
+  return {
+    ...paths,
     mean,
     peak,
   };
