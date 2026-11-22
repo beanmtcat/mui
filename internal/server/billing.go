@@ -134,6 +134,18 @@ func applyServerBillingFields(dst *shared.Server, in shared.Server, before *shar
 	}
 	dst.TrafficResetDay = in.TrafficResetDay
 
+	dst.TrafficProtectionEnabled = in.TrafficProtectionEnabled
+	if in.TrafficProtectionThreshold != 0 && (in.TrafficProtectionThreshold < shared.MinEntryProtectionThreshold || in.TrafficProtectionThreshold > shared.MaxEntryProtectionThreshold) {
+		return errors.New("超额保护提前停止阈值需在 50–100 之间")
+	}
+	if in.TrafficProtectionThreshold > 0 {
+		dst.TrafficProtectionThreshold = in.TrafficProtectionThreshold
+	} else if dst.TrafficProtectionEnabled {
+		dst.TrafficProtectionThreshold = shared.DefaultEntryProtectionThreshold
+	} else {
+		dst.TrafficProtectionThreshold = 0
+	}
+
 	grp := strings.TrimSpace(in.Group)
 	if utf8.RuneCountInString(grp) > 40 {
 		return errors.New("分组名不能超过 40 个字符")

@@ -196,6 +196,7 @@ func (a *App) evaluateAlertsAt(now time.Time) {
 	}
 	if cfg.Events.TrafficLimit.Enabled {
 		a.evaluateTrafficLimitAlerts(now, cfg.Events.TrafficLimit, servers, states)
+		a.evaluateRouteAndEntryProtectionAlerts(now, cfg.Events.TrafficLimit, servers, states)
 	}
 	if hasTrafficReport {
 		a.evaluateTrafficReports(now, cfg.Events.TrafficReport, servers, states)

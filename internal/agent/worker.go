@@ -140,6 +140,8 @@ func Run(ctx context.Context) error {
 	state := loadTraffic()
 	lastSample := time.Time{}
 	lastConnectionSample := time.Time{}
+	lastEntryProtSynced := -1
+	var entryProtState *shared.EntryTrafficProtectionState
 	pendingConnections := []shared.ConnectionPoint{}
 	statsStatus := "unknown"
 	host := QueryHostStatus()
@@ -234,6 +236,7 @@ func Run(ctx context.Context) error {
 				statsStatus = "active"
 			}
 			host = QueryHostStatus()
+			entryProtState = syncEntryTrafficProtection(&state, host, &lastEntryProtSynced, time.Now())
 			if host.UFW == "active" {
 				// Keep SSH reachable when sshd moved to another port since
 				// UFW was initialised; see ensureSSHAllowed.
@@ -298,9 +301,9 @@ func Run(ctx context.Context) error {
 			}
 			now := time.Now()
 			report := shared.AgentReport{OS: osRelease(), Arch: runtime.GOARCH, AgentVersion: Version, AgentBuild: build, BuildDigest: build,
-				ManualFirewallSupport: host.ManualFirewallSupport, AgentSelfUpdate: host.AgentSelfUpdate, NodeFirewallPolicies: host.NodeFirewallPolicies, NodeDomainBlock: host.NodeDomainBlock, NodeSOCKSOutbound: host.NodeSOCKSOutbound, MultiUserStats: host.MultiUserStats, ForwardSupport: host.ForwardSupport, ForwardTCPUDP: host.ForwardTCPUDP, ShadowTLSAuth: host.ShadowTLSAuth, SnellFixedPort: host.SnellFixedPort, SnellV6: host.SnellV6, HostMonitor: host.HostMonitor, AgentProxySupport: host.AgentProxySupport, OutboundBindingSupport: host.OutboundBindingSupport, ReleaseKeyPinned: host.ReleaseKeyPinned,
+				ManualFirewallSupport: host.ManualFirewallSupport, AgentSelfUpdate: host.AgentSelfUpdate, NodeFirewallPolicies: host.NodeFirewallPolicies, NodeDomainBlock: host.NodeDomainBlock, NodeSOCKSOutbound: host.NodeSOCKSOutbound, MultiUserStats: host.MultiUserStats, ForwardSupport: host.ForwardSupport, ForwardTCPUDP: host.ForwardTCPUDP, ForwardTrafficLimitSupport: host.ForwardTrafficLimitSupport, ShadowTLSAuth: host.ShadowTLSAuth, SnellFixedPort: host.SnellFixedPort, SnellV6: host.SnellV6, HostMonitor: host.HostMonitor, AgentProxySupport: host.AgentProxySupport, OutboundBindingSupport: host.OutboundBindingSupport, ReleaseKeyPinned: host.ReleaseKeyPinned,
 				CoreVersion: coreVersions.get(), CoreBuild: coreBuild, CoreDigest: coreBuild, CoreSelfUpdate: host.CoreSelfUpdate,
-				UFWStatus: host.UFW, StatsStatus: statsStatus, Traffic: state.Pending[:batchSize], UserTraffic: state.UserPending[:userBatch], ForwardTraffic: host.ForwardTraffic, ServerTraffic: state.NetworkPending[:networkBatch], Connections: pendingConnections, ForwardConnections: host.ForwardConnections, RouteLatencies: latencies.snapshot(), RelayStates: relayReportBatch(host.RelayStates, &relayOffset),
+				UFWStatus: host.UFW, StatsStatus: statsStatus, Traffic: state.Pending[:batchSize], UserTraffic: state.UserPending[:userBatch], ForwardTraffic: host.ForwardTraffic, RouteTrafficStates: host.RouteTrafficStates, EntryProtectionState: entryProtState, ServerTraffic: state.NetworkPending[:networkBatch], Connections: pendingConnections, ForwardConnections: host.ForwardConnections, RouteLatencies: latencies.snapshot(), RelayStates: relayReportBatch(host.RelayStates, &relayOffset),
 				IPv4: ipv4, ObservedIPv4: cachedObservedIPv4, IPv6: ipv6, AgentTime: &now, HostReported: true, SSHPorts: host.SSHPorts, FirewallConflict: host.Conflict, UFWRules: host.Rules}
 			headers := map[string]string{"X-Server-ID": c.ServerID, "Authorization": "Bearer " + c.Token}
 			var reply struct {

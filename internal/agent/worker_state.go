@@ -23,9 +23,15 @@ type trafficState struct {
 	NetworkBoot       string                      `json:"networkBoot"`
 	NetworkKernelBoot string                      `json:"networkKernelBoot"`
 	NetworkIface      string                      `json:"networkIface"`
-	NetworkSequence   int64                       `json:"networkSequence"`
-	NetworkLast       [2]int64                    `json:"networkLast"`
-	NetworkPending    []shared.ServerTrafficPoint `json:"networkPending"`
+	NetworkSequence              int64                       `json:"networkSequence"`
+	NetworkLast                  [2]int64                    `json:"networkLast"`
+	NetworkPending               []shared.ServerTrafficPoint `json:"networkPending"`
+	EntryCycleStartMs            int64                       `json:"entryCycleStartMs,omitempty"`
+	EntryCycleRx                 int64                       `json:"entryCycleRx,omitempty"`
+	EntryCycleTx                 int64                       `json:"entryCycleTx,omitempty"`
+	EntryProtectionActive        bool                        `json:"entryProtectionActive,omitempty"`
+	EntryProtectionTriggeredAt   *time.Time                  `json:"entryProtectionTriggeredAt,omitempty"`
+	EntryProtectionTriggeredUsed int64                       `json:"entryProtectionTriggeredUsed,omitempty"`
 }
 
 const pendingJobPath = DataDir + "/pending-job.json"

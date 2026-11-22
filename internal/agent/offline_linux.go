@@ -5,6 +5,7 @@ package agent
 import (
 	"crypto/ed25519"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -131,7 +132,7 @@ func InstallOffline(config, releaseKey string) error {
 	rb := &installRollback{}
 	wasActive, wasEnabled := forwardActive(), forwardEnabled()
 	unitPath, _, unitMode := serviceFile("mui-forward.service", forwardUnit)
-	for path, mode := range map[string]os.FileMode{"/usr/local/bin/mui-agent": 0755, ForwardConfig: 0640, unitPath: unitMode, OfflineModePath: 0640, OfflineReleaseKeyPath: 0644, OfflineBundlePath: 0600} {
+	for path, mode := range map[string]os.FileMode{"/usr/local/bin/mui-agent": 0755, ForwardConfig: 0640, ForwardEntryProtectionPolicy: 0640, unitPath: unitMode, OfflineModePath: 0640, OfflineReleaseKeyPath: 0644, OfflineBundlePath: 0600} {
 		if err := rb.backup(path, mode); err != nil {
 			rb.rollback()
 			_ = chownRootGroup(ForwardConfig, forwardUser)
@@ -181,6 +182,9 @@ func InstallOffline(config, releaseKey string) error {
 	if err := writeOwned(ForwardConfig, raw, 0640, forwardUser); err != nil {
 		return fail(err)
 	}
+	if err := writeOfflineEntryProtectionPolicy(bundle); err != nil {
+		return fail(err)
+	}
 	if key != nil {
 		if err := writeFileAtomic(OfflineReleaseKeyPath, []byte(base64.StdEncoding.EncodeToString(key)+"\n"), 0644); err != nil {
 			return fail(err)
@@ -226,7 +230,7 @@ func ApplyOfflineForwards(config string) error {
 		return err
 	}
 	rb := &installRollback{}
-	for _, path := range []string{OfflineBundlePath} {
+	for _, path := range []string{OfflineBundlePath, ForwardEntryProtectionPolicy} {
 		if err := rb.backup(path, 0600); err != nil {
 			rb.rollback()
 			return err
@@ -243,6 +247,9 @@ func ApplyOfflineForwards(config string) error {
 	}
 	wasActive, wasEnabled := forwardActive(), forwardEnabled()
 	if err := writeOwned(ForwardConfig, raw, 0640, forwardUser); err != nil {
+		return err
+	}
+	if err := writeOfflineEntryProtectionPolicy(bundle); err != nil {
 		return err
 	}
 	activate := func(data []byte, reload bool) error {
@@ -284,6 +291,20 @@ func ApplyOfflineForwards(config string) error {
 	rb.commit()
 	rb = nil
 	return nil
+}
+
+func writeOfflineEntryProtectionPolicy(bundle *shared.OfflineBundle) error {
+	if bundle == nil || bundle.EntryTrafficProtection == nil || !bundle.EntryTrafficProtection.Enabled {
+		if err := os.Remove(ForwardEntryProtectionPolicy); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	raw, err := json.Marshal(bundle.EntryTrafficProtection)
+	if err != nil {
+		return err
+	}
+	return writeOwned(ForwardEntryProtectionPolicy, raw, 0640, forwardUser)
 }
 
 // UpgradeOffline is run by the installed, trusted agent. It copies the

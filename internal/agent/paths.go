@@ -10,11 +10,17 @@ const (
 	ConfigDir          = "/etc/mui-agent"
 	DataDir            = "/var/lib/mui-agent"
 	SocketPath         = "/run/mui-agent/helper.sock"
-	ForwardDir         = "/etc/mui-forward"
-	ForwardConfig      = ForwardDir + "/forwards.json"
-	ForwardReady       = "/run/mui-forward/ready"
-	ForwardStats       = "/run/mui-forward/stats.json"
-	ForwardConnections = "/run/mui-forward/connections.json"
+	ForwardDir                   = "/etc/mui-forward"
+	ForwardConfig                = ForwardDir + "/forwards.json"
+	ForwardEntryProtection       = ForwardDir + "/entry-protection.json"
+	ForwardEntryProtectionPolicy = ForwardDir + "/entry-protection-policy.json"
+	ForwardStateDir              = "/var/lib/mui-forward"
+	ForwardTrafficState          = ForwardStateDir + "/traffic-state.json"
+	ForwardEntryNICState         = ForwardStateDir + "/entry-nic-state.json"
+	ForwardReady                 = "/run/mui-forward/ready"
+	ForwardStats                 = "/run/mui-forward/stats.json"
+	ForwardRouteTraffic          = "/run/mui-forward/route-traffic.json"
+	ForwardConnections           = "/run/mui-forward/connections.json"
 	// The core runs under its own account so that a compromised proxy process
 	// can reach neither the agent token nor the privileged helper socket.
 	CoreDir    = "/etc/mui-core"
@@ -49,15 +55,19 @@ type HostStatus struct {
 	SSHPorts               []int                           `json:"sshPorts,omitempty"`
 	Conflict               string                          `json:"conflict,omitempty"`
 	Rules                  []string                        `json:"rules,omitempty"`
-	ForwardTraffic         []shared.ForwardTrafficPoint    `json:"forwardTraffic,omitempty"`
+	ForwardTraffic             []shared.ForwardTrafficPoint `json:"forwardTraffic,omitempty"`
+	RouteTrafficStates         []shared.RouteTrafficState   `json:"routeTrafficStates,omitempty"`
+	EntryProtectionFileExists  bool                         `json:"entryProtectionFileExists,omitempty"`
+	EntryProtectionFileActive  bool                         `json:"entryProtectionFileActive,omitempty"`
 	// Supported reports whether this helper implements the current
 	// panel protocol. The capability bits below describe what this
 	// build can do; the panel gates features on them.
-	Supported             bool `json:"supported"`
-	ManualFirewallSupport bool `json:"manualFirewallSupport"`
-	AgentSelfUpdate       bool `json:"agentSelfUpdate"`
-	ForwardTCPUDP         bool `json:"forwardTcpUdp"`
-	ForwardSupport        bool `json:"forwardSupport"`
+	Supported                  bool `json:"supported"`
+	ManualFirewallSupport      bool `json:"manualFirewallSupport"`
+	AgentSelfUpdate            bool `json:"agentSelfUpdate"`
+	ForwardTCPUDP              bool `json:"forwardTcpUdp"`
+	ForwardSupport             bool `json:"forwardSupport"`
+	ForwardTrafficLimitSupport bool `json:"forwardTrafficLimitSupport"`
 	ShadowTLSAuth         bool `json:"shadowTlsAuth"`
 	SnellFixedPort        bool `json:"snellFixedPort"`
 	AgentProxySupport     bool `json:"agentProxySupport"`

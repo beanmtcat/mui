@@ -21,7 +21,7 @@ import (
 	"mui/internal/shared"
 )
 
-const forwardUnit = "[Unit]\nDescription=MUI TCP and UDP forwarder\nAfter=network-online.target\nWants=network-online.target\n[Service]\nUser=mui-forward\nGroup=mui-forward\nExecStart=/usr/local/bin/mui-agent forward\nExecReload=/bin/kill -HUP $MAINPID\nRestart=on-failure\nRestartSec=3\nMemoryMax=384M\nRuntimeDirectory=mui-forward\nRuntimeDirectoryMode=0700\nNoNewPrivileges=true\nProtectHome=true\nProtectSystem=strict\nReadWritePaths=/run/mui-forward\nCapabilityBoundingSet=\nLimitNOFILE=65536\n[Install]\nWantedBy=multi-user.target\n"
+const forwardUnit = "[Unit]\nDescription=MUI TCP and UDP forwarder\nAfter=network-online.target\nWants=network-online.target\n[Service]\nUser=mui-forward\nGroup=mui-forward\nExecStart=/usr/local/bin/mui-agent forward\nExecReload=/bin/kill -HUP $MAINPID\nRestart=on-failure\nRestartSec=3\nMemoryMax=384M\nRuntimeDirectory=mui-forward\nRuntimeDirectoryMode=0700\nStateDirectory=mui-forward\nStateDirectoryMode=0700\nNoNewPrivileges=true\nProtectHome=true\nProtectSystem=strict\nReadWritePaths=/run/mui-forward /var/lib/mui-forward\nCapabilityBoundingSet=\nLimitNOFILE=65536\n[Install]\nWantedBy=multi-user.target\n"
 const coreUnit = "[Unit]\nDescription=Managed sing-box\nAfter=network-online.target\nWants=network-online.target\n[Service]\nUser=mui-core\nGroup=mui-core\nExecStart=/usr/local/bin/sing-box run -c " + CoreConfig + "\nRestart=always\nRestartSec=3\nNoNewPrivileges=true\nAmbientCapabilities=CAP_NET_BIND_SERVICE\nCapabilityBoundingSet=CAP_NET_BIND_SERVICE\nLimitNOFILE=65536\n[Install]\nWantedBy=multi-user.target\n"
 
 // The helper is root and runs ufw, useradd, systemctl and systemd-run; its

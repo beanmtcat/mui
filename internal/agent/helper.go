@@ -187,6 +187,15 @@ func handleHelper(conn net.Conn) {
 		err = runUpgradeOnce("core.upgrade", req.State.CoreUpgradeSHA256, func() error { return upgradeCore(req.State.CoreUpgradeSHA256, req.State.UpgradeRelease) })
 	case "upgrade.confirm":
 		err = writeUpgradeConfirmation(UpgradeConfirmedPath, req.State.UpgradeSHA256)
+	case "entry.protection":
+		var active bool
+		var cycleStartMs, cycleEndMs int64
+		if req.State.EntryTrafficProtection != nil {
+			active = req.State.EntryTrafficProtection.Enabled
+			cycleStartMs = req.State.EntryTrafficProtection.CycleStartMs
+			cycleEndMs = req.State.EntryTrafficProtection.CycleEndMs
+		}
+		err = writeEntryProtectionSignal(ForwardEntryProtection, active, cycleStartMs, cycleEndMs, forwardUser)
 	default:
 		err = errors.New("unsupported helper operation")
 	}
@@ -287,7 +296,7 @@ func QueryHostStatus() HostStatus {
 }
 
 func hostStatus() HostStatus {
-	status := HostStatus{UFW: UFWStatus(), Conflict: firewallConflict(), NodeDomainBlock: true, NodeSOCKSOutbound: true, ManualFirewallSupport: true, Supported: true, AgentSelfUpdate: true, ForwardSupport: true, ForwardTCPUDP: true, ShadowTLSAuth: true, SnellFixedPort: true, SnellV6: true, HostMonitor: true, AgentProxySupport: true, OutboundBindingSupport: true, MultiUserStats: true, NodeFirewallPolicies: true, CoreSelfUpdate: true, ReleaseKeyPinned: fileExists(ReleaseKeyPath)}
+	status := HostStatus{UFW: UFWStatus(), Conflict: firewallConflict(), NodeDomainBlock: true, NodeSOCKSOutbound: true, ManualFirewallSupport: true, Supported: true, AgentSelfUpdate: true, ForwardSupport: true, ForwardTCPUDP: true, ForwardTrafficLimitSupport: true, ShadowTLSAuth: true, SnellFixedPort: true, SnellV6: true, HostMonitor: true, AgentProxySupport: true, OutboundBindingSupport: true, MultiUserStats: true, NodeFirewallPolicies: true, CoreSelfUpdate: true, ReleaseKeyPinned: fileExists(ReleaseKeyPath)}
 	if file, err := os.Open(ForwardStats); err == nil {
 		var traffic []shared.ForwardTrafficPoint
 		_ = json.NewDecoder(io.LimitReader(file, 1<<20)).Decode(&traffic)
@@ -303,6 +312,30 @@ func hostStatus() HostStatus {
 		}
 		if len(status.ForwardTraffic) > 500 {
 			status.ForwardTraffic = status.ForwardTraffic[:500]
+		}
+	}
+	if file, err := os.Open(ForwardRouteTraffic); err == nil {
+		var rtStates []shared.RouteTrafficState
+		_ = json.NewDecoder(io.LimitReader(file, 1<<20)).Decode(&rtStates)
+		_ = file.Close()
+		now := time.Now()
+		for _, item := range rtStates {
+			if !item.UpdatedAt.IsZero() && now.Sub(item.UpdatedAt) > 60*time.Second {
+				continue
+			}
+			status.RouteTrafficStates = append(status.RouteTrafficStates, item)
+		}
+		if len(status.RouteTrafficStates) > 500 {
+			status.RouteTrafficStates = status.RouteTrafficStates[:500]
+		}
+	}
+	if raw, err := os.ReadFile(ForwardEntryProtection); err == nil {
+		status.EntryProtectionFileExists = true
+		var sig struct {
+			Active bool `json:"active"`
+		}
+		if json.Unmarshal(raw, &sig) == nil {
+			status.EntryProtectionFileActive = sig.Active
 		}
 	}
 	status.ForwardConnections = readForwardConnections()

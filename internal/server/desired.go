@@ -136,6 +136,40 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 		}
 		downstream = relayWorld.downstreamHints(relayNow, false)
 	}
+	loc := a.Store.timeLocation()
+	tzName := loc.String()
+	_, tzOffset := relayNow.In(loc).Zone()
+	srvCycleStart, srvCycleEnd := serverTrafficCycleBounds(server, relayNow, loc)
+	srvCycleStartMs := srvCycleStart.UTC().UnixMilli()
+	srvCycleEndMs := srvCycleEnd.UTC().UnixMilli()
+	entryProtBlocked := entryProtectionActiveForCycle(server, relayNow, loc)
+	if (server.ForwardTrafficLimitSupport || shared.OfflineManaged(server)) && server.TrafficProtectionEnabled && server.TrafficLimit > 0 {
+		cycleMap, err := a.Store.CycleTrafficMap([]shared.Server{server}, relayNow)
+		if err == nil {
+			ct := cycleMap[server.ID]
+			thresholdPct := server.TrafficProtectionThreshold
+			if thresholdPct < shared.MinEntryProtectionThreshold || thresholdPct > shared.MaxEntryProtectionThreshold {
+				thresholdPct = shared.DefaultEntryProtectionThreshold
+			}
+			lt := server.TrafficLimitType
+			if lt == "" {
+				lt = "sum"
+			}
+			state.EntryTrafficProtection = &shared.EntryTrafficProtectionPolicy{
+				Enabled:          true,
+				LimitBytes:       server.TrafficLimit,
+				ThresholdPercent: thresholdPct,
+				LimitType:        lt,
+				ResetDay:         effectiveTrafficResetDay(server, loc),
+				Timezone:         tzName,
+				TZOffset:         tzOffset,
+				CycleStartMs:     ct.StartAt.UTC().UnixMilli(),
+				CycleEndMs:       ct.ResetAt.UTC().UnixMilli(),
+				BaselineRx:       ct.Rx,
+				BaselineTx:       ct.Tx,
+			}
+		}
+	}
 	for _, forward := range forwards {
 		if relayWorld.servers != nil && isRouteForward(forward) {
 			relayWorld.assignRelayTargets(&forward, overrides, relayNow)
@@ -147,9 +181,39 @@ func (a *App) desired(serverID string) (shared.DesiredState, error) {
 		// stored: a stored flag would rewrite every route forward (and bump every
 		// hop's revision, including offline exports) when the panel upgrades.
 		forward.ObserveClients, forward.ClientNodeID = false, ""
+		forward.EntryHop = false
 		for _, rt := range routes {
 			if rt.ID == forward.RouteID && rt.EntryServerID == serverID {
 				forward.ObserveClients, forward.ClientNodeID = true, rt.NodeID
+				if server.ForwardTrafficLimitSupport || shared.OfflineManaged(server) {
+					forward.EntryHop = true
+					forward.RouteTrafficLimit = rt.TrafficLimit
+					if rt.TrafficLimit > 0 || rt.TrafficLimitType != "" {
+						lt := rt.TrafficLimitType
+						if lt == "" {
+							lt = "sum"
+						}
+						forward.RouteTrafficLimitType = lt
+					}
+					forward.RouteTrafficResetDay = rt.TrafficResetDay
+					forward.RouteTrafficTimezone = tzName
+					forward.RouteTrafficTZOffset = tzOffset
+					forward.RouteUpSpeedLimitBps = shared.MbpsToBytesPerSec(rt.UpSpeedLimitMbps)
+					forward.RouteDownSpeedLimitBps = shared.MbpsToBytesPerSec(rt.DownSpeedLimitMbps)
+					rtStart, _ := shared.MonthlyCycleBounds(relayNow, rt.TrafficResetDay, loc)
+					rtStartMs := rtStart.UTC().UnixMilli()
+					baseUp, baseDown := a.Store.routeBaselineForDesired(rt.ID, rtStartMs)
+					if baseUp > 0 || baseDown > 0 {
+						forward.RouteTrafficBaselineCycleStart = rtStartMs
+						forward.RouteTrafficBaselineUp = baseUp
+						forward.RouteTrafficBaselineDown = baseDown
+					}
+					forward.EntryProtectionBlocked = entryProtBlocked
+					if entryProtBlocked {
+						forward.EntryProtectionCycleStart = srvCycleStartMs
+						forward.EntryProtectionCycleEnd = srvCycleEndMs
+					}
+				}
 				break
 			}
 		}

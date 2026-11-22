@@ -22,6 +22,9 @@ func (s *Store) Routes() ([]shared.Route, error) {
 func (s *Store) PutRoute(v shared.Route) error {
 	v.Status = ""
 	v.Error = ""
+	v.CycleTraffic = nil
+	v.EnforcementCapability = ""
+	v.EnforcementNote = ""
 	v.EdgeLatencies = nil
 	v.RelayEdges = nil
 	_, err := s.DB.Exec(`INSERT INTO mui_routes(id,data) VALUES($1,$2) ON CONFLICT(id) DO UPDATE SET data=excluded.data`, v.ID, Marshal(v))
@@ -74,24 +77,49 @@ func (a *App) routes(w http.ResponseWriter, r *http.Request) {
 		now := time.Now()
 		downstream := world.downstreamHints(now, true)
 		_, _, routeErrors := world.desiredRouteForwards()
+		routeCycleMap, err := a.Store.RouteCycleTrafficMap(world.routes, world.servers, now)
+		if err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
 		for i := range world.routes {
-			world.routes[i].Status = routeStatus(world.routes[i], world.forwards)
-			if reason := routeErrors[world.routes[i].ID]; reason != "" {
-				world.routes[i].Status, world.routes[i].Error = "error", reason
+			rt := &world.routes[i]
+			rt.Status = routeStatus(*rt, world.forwards)
+			if reason := routeErrors[rt.ID]; reason != "" {
+				rt.Status, rt.Error = "error", reason
 			}
-			world.routes[i].EdgeLatencies = routeEdgeLatencies(world.routes[i], world, now)
-			world.routes[i].RelayEdges = routeRelayEdges(world.routes[i], world, overrides, now, downstream)
-			if (world.routes[i].Status == "active" || world.routes[i].Status == "exported") && !offlineRouteReady(world.routes[i], world.servers) {
-				world.routes[i].Status = "pending"
+			rt.EdgeLatencies = routeEdgeLatencies(*rt, world, now)
+			rt.RelayEdges = routeRelayEdges(*rt, world, overrides, now, downstream)
+			if (rt.Status == "active" || rt.Status == "exported") && !offlineRouteReady(*rt, world.servers) {
+				rt.Status = "pending"
 			}
-			if world.routes[i].Status == "active" || world.routes[i].Status == "exported" {
-				allowed, err := a.routeExitAccessLive(world.routes[i], world)
+			if rt.Status == "active" || rt.Status == "exported" {
+				allowed, err := a.routeExitAccessLive(*rt, world)
 				if err != nil {
 					errorJSON(w, 500, err.Error())
 					return
 				}
-				if !allowed || world.checkRouteShape(world.routes[i]) != nil {
-					world.routes[i].Status = "pending"
+				if !allowed || world.checkRouteShape(*rt) != nil {
+					rt.Status = "pending"
+				}
+			}
+			entrySrv := world.servers[rt.EntryServerID]
+			rt.EnforcementCapability, rt.EnforcementNote = RouteEnforcementInfo(*rt, entrySrv)
+			if ct, ok := routeCycleMap[rt.ID]; ok {
+				ctCopy := ct
+				rt.CycleTraffic = &ctCopy
+			}
+			// Auto-paused & upgrade-required states take precedence over "active"
+			// while preserving admin manual disable ("disabled"), "error", and "pending".
+			if rt.Enabled && rt.Status != "error" && rt.Status != "pending" {
+				if rt.EnforcementCapability == "upgrade_required" && (shared.RouteHasTrafficLimit(*rt) || (entrySrv.TrafficProtectionEnabled && entrySrv.TrafficLimit > 0)) {
+					rt.Status = "upgrade_required"
+				} else if rt.CycleTraffic != nil && rt.CycleTraffic.AutoPaused {
+					if rt.CycleTraffic.PauseReason == "entry_protection" {
+						rt.Status = "entry_protected"
+					} else {
+						rt.Status = "quota_exceeded"
+					}
 				}
 			}
 		}
@@ -134,6 +162,7 @@ func (a *App) routeByID(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
+		_ = a.Store.DeleteRouteTrafficData(old.ID)
 		if err = a.syncRoutes(); err != nil {
 			errorJSON(w, 500, err.Error())
 			return
@@ -158,6 +187,10 @@ func (a *App) saveRoute(w http.ResponseWriter, r *http.Request, in shared.Route,
 	}
 	in.Name = strings.TrimSpace(in.Name)
 	in.Status = ""
+	if err = validateRouteTrafficFields(&in, old, time.Now()); err != nil {
+		errorJSON(w, 400, err.Error())
+		return
+	}
 	if in.EntryFirewallPolicy == "restricted" {
 		_, in.EntryFirewallSources, err = shared.NormalizeAdminFirewallAccess(in.EntryFirewallPolicy, in.EntryFirewallSources)
 		if err != nil {
@@ -240,6 +273,12 @@ func (a *App) saveRoute(w http.ResponseWriter, r *http.Request, in shared.Route,
 	if err = a.syncRoutes(); err != nil {
 		errorJSON(w, 500, err.Error())
 		return
+	}
+	if old != nil && routeTrafficConfigChanged(*old, in) {
+		if err = a.queueApply(in.EntryServerID, "forwards.apply"); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
 	}
 	if old != nil && old.NodeID != in.NodeID {
 		if err = a.queueSubscriptionApply([]string{old.NodeID, in.NodeID}); err != nil {

@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState } from "react";
-import { mutation, type Node, type RelayEdge, type Route } from "../api";
+import { bytes, mutation, type Node, type RelayEdge, type Route } from "../api";
 import { useApp } from "../app/context";
 import { manualFirewall } from "../app/helpers";
 import { ActionMenu, Empty, HelpTip, ModalShell, parseSort, sortRows, Status, statusLabels } from "../app/ui";
@@ -153,11 +153,46 @@ export default function Routes() {
         const entryRestricted = r.entryFirewallPolicy === "restricted";
         const entryManual = manualFirewall(servers.find((s) => s.id === r.entryServerId));
         const entrySourceCount = r.entryFirewallSources?.split(",").filter((source) => source.trim()).length || 0;
+        const ct = r.cycleTraffic;
+        const hasQuota = (r.trafficLimit || 0) > 0;
+        const hasSpeed = (r.upSpeedLimitMbps || 0) > 0 || (r.downSpeedLimitMbps || 0) > 0;
+        const pct = hasQuota && ct ? Math.min(100, (ct.used / (r.trafficLimit || 1)) * 100) : 0;
+        const dirLabel = r.trafficLimitType === "up" ? "仅上传" : r.trafficLimitType === "down" ? "仅下载" : "双向";
         return <article className={`routeRow${r.enabled ? "" : " disabled"}`} key={r.id}>
           <div className="routeRowIdentity">
             <div className="routeRowTitle"><h3>{r.name}</h3><Status value={r.status || "pending"} /></div>
             <div className="routeRowMeta"><span className="mono">:{r.port}</span><span>{r.hops.length ? `${r.hops.length} 跳中转` : "直连落地"}</span></div>
             {entryRestricted && <span className="routeEntryAccess" title={entryManual ? undefined : r.entryFirewallSources}>{entryManual ? "入口限制需手动配置" : `入口限制 ${entrySourceCount} 个来源`}</span>}
+            {(hasQuota || hasSpeed || (ct && (ct.uplink > 0 || ct.downlink > 0))) && (
+              <div className="routeTrafficBox">
+                {hasQuota && ct ? (
+                  <>
+                    <div className="routeTrafficMeta">
+                      <span className={pct >= 100 ? "dangerText" : pct >= 80 ? "warnText" : ""}>
+                        {bytes(ct.used)} / {bytes(r.trafficLimit || 0)} ({pct.toFixed(0)}% · {dirLabel})
+                      </span>
+                    </div>
+                    <div className="routeTrafficBar" aria-hidden="true">
+                      <span className={pct >= 100 ? "bad" : pct >= 80 ? "warn" : "good"} style={{ width: `${pct}%` }} />
+                    </div>
+                    <small className="routeTrafficNote">重置：{ct.resetAt.slice(0, 10)}{ct.hasHistoricalGap && ct.meteringStartedAt ? ` · 计量自 ${ct.meteringStartedAt.slice(5, 16).replace("T", " ")}` : ""}</small>
+                  </>
+                ) : ct && (ct.uplink > 0 || ct.downlink > 0) ? (
+                  <small className="routeTrafficNote">本周期：↑ {bytes(ct.uplink)} · ↓ {bytes(ct.downlink)}（不限额）</small>
+                ) : null}
+                {hasSpeed && (
+                  <small className="routeSpeedMeta">
+                    限速：{r.upSpeedLimitMbps ? `↑ ${r.upSpeedLimitMbps} Mbps` : "↑ 不限"} · {r.downSpeedLimitMbps ? `↓ ${r.downSpeedLimitMbps} Mbps` : "↓ 不限"}
+                  </small>
+                )}
+              </div>
+            )}
+            {r.enforcementCapability === "upgrade_required" && (hasQuota || hasSpeed || r.status === "upgrade_required") && (
+              <small className="routeTrafficNote dangerText" title={r.enforcementNote}>入口 Agent 需升级后才能执行限制</small>
+            )}
+            {r.enforcementCapability === "offline" && (hasQuota || hasSpeed) && (
+              <small className="routeTrafficNote" title={r.enforcementNote}>离线本机执行（不回传用量）</small>
+            )}
             {r.notes && <p className="routeRowNotes">{r.notes}</p>}
             <div className="actions routeRowActions">
               <button onClick={() => openRoute(r)}>编辑</button>

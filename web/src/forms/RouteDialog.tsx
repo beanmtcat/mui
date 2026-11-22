@@ -1,22 +1,135 @@
-import { useState } from "react";
-import { mutation, type Route, type RouteHop, type RouteSourceFamily, type RouteSourceMode, type Server } from "../api";
+import { useMemo, useState } from "react";
+import { bytes, mutation, type Route, type RouteHop, type RouteSourceFamily, type RouteSourceMode, type RouteTrafficLimitType, type Server } from "../api";
 import { useApp } from "../app/context";
+import { setError } from "../app/feedback";
 import { manualFirewall, rolesText } from "../app/helpers";
 import { Field, SubmitButton, useBusy } from "../app/ui";
 import { Dialog } from "./Dialog";
 import { ItemPicker } from "./ItemPicker";
 
+const GB_BYTES = 1024 ** 3;
+const TB_BYTES = 1024 ** 4;
+const MAX_TRAFFIC_LIMIT_BYTES = 2 ** 53;
+
+function formatUnitValue(bytesVal: number, unitBytes: number): string {
+  const raw = bytesVal / unitBytes;
+  if (Math.abs(raw - Math.round(raw)) < 1e-6) return String(Math.round(raw));
+  return String(Number(raw.toFixed(2)));
+}
+
+function routeLimitDraft(initial: Partial<Route>) {
+  const limit = initial.trafficLimit ?? 0;
+  let trafficLimit = "";
+  let trafficLimitUnit: "GB" | "TB" = "GB";
+  if (limit > 0) {
+    const tbVal = limit / TB_BYTES;
+    if (limit >= TB_BYTES && Math.abs(tbVal * 100 - Math.round(tbVal * 100)) < 1e-4) {
+      trafficLimitUnit = "TB";
+      trafficLimit = formatUnitValue(limit, TB_BYTES);
+    } else {
+      trafficLimitUnit = "GB";
+      trafficLimit = formatUnitValue(limit, GB_BYTES);
+    }
+  }
+  return {
+    trafficLimit,
+    trafficLimitUnit,
+    trafficResetDay: initial.trafficResetDay && initial.trafficResetDay > 0 ? String(initial.trafficResetDay) : "",
+    upSpeedLimitMbps: initial.upSpeedLimitMbps && initial.upSpeedLimitMbps > 0 ? String(initial.upSpeedLimitMbps) : "",
+    downSpeedLimitMbps: initial.downSpeedLimitMbps && initial.downSpeedLimitMbps > 0 ? String(initial.downSpeedLimitMbps) : "",
+  };
+}
+
+function previewCycleWindow(resetDay: number): { start: string; end: string } {
+  const now = new Date();
+  const d = resetDay >= 1 && resetDay <= 31 ? resetDay : 1;
+  const clampDate = (y: number, m: number) => {
+    const last = new Date(y, m + 1, 0).getDate();
+    return new Date(y, m, Math.min(d, last), 0, 0, 0);
+  };
+  let start = clampDate(now.getFullYear(), now.getMonth());
+  let end: Date;
+  if (now < start) {
+    end = start;
+    start = clampDate(now.getFullYear(), now.getMonth() - 1);
+  } else {
+    end = clampDate(now.getFullYear(), now.getMonth() + 1);
+  }
+  const fmt = (dt: Date) => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")} 00:00`;
+  return { start: fmt(start), end: fmt(end) };
+}
+
 export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
   const { servers, nodes, serverName, act, closeModal } = useApp();
   // Format stored CIDRs for the editor once; keep subsequent typing untouched.
   const displayInitial = { ...initial, entryFirewallSources: initial.entryFirewallSources?.replaceAll(",", "\n") };
+  const initialLimitDraft = useMemo(() => routeLimitDraft(initial), [initial]);
   const [routeForm, setRouteForm] = useState(displayInitial);
+  const [limitDraft, setLimitDraft] = useState(initialLimitDraft);
   const { busy, run } = useBusy();
   const submitRoute = (e: React.FormEvent) => {
     e.preventDefault();
+    let trafficLimit = 0;
+    const limitRaw = limitDraft.trafficLimit.trim();
+    if (limitRaw !== "" && limitRaw !== "0") {
+      if (!/^\d+(?:\.\d{1,4})?$/.test(limitRaw)) {
+        setError("周期流量配额请填写有效数字（最多 4 位小数）");
+        return;
+      }
+      const mul = limitDraft.trafficLimitUnit === "TB" ? TB_BYTES : GB_BYTES;
+      const computed = Math.round(Number(limitRaw) * mul);
+      if (!Number.isFinite(computed) || computed < 0 || computed > MAX_TRAFFIC_LIMIT_BYTES) {
+        setError("周期流量配额超出有效范围");
+        return;
+      }
+      trafficLimit = computed;
+    }
+    let trafficResetDay = 0;
+    const resetRaw = limitDraft.trafficResetDay.trim();
+    if (resetRaw !== "") {
+      if (!/^\d+$/.test(resetRaw)) {
+        setError("每月重置日需填写 1–31 之间的整数");
+        return;
+      }
+      trafficResetDay = Number.parseInt(resetRaw, 10);
+      if (trafficResetDay < 0 || trafficResetDay > 31) {
+        setError("每月重置日需在 0–31 之间");
+        return;
+      }
+    }
+    const parseSpeed = (raw: string, label: string): number | null => {
+      const s = raw.trim();
+      if (s === "" || s === "0") return 0;
+      if (!/^\d+(?:\.\d{1,2})?$/.test(s)) {
+        setError(`${label}请填写有效数字（最多两位小数）`);
+        return null;
+      }
+      const val = Number(s);
+      if (!Number.isFinite(val) || val < 0 || val > 100000) {
+        setError(`${label}需在 0–100000 Mbps 之间`);
+        return null;
+      }
+      return val;
+    };
+    const upSpeedLimitMbps = parseSpeed(limitDraft.upSpeedLimitMbps, "上传限速");
+    if (upSpeedLimitMbps === null) return;
+    const downSpeedLimitMbps = parseSpeed(limitDraft.downSpeedLimitMbps, "下载限速");
+    if (downSpeedLimitMbps === null) return;
+
+    const payload: Partial<Route> = {
+      ...routeForm,
+      trafficLimit,
+      trafficLimitType: (routeForm.trafficLimitType || "sum") as RouteTrafficLimitType,
+      trafficResetDay,
+      upSpeedLimitMbps,
+      downSpeedLimitMbps,
+      cycleTraffic: undefined,
+      enforcementCapability: undefined,
+      enforcementNote: undefined,
+    };
     const path = "/api/routes" + (routeForm.id ? "/" + routeForm.id : "");
     void run(async () => {
-      if (await act(() => mutation(path, routeForm.id ? "PATCH" : "POST", routeForm), "链路已保存，各跳转发等待 Agent 应用")) closeModal();
+      if (await act(() => mutation(path, routeForm.id ? "PATCH" : "POST", payload), "链路已保存，各跳转发等待 Agent 应用")) closeModal();
     });
   };
               const hops = routeForm.hops || [];
@@ -91,7 +204,21 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                   </fieldset>
                 );
               };
-  return <Dialog title={routeForm.id ? "编辑链路" : "新建链路"} value={routeForm} initial={displayInitial} busy={busy}>
+  const entryServer = servers.find((s) => s.id === routeForm.entryServerId);
+  const resetDayPreview = Number.parseInt(limitDraft.trafficResetDay.trim() || "1", 10) || 1;
+  const cyclePreview = previewCycleWindow(resetDayPreview);
+  const entryCapabilityHint = !entryServer
+    ? ""
+    : entryServer.managementMode === "external"
+      ? "所选首跳为外部节点服务器，无法在本机执行链路流量配额或限速。"
+      : entryServer.managementMode === "offline"
+        ? "所选首跳为离线管理模式：导出并应用离线配置后，由入口本机转发器独立执行计量、限速与超额阻断；面板无法实时回传用量。"
+        : !entryServer.forwardTrafficLimitSupport
+          ? "警告：所选入口服务器 Agent 版本过旧，不支持链路流量配额与合计限速；保存后状态将显示“需升级 Agent”，请先升级入口 Agent。"
+          : manualFirewall(entryServer)
+            ? "所选入口防火墙为手动管理；链路流量计量、限速与超额阻断仍由入口本机转发器直接执行。"
+            : "入口 Agent 支持本机持续计量、合计限速与超额自动阻断（面板暂时不可达时继续生效）。";
+  return <Dialog title={routeForm.id ? "编辑链路" : "新建链路"} value={{ routeForm, limitDraft }} initial={{ routeForm: displayInitial, limitDraft: initialLimitDraft }} busy={busy}>
                 <form onSubmit={submitRoute}>
                   <div className="formGrid">
                     <Field label="名称 *"><input required maxLength={100} value={routeForm.name || ""} onChange={(e) => setRouteForm({ ...routeForm, name: e.target.value })} /></Field>
@@ -119,6 +246,79 @@ export default function RouteDialog({ initial }: { initial: Partial<Route> }) {
                     <Field label="备注"><input maxLength={200} value={routeForm.notes || ""} onChange={(e) => setRouteForm({ ...routeForm, notes: e.target.value })} /></Field>
                     <Field label="状态"><label className="check"><input type="checkbox" checked={!!routeForm.enabled} onChange={(e) => setRouteForm({ ...routeForm, enabled: e.target.checked })} /> 启用链路</label></Field>
                   </div>
+                  <fieldset className="routeConnection">
+                    <legend>流量与限速（首跳入口本机执行）</legend>
+                    <div className="formGrid">
+                      <Field label="周期流量配额" help="留空或 0 表示不限。达到额度后自动暂停该链路并终止已有 TCP 连接与 UDP 会话，到下一周期满足恢复条件后自动恢复。仅在首跳对链路业务字节计量，TCP 与 UDP 合并计数，中间跳和落地不重复计入。">
+                        <div className="inputWithUnit">
+                          <input
+                            inputMode="decimal"
+                            placeholder="留空或 0 表示不限"
+                            value={limitDraft.trafficLimit}
+                            onChange={(e) => setLimitDraft({ ...limitDraft, trafficLimit: e.target.value })}
+                          />
+                          <select
+                            aria-label="链路流量配额单位"
+                            value={limitDraft.trafficLimitUnit}
+                            onChange={(e) => setLimitDraft({ ...limitDraft, trafficLimitUnit: e.target.value as "GB" | "TB" })}
+                          >
+                            <option value="GB">GB</option>
+                            <option value="TB">TB</option>
+                          </select>
+                        </div>
+                      </Field>
+                      <Field label="计量方向" help="上传指客户端 → 上游方向的业务字节，下载指上游 → 客户端方向的业务字节。">
+                        <select
+                          aria-label="链路计量方向"
+                          value={routeForm.trafficLimitType || "sum"}
+                          onChange={(e) => setRouteForm({ ...routeForm, trafficLimitType: e.target.value as RouteTrafficLimitType })}
+                        >
+                          <option value="sum">上行 + 下载（双向合计）</option>
+                          <option value="up">仅上传（客户端 → 上游）</option>
+                          <option value="down">仅下载（上游 → 客户端）</option>
+                        </select>
+                      </Field>
+                      <Field label="每月重置日（1–31）" help="按面板时区确定每月重置边界；当月无该日时取月末。留空默认每月 1 号 00:00 重置。">
+                        <input
+                          inputMode="numeric"
+                          placeholder="默认 1 号"
+                          value={limitDraft.trafficResetDay}
+                          onChange={(e) => setLimitDraft({ ...limitDraft, trafficResetDay: e.target.value })}
+                        />
+                      </Field>
+                      <Field label="本周期起止时间">
+                        <small className="connectionAddress">
+                          {routeForm.cycleTraffic
+                            ? `${routeForm.cycleTraffic.startAt.slice(0, 16).replace("T", " ")} 至 ${routeForm.cycleTraffic.resetAt.slice(0, 16).replace("T", " ")}（已用 ${bytes(routeForm.cycleTraffic.used)}）`
+                            : `${cyclePreview.start} 至 ${cyclePreview.end}`}
+                        </small>
+                        {routeForm.cycleTraffic?.hasHistoricalGap && routeForm.cycleTraffic.meteringStartedAt && (
+                          <small className="connectionAddress">
+                            本次周期计量起点：{routeForm.cycleTraffic.meteringStartedAt.slice(0, 16).replace("T", " ")}（此前累计历史转发流量不计入本周期）
+                          </small>
+                        )}
+                      </Field>
+                      <Field label="上传合计限速（Mbps）" help="留空或 0 表示不限。针对整条链路所有并发连接（TCP + UDP）的合计上传速度上限。">
+                        <input
+                          inputMode="decimal"
+                          placeholder="留空或 0 表示不限"
+                          value={limitDraft.upSpeedLimitMbps}
+                          onChange={(e) => setLimitDraft({ ...limitDraft, upSpeedLimitMbps: e.target.value })}
+                        />
+                      </Field>
+                      <Field label="下载合计限速（Mbps）" help="留空或 0 表示不限。针对整条链路所有并发连接（TCP + UDP）的合计下载速度上限。">
+                        <input
+                          inputMode="decimal"
+                          placeholder="留空或 0 表示不限"
+                          value={limitDraft.downSpeedLimitMbps}
+                          onChange={(e) => setLimitDraft({ ...limitDraft, downSpeedLimitMbps: e.target.value })}
+                        />
+                      </Field>
+                    </div>
+                    <p className="hint">一人一条专用链路可独立限制，多人共用则共享额度和速度。用户手动导入链路连接信息到客户端同样受本限制约束。</p>
+                    <p className="hint">链路端口属于计量边界，落地凭据仍决定访问权限；若多条链路或直连节点共享同一落地凭据，请勿向同一用户暴露其他未限流入口。</p>
+                    {entryCapabilityHint && <p className={`hint${entryServer && !entryServer.forwardTrafficLimitSupport && entryServer.managementMode !== "offline" && entryServer.managementMode !== "external" ? " dangerText" : ""}`}>{entryCapabilityHint}</p>}
+                  </fieldset>
                   <div className="field">
                     <span>中间跳（按顺序，可为空）</span>
                     <div className="hopList">

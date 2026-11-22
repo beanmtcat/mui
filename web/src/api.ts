@@ -18,6 +18,7 @@ export type InstallGuide = {
 export const roleLabels: Record<Role, string> = { entry: "入口", line: "线路", transit: "中转", exit: "落地", other: "其他" };
 export type BillingCycle = "" | "month" | "quarter" | "halfyear" | "year" | "2year" | "3year" | "days";
 export type TrafficLimitType = "sum" | "up" | "down" | "max" | "min";
+export type RouteTrafficLimitType = "sum" | "up" | "down";
 export type CycleTrafficSummary = {
   startAt: string;
   resetAt: string;
@@ -26,6 +27,30 @@ export type CycleTrafficSummary = {
   used: number;
   limit: number;
   type: TrafficLimitType;
+};
+export type RouteCycleTrafficSummary = {
+  startAt: string;
+  resetAt: string;
+  meteringStartedAt?: string;
+  hasHistoricalGap?: boolean;
+  uplink: number;
+  downlink: number;
+  used: number;
+  limit: number;
+  type: RouteTrafficLimitType;
+  autoPaused?: boolean;
+  pauseReason?: "route_quota" | "entry_protection" | "";
+  pausedAt?: string;
+};
+export type EntryTrafficProtectionState = {
+  active: boolean;
+  cycleStartMs?: number;
+  triggeredAt?: string;
+  triggeredUsed?: number;
+  thresholdBytes?: number;
+  limitBytes?: number;
+  affectedRouteIds?: string[];
+  source?: string;
 };
 export type Server = {
   managementMode?: "online" | "offline" | "external";
@@ -65,6 +90,9 @@ export type Server = {
   trafficLimit?: number;
   trafficLimitType?: TrafficLimitType;
   trafficResetDay?: number;
+  trafficProtectionEnabled?: boolean;
+  trafficProtectionThreshold?: number;
+  trafficProtectionState?: EntryTrafficProtectionState;
   group?: string;
   sortWeight?: number;
   alertMuted?: boolean;
@@ -82,6 +110,7 @@ export type Server = {
   multiUserStats: boolean;
   forwardSupport: boolean;
   forwardTcpUdp?: boolean;
+  forwardTrafficLimitSupport?: boolean;
   shadowTlsAuth?: boolean;
   snellFixedPort?: boolean;
   snellV6?: boolean;
@@ -262,8 +291,17 @@ export type Route = {
   port: number;
   enabled: boolean;
   notes: string;
+  trafficLimit?: number;
+  trafficLimitType?: RouteTrafficLimitType;
+  trafficResetDay?: number;
+  upSpeedLimitMbps?: number;
+  downSpeedLimitMbps?: number;
+  trafficMeteringStartedAt?: string;
   status?: string;
   error?: string;
+  cycleTraffic?: RouteCycleTrafficSummary;
+  enforcementCapability?: "full" | "upgrade_required" | "offline" | "manual_firewall" | "unavailable";
+  enforcementNote?: string;
   relayEdges?: RelayEdge[];
   edgeLatencies?: { fromServerId: string; toServerId: string; tcpMs: number; ok: boolean; at: string }[];
 };

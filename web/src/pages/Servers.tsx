@@ -172,6 +172,8 @@ export default function Servers() {
                         const cyclePctRaw = cycleLimit > 0 ? (cycleUsed / cycleLimit) * 100 : 0;
                         const cycleTone = cycleTrafficTone(cycleUsed, cycleLimit, trafficLimitThreshold);
                         const noNicTraffic = s.managementMode === "offline" || s.managementMode === "external";
+                        const protState = s.trafficProtectionState;
+                        const protActive = !!s.trafficProtectionEnabled && !!protState?.active;
                         const billingHelp = expiry ? `到期：${expiry.fullText}${s.autoRenew && s.billingCycle ? "（自动续期）" : ""}` : "";
                         const mutedHelp = s.alertMuted ? "告警：已静音离线与资源高占用告警" : "";
                         return (
@@ -228,20 +230,33 @@ export default function Servers() {
                         title={[
                           ct && `本周期：${ct.startAt.slice(0, 10)} 至 ${ct.resetAt.slice(0, 10)}（↑ ${bytes(cycleTx)} · ↓ ${bytes(cycleRx)}）`,
                           !noNicTraffic && `整机累计：↓ ${bytes(s.networkRx || 0)} · ↑ ${bytes(s.networkTx || 0)}`,
+                          s.trafficProtectionEnabled && (protActive
+                            ? `入口超额保护：已触发（触发用量 ${bytes(protState?.triggeredUsed || 0)}，影响首跳链路 ${protState?.affectedRouteIds?.length || 0} 条${protState?.triggeredAt ? `，时间 ${protState.triggeredAt.slice(0, 16).replace("T", " ")}` : ""}）`
+                            : `入口超额保护：已开启（阈值 ${s.trafficProtectionThreshold || 95}%）`),
                         ].filter(Boolean).join("\n") || undefined}
                       >
                         {noNicTraffic && cycleLimit <= 0 ? (
                           "—"
                         ) : cycleLimit > 0 ? (
                           <>
-                            <span className={cycleTone === "danger" ? "dangerText" : cycleTone === "warning" ? "warnText" : ""}>
+                            <span className={cycleTone === "danger" || protActive ? "dangerText" : cycleTone === "warning" ? "warnText" : ""}>
                               {bytes(cycleUsed)} / {bytes(cycleLimit)} ({cyclePctRaw.toFixed(0)}%)
                             </span>
-                            <small>
-                              {noNicTraffic
-                                ? trafficLimitTypeShortLabels[cycleType]
-                                : `↓ ${bytes(s.networkRx || 0)} · ↑ ${bytes(s.networkTx || 0)}`}
-                            </small>
+                            {protActive ? (
+                              <small className="dangerText">
+                                超额保护已触发 · 暂停 {protState?.affectedRouteIds?.length || 0} 条首跳链路
+                              </small>
+                            ) : s.trafficProtectionEnabled ? (
+                              <small>
+                                保护阈值 {s.trafficProtectionThreshold || 95}% · {noNicTraffic ? trafficLimitTypeShortLabels[cycleType] : `↓ ${bytes(s.networkRx || 0)} · ↑ ${bytes(s.networkTx || 0)}`}
+                              </small>
+                            ) : (
+                              <small>
+                                {noNicTraffic
+                                  ? trafficLimitTypeShortLabels[cycleType]
+                                  : `↓ ${bytes(s.networkRx || 0)} · ↑ ${bytes(s.networkTx || 0)}`}
+                              </small>
+                            )}
                           </>
                         ) : ct ? (
                           <>

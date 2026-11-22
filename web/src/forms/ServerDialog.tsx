@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import {
+  bytes,
   canHostNodes,
   mutation,
   roleLabels,
@@ -32,6 +33,7 @@ type BillingDrafts = {
   trafficLimit: string;
   trafficLimitUnit: "GB" | "TB";
   trafficResetDay: string;
+  trafficProtectionThreshold: string;
   sortWeight: string;
 };
 
@@ -61,6 +63,7 @@ function draftsFromServer(s: ServerForm): BillingDrafts {
     trafficLimit,
     trafficLimitUnit,
     trafficResetDay: s.trafficResetDay && s.trafficResetDay > 0 ? String(s.trafficResetDay) : "",
+    trafficProtectionThreshold: s.trafficProtectionThreshold && s.trafficProtectionThreshold > 0 ? String(s.trafficProtectionThreshold) : "95",
     sortWeight: s.sortWeight ? String(s.sortWeight) : "",
   };
 }
@@ -194,6 +197,24 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
       return;
     }
 
+    const protThreshRaw = drafts.trafficProtectionThreshold.trim();
+    let trafficProtectionThreshold = 95;
+    if (serverForm.trafficProtectionEnabled) {
+      if (protThreshRaw !== "") {
+        if (!/^\d+$/.test(protThreshRaw)) {
+          setError("超额保护提前停止阈值需填写 50–100 之间的整数");
+          return;
+        }
+        trafficProtectionThreshold = Number.parseInt(protThreshRaw, 10);
+        if (trafficProtectionThreshold < 50 || trafficProtectionThreshold > 100) {
+          setError("超额保护提前停止阈值需在 50–100 之间");
+          return;
+        }
+      }
+    } else {
+      trafficProtectionThreshold = 0;
+    }
+
     const payload: ServerForm = {
       ...serverForm,
       price,
@@ -204,6 +225,9 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
       trafficLimit,
       trafficLimitType: (serverForm.trafficLimitType || "sum") as TrafficLimitType,
       trafficResetDay,
+      trafficProtectionEnabled: !!serverForm.trafficProtectionEnabled,
+      trafficProtectionThreshold,
+      trafficProtectionState: undefined,
       group,
       sortWeight,
       alertMuted: !!serverForm.alertMuted,
@@ -546,6 +570,49 @@ export default function ServerDialog({ initial }: { initial: ServerForm }) {
                         onChange={(e) => setDrafts({ ...drafts, trafficResetDay: e.target.value })}
                       />
                     </Field>
+                    {!external && (
+                      <>
+                        <div className="serverToggleRow serverFormWide">
+                          <label className="check">
+                            <input
+                              type="checkbox"
+                              checked={!!serverForm.trafficProtectionEnabled}
+                              onChange={(e) => setServerForm({ ...serverForm, trafficProtectionEnabled: e.target.checked })}
+                            />
+                            启用入口机总流量超额保护（达到阈值后自动暂停本机作为首跳的所有链路）
+                          </label>
+                          <HelpTip label="入口机总流量超额保护" text="独立于流量展示与告警，默认关闭。开启后沿用上方周期流量限额、计费方向和重置日；达到提前停止阈值后，入口本机将暂停所有以本机为首跳的链路并终止已有连接，下一周期自动恢复。SSH、Agent 与面板管理通道不受影响。" />
+                        </div>
+                        {serverForm.trafficProtectionEnabled && (
+                          <>
+                            <Field label="提前停止阈值（50–100%）" help="默认 95%，为统计采样延迟及宿主机与商家账单口径差异留出余量。">
+                              <input
+                                inputMode="numeric"
+                                placeholder="95"
+                                value={drafts.trafficProtectionThreshold}
+                                onChange={(e) => setDrafts({ ...drafts, trafficProtectionThreshold: e.target.value })}
+                              />
+                            </Field>
+                            <div className="serverFormWide">
+                              <p className="hint">
+                                保护仅暂停本机作为首跳的代理链路，保留 SSH、Agent 与面板连接。宿主机仍可能产生系统更新、监控或其他服务流量，网卡采样口径与商家账单可能存在差异。
+                              </p>
+                              {selectedFormServer && !selectedFormServer.forwardTrafficLimitSupport && selectedFormServer.managementMode !== "offline" && (
+                                <p className="hint dangerText">当前服务器 Agent 版本过旧，需升级 Agent 后超额保护才能在入口本机生效。</p>
+                              )}
+                              {selectedFormServer?.trafficProtectionState?.active && (
+                                <p className="hint dangerText">
+                                  超额保护已触发
+                                  {selectedFormServer.trafficProtectionState.triggeredAt ? `（${selectedFormServer.trafficProtectionState.triggeredAt.slice(0, 16).replace("T", " ")}）` : ""}
+                                  ：触发用量 {bytes(selectedFormServer.trafficProtectionState.triggeredUsed || 0)}
+                                  ，影响首跳链路 {selectedFormServer.trafficProtectionState.affectedRouteIds?.length || 0} 条。
+                                </p>
+                              )}
+                            </div>
+                          </>
+                        )}
+                      </>
+                    )}
                   </div>
                 </Advanced>
                 <Advanced title="整理" open={hasOrganizeInitial}>

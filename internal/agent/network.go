@@ -14,6 +14,14 @@ import (
 )
 
 func sampleServerTraffic(state *trafficState) error {
+	return sampleServerTrafficWithSave(state, func(s trafficState) error { return saveTraffic(s) })
+}
+
+func sampleServerTrafficAt(state *trafficState, statePath string) error {
+	return sampleServerTrafficWithSave(state, func(s trafficState) error { return saveTrafficAt(statePath, s) })
+}
+
+func sampleServerTrafficWithSave(state *trafficState, persist func(trafficState) error) error {
 	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
 	if err != nil {
 		return err
@@ -54,7 +62,7 @@ func sampleServerTraffic(state *trafficState) error {
 		state.NetworkSequence = 0
 		state.NetworkPending = nil
 		state.NetworkLast = [2]int64{rx, tx}
-		return saveTraffic(*state)
+		return persist(*state)
 	}
 	deltaRx, deltaTx := rx-state.NetworkLast[0], tx-state.NetworkLast[1]
 	// A counter that moved backwards is a reset (interface flap, driver
@@ -77,7 +85,9 @@ func sampleServerTraffic(state *trafficState) error {
 	}
 	state.NetworkSequence++
 	state.NetworkPending = append(state.NetworkPending, shared.ServerTrafficPoint{BootID: state.NetworkBoot, Interface: iface, Sequence: state.NetworkSequence, Rx: deltaRx, Tx: deltaTx, At: time.Now()})
-	return saveTraffic(*state)
+	state.EntryCycleRx += deltaRx
+	state.EntryCycleTx += deltaTx
+	return persist(*state)
 }
 func defaultInterface(route string) string {
 	// /proc/net/route columns: Iface, Destination, Gateway, Flags, RefCnt,

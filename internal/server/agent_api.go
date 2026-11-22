@@ -621,6 +621,7 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 		server.MultiUserStats = in.MultiUserStats
 		server.ForwardSupport = in.ForwardSupport
 		server.ForwardTCPUDP = in.ForwardTCPUDP
+		server.ForwardTrafficLimitSupport = in.ForwardTrafficLimitSupport
 		server.ShadowTLSAuth = in.ShadowTLSAuth
 		server.SnellFixedPort = in.SnellFixedPort
 		server.SnellV6 = in.SnellV6 && shared.VersionAtLeast(in.AgentVersion, "0.6.11")
@@ -780,6 +781,12 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	if len(in.RouteTrafficStates) > 0 {
+		if err = a.Store.SaveRouteTrafficStates(id, in.RouteTrafficStates); err != nil {
+			errorJSON(w, 500, err.Error())
+			return
+		}
+	}
 	if len(in.ServerTraffic) > 0 {
 		filtered := in.ServerTraffic[:0]
 		for _, p := range in.ServerTraffic {
@@ -791,6 +798,14 @@ func (a *App) agentReport(w http.ResponseWriter, r *http.Request) {
 			if err = a.Store.SaveServerTraffic(id, filtered); err != nil {
 				errorJSON(w, 500, err.Error())
 				return
+			}
+		}
+	}
+	if server.TrafficProtectionEnabled && server.TrafficLimit > 0 && (len(in.ServerTraffic) > 0 || in.EntryProtectionState != nil) {
+		if cycleMap, cerr := a.Store.CycleTrafficMap([]shared.Server{server}, now); cerr == nil {
+			allRoutes, _ := a.Store.Routes()
+			if reconcileServerEntryProtection(&server, allRoutes, cycleMap[server.ID], in.EntryProtectionState, now, a.Store.timeLocation()) {
+				_ = a.Store.PutServer(server)
 			}
 		}
 	}

@@ -58,6 +58,14 @@ func (r *rule) serveUDP(listener *net.UDPConn) {
 		}
 		failures = 0
 		backoff = 50 * time.Millisecond
+		if r.trafficBlocked() {
+			continue
+		}
+		if g := r.limits.Load(); g != nil && g.upBucket != nil && g.upBucket.rateBps() > 0 {
+			if !g.upBucket.allowUDP(r.done, int64(n), r.svc.now) {
+				continue
+			}
+		}
 		r.mu.Lock()
 		session := r.sessions[client]
 		r.mu.Unlock()
@@ -70,6 +78,7 @@ func (r *rule) serveUDP(listener *net.UDPConn) {
 		if sent, err := session.conn.Write(buffer[:n]); err == nil {
 			r.stats.up.Add(int64(sent))
 			session.up.Add(int64(sent))
+			r.recordTraffic(int64(sent), 0)
 		} else if !errors.Is(err, net.ErrClosed) {
 			r.failedTarget(session.target)
 		}
@@ -159,10 +168,19 @@ func (r *rule) udpReplies(listener *net.UDPConn, client netip.AddrPort, session 
 			}
 			continue
 		}
+		if r.trafficBlocked() {
+			return
+		}
+		if g := r.limits.Load(); g != nil && g.downBucket != nil && g.downBucket.rateBps() > 0 {
+			if !g.downBucket.allowUDP(r.done, int64(n), r.svc.now) {
+				continue
+			}
+		}
 		session.last.Store(time.Now().UnixNano())
 		if sent, err := listener.WriteToUDPAddrPort(buffer[:n], client); err == nil {
 			r.stats.down.Add(int64(sent))
 			down := session.down.Add(int64(sent))
+			r.recordTraffic(0, int64(sent))
 			// A session that receives far more than it sends is likely
 			// being used as an amplifier/reflector. Warn once per session.
 			if !session.warned.Load() && down > 1<<20 && down > 10*session.up.Load() {

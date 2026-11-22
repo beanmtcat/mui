@@ -23,6 +23,8 @@ type rule struct {
 	next         atomic.Uint32 // round-robin position
 	nextTrial    atomic.Uint32
 	quality      *relayQualityGroup
+	entryHop     atomic.Bool
+	limits       atomic.Pointer[limitGroup]
 	listener     io.Closer
 	done         chan struct{}
 	stopOnce     sync.Once
@@ -43,16 +45,51 @@ func (r *rule) stop() {
 		if r.cancelLookup != nil {
 			r.cancelLookup()
 		}
+		if g := r.limits.Load(); g != nil {
+			g.detachRule(r)
+		}
 		_ = r.listener.Close()
-		r.mu.Lock()
-		for pair := range r.pairs {
-			pair.close()
-		}
-		for _, session := range r.sessions {
-			_ = session.conn.Close()
-		}
-		r.mu.Unlock()
+		r.closeActive()
 	})
+}
+
+// closeActive terminates all live TCP connections and UDP sessions on this
+// rule without closing the listener, used when a traffic quota or entry total
+// protection triggers.
+func (r *rule) closeActive() {
+	r.mu.Lock()
+	for pair := range r.pairs {
+		pair.close()
+	}
+	for _, session := range r.sessions {
+		_ = session.conn.Close()
+	}
+	r.mu.Unlock()
+}
+
+func (r *rule) trafficBlocked() bool {
+	if g := r.limits.Load(); g != nil {
+		blocked, rolled := g.blocked(r.svc.now(), r.svc.entryBlocked.Load())
+		if rolled {
+			r.svc.triggerStateFlush()
+		}
+		return blocked
+	}
+	if r.entryHop.Load() {
+		return r.svc.entryBlocked.Load()
+	}
+	return false
+}
+
+func (r *rule) recordTraffic(upDelta, downDelta int64) {
+	g := r.limits.Load()
+	if g == nil || (upDelta <= 0 && downDelta <= 0) {
+		return
+	}
+	exceeded, rolled := g.record(upDelta, downDelta, r.svc.now())
+	if exceeded || rolled {
+		r.svc.triggerStateFlush()
+	}
 }
 
 func (r *rule) stopped() bool {

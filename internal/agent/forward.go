@@ -100,7 +100,7 @@ func RunForward(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	service, err := forward.Start(rules)
+	service, err := forward.StartWithOptions(rules, ForwardTrafficState, ForwardEntryProtection)
 	if err != nil {
 		return err
 	}
@@ -146,7 +146,8 @@ func RunForward(ctx context.Context) error {
 	instanceID := hex.EncodeToString(instance[:])
 	statsCtx, stopStats := context.WithCancel(ctx)
 	statsDone := make(chan struct{})
-	defer func() { stopStats(); <-statsDone; _ = os.Remove(ForwardStats) }()
+	defer func() { stopStats(); <-statsDone; _ = os.Remove(ForwardStats); _ = os.Remove(ForwardRouteTraffic) }()
+	go runOfflineEntryProtectionLoop(statsCtx, ForwardEntryProtectionPolicy, ForwardEntryNICState, service, 30*time.Second)
 	go func() {
 		defer close(statsDone)
 		runForwardStats(statsCtx, ForwardStats, instanceID, func() map[string]forward.Counter {
@@ -155,6 +156,9 @@ func RunForward(ctx context.Context) error {
 			}
 			if err := writeRelaySnapshot(service.RelaySnapshot()); err != nil {
 				fmt.Fprintln(os.Stderr, "relay states:", err)
+			}
+			if err := writeForwardRouteTraffic(ForwardRouteTraffic, service.RouteTrafficSnapshot(instanceID)); err != nil {
+				fmt.Fprintln(os.Stderr, "route traffic:", err)
 			}
 			return service.Snapshot()
 		}, 5*time.Second)
@@ -203,6 +207,19 @@ func runForwardStats(ctx context.Context, path, instanceID string, snapshot func
 			writeStats()
 		}
 	}
+}
+
+func writeForwardRouteTraffic(path string, states []shared.RouteTrafficState) error {
+	sort.Slice(states, func(i, j int) bool { return states[i].RouteID < states[j].RouteID })
+	raw, err := json.Marshal(states)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
 }
 
 // writeForwardReady publishes the rules digest atomically (tmp + rename) so

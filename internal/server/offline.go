@@ -28,11 +28,32 @@ func validateManagement(server shared.Server) error {
 }
 
 // Remove runtime fields so exporting a config cannot accidentally
-// write stale status/counters back into the panel.
+// write stale status/counters back into the panel. Entry-hop route limits are
+// attached dynamically just like desired(), so offline hosts enforce the exact
+// same per-route quotas and aggregate speed caps.
 func (a *App) offlineForwards(id string) ([]shared.ForwardRule, error) {
+	srv, err := a.Store.Server(id)
+	if err != nil {
+		return nil, err
+	}
 	list, err := a.Store.Forwards(id)
 	if err != nil {
 		return nil, err
+	}
+	routes, err := a.Store.Routes()
+	if err != nil {
+		return nil, err
+	}
+	loc := a.Store.timeLocation()
+	now := time.Now()
+	tzName := loc.String()
+	_, tzOffset := now.In(loc).Zone()
+	serverHasEntryProtection := srv.TrafficProtectionEnabled && srv.TrafficLimit > 0
+	routeByID := make(map[string]shared.Route, len(routes))
+	for _, rt := range routes {
+		if rt.EntryServerID == id {
+			routeByID[rt.ID] = rt
+		}
 	}
 	out := []shared.ForwardRule{}
 	for _, f := range list {
@@ -42,6 +63,23 @@ func (a *App) offlineForwards(id string) ([]shared.ForwardRule, error) {
 		f.FirewallPolicy, f.FirewallSources = "manual", ""
 		f.Status, f.Error, f.Uplink, f.Downlink = "", "", 0, 0
 		f.ObserveClients, f.ClientNodeID = false, ""
+		f.EntryHop = false
+		if rt, ok := routeByID[f.RouteID]; ok && (shared.RouteHasTrafficLimit(rt) || serverHasEntryProtection) {
+			f.EntryHop = true
+			f.RouteTrafficLimit = rt.TrafficLimit
+			if rt.TrafficLimit > 0 || rt.TrafficLimitType != "" {
+				lt := rt.TrafficLimitType
+				if lt == "" {
+					lt = "sum"
+				}
+				f.RouteTrafficLimitType = lt
+			}
+			f.RouteTrafficResetDay = rt.TrafficResetDay
+			f.RouteTrafficTimezone = tzName
+			f.RouteTrafficTZOffset = tzOffset
+			f.RouteUpSpeedLimitBps = shared.MbpsToBytesPerSec(rt.UpSpeedLimitMbps)
+			f.RouteDownSpeedLimitBps = shared.MbpsToBytesPerSec(rt.DownSpeedLimitMbps)
+		}
 		f.RouteIDs = nil
 		f.ManualBasePolicy, f.ManualBaseSources = "", ""
 		f.ManualBaseTargets = nil
@@ -90,6 +128,32 @@ func (a *App) offlineExport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	bundle := shared.OfflineBundle{ExportID: ID(), ServerID: id, Revision: server.Revision, Forwards: forwards}
+	if server.TrafficProtectionEnabled && server.TrafficLimit > 0 {
+		loc := a.Store.timeLocation()
+		now := time.Now()
+		tzName := loc.String()
+		_, tzOffset := now.In(loc).Zone()
+		start, end := serverTrafficCycleBounds(server, now, loc)
+		thresholdPct := server.TrafficProtectionThreshold
+		if thresholdPct < shared.MinEntryProtectionThreshold || thresholdPct > shared.MaxEntryProtectionThreshold {
+			thresholdPct = shared.DefaultEntryProtectionThreshold
+		}
+		lt := server.TrafficLimitType
+		if lt == "" {
+			lt = "sum"
+		}
+		bundle.EntryTrafficProtection = &shared.EntryTrafficProtectionPolicy{
+			Enabled:          true,
+			LimitBytes:       server.TrafficLimit,
+			ThresholdPercent: thresholdPct,
+			LimitType:        lt,
+			ResetDay:         effectiveTrafficResetDay(server, loc),
+			Timezone:         tzName,
+			TZOffset:         tzOffset,
+			CycleStartMs:     start.UTC().UnixMilli(),
+			CycleEndMs:       end.UTC().UnixMilli(),
+		}
+	}
 	bundle.Sign(private)
 	fileJSON, err := json.MarshalIndent(bundle, "", "  ")
 	if err != nil {

@@ -25,19 +25,37 @@ const OfflineBundleVersion = 2
 // ignoring the field.
 const OfflineBundleMinAgent = "0.6.7"
 
+// OfflineBundleTrafficLimitMinAgent is the minimum agent version required to
+// enforce route traffic quotas, aggregate speed limits, and local entry total
+// traffic protection in offline mode.
+const OfflineBundleTrafficLimitMinAgent = "0.6.33"
+
 // OfflineBundle is a signed complete replacement of one server's forwards.
 type OfflineBundle struct {
-	Version         int           `json:"version"`
-	MinAgentVersion string        `json:"minAgentVersion"`
-	ExportID        string        `json:"exportId"`
-	ServerID        string        `json:"serverId"`
-	Revision        int64         `json:"revision"`
-	PanelPublicKey  string        `json:"panelPublicKey"`
-	Forwards        []ForwardRule `json:"forwards"`
-	Signature       string        `json:"signature"`
+	Version                int                           `json:"version"`
+	MinAgentVersion        string                        `json:"minAgentVersion"`
+	ExportID               string                        `json:"exportId"`
+	ServerID               string                        `json:"serverId"`
+	Revision               int64                         `json:"revision"`
+	PanelPublicKey         string                        `json:"panelPublicKey"`
+	Forwards               []ForwardRule                 `json:"forwards"`
+	EntryTrafficProtection *EntryTrafficProtectionPolicy `json:"entryTrafficProtection,omitempty"`
+	Signature              string                        `json:"signature"`
 
 	// raw is the document as received; empty for a bundle built here.
 	raw []byte
+}
+
+func (b OfflineBundle) usesTrafficLimits() bool {
+	if b.EntryTrafficProtection != nil && b.EntryTrafficProtection.Enabled {
+		return true
+	}
+	for _, f := range b.Forwards {
+		if f.RouteTrafficLimit > 0 || f.RouteUpSpeedLimitBps > 0 || f.RouteDownSpeedLimitBps > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseOfflineBundle reads a file exported by the panel. Fields this program
@@ -120,7 +138,12 @@ func (b OfflineBundle) signingBytes() ([]byte, error) {
 }
 
 func (b *OfflineBundle) Sign(key ed25519.PrivateKey) {
-	b.Version, b.MinAgentVersion = OfflineBundleVersion, OfflineBundleMinAgent
+	b.Version = OfflineBundleVersion
+	if b.usesTrafficLimits() {
+		b.MinAgentVersion = OfflineBundleTrafficLimitMinAgent
+	} else {
+		b.MinAgentVersion = OfflineBundleMinAgent
+	}
 	b.PanelPublicKey = base64.StdEncoding.EncodeToString(key.Public().(ed25519.PublicKey))
 	b.Signature, b.raw = "", nil
 	message, _ := b.signingBytes()

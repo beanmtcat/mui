@@ -55,23 +55,27 @@ type Server struct {
 	NodeDomainBlock              bool                 `json:"nodeDomainBlock,omitempty"`
 	NodeSOCKSOutbound            bool                 `json:"nodeSocksOutbound,omitempty"`
 	MultiUserStats               bool                 `json:"multiUserStats"`
-	ForwardTCPUDP                bool                 `json:"forwardTcpUdp"`
-	ForwardSupport               bool                 `json:"forwardSupport"`
-	ShadowTLSAuth                bool                 `json:"shadowTlsAuth"`
-	SnellFixedPort               bool                 `json:"snellFixedPort"`
-	SnellV6                      bool                 `json:"snellV6"`
-	HostMonitor                  bool                 `json:"hostMonitor,omitempty"`
-	ReleaseKeyPinned             bool                 `json:"releaseKeyPinned"`
-	ExpiresAt                    *time.Time           `json:"expiresAt,omitempty"`
-	BillingAnchorDay             int                  `json:"billingAnchorDay,omitempty"`
-	Price                        float64              `json:"price,omitempty"`
-	Currency                     string               `json:"currency,omitempty"`
-	BillingCycle                 string               `json:"billingCycle,omitempty"`
-	BillingCycleDays             int                  `json:"billingCycleDays,omitempty"`
-	AutoRenew                    bool                 `json:"autoRenew,omitempty"`
-	TrafficLimit                 int64                `json:"trafficLimit,omitempty"`
-	TrafficLimitType             string               `json:"trafficLimitType,omitempty"`
-	TrafficResetDay              int                  `json:"trafficResetDay,omitempty"`
+	ForwardTCPUDP                bool                         `json:"forwardTcpUdp"`
+	ForwardSupport               bool                         `json:"forwardSupport"`
+	ForwardTrafficLimitSupport   bool                         `json:"forwardTrafficLimitSupport,omitempty"`
+	ShadowTLSAuth                bool                         `json:"shadowTlsAuth"`
+	SnellFixedPort               bool                         `json:"snellFixedPort"`
+	SnellV6                      bool                         `json:"snellV6"`
+	HostMonitor                  bool                         `json:"hostMonitor,omitempty"`
+	ReleaseKeyPinned             bool                         `json:"releaseKeyPinned"`
+	ExpiresAt                    *time.Time                   `json:"expiresAt,omitempty"`
+	BillingAnchorDay             int                          `json:"billingAnchorDay,omitempty"`
+	Price                        float64                      `json:"price,omitempty"`
+	Currency                     string                       `json:"currency,omitempty"`
+	BillingCycle                 string                       `json:"billingCycle,omitempty"`
+	BillingCycleDays             int                          `json:"billingCycleDays,omitempty"`
+	AutoRenew                    bool                         `json:"autoRenew,omitempty"`
+	TrafficLimit                 int64                        `json:"trafficLimit,omitempty"`
+	TrafficLimitType             string                       `json:"trafficLimitType,omitempty"`
+	TrafficResetDay              int                          `json:"trafficResetDay,omitempty"`
+	TrafficProtectionEnabled     bool                         `json:"trafficProtectionEnabled,omitempty"`
+	TrafficProtectionThreshold   int                          `json:"trafficProtectionThreshold,omitempty"`
+	TrafficProtectionState       *EntryTrafficProtectionState `json:"trafficProtectionState,omitempty"`
 	Group                        string               `json:"group,omitempty"`
 	SortWeight                   int                  `json:"sortWeight,omitempty"`
 	AlertMuted                   bool                 `json:"alertMuted,omitempty"`
@@ -236,9 +240,23 @@ type ForwardRule struct {
 	ManualBasePolicy  string          `json:"manualBasePolicy,omitempty"`
 	ManualBaseSources string          `json:"manualBaseSources,omitempty"`
 	ManualBaseTargets []ForwardTarget `json:"manualBaseTargets,omitempty"`
-	ObserveClients    bool            `json:"observeClients,omitempty"`
-	ClientNodeID      string          `json:"clientNodeId,omitempty"`
-	FirewallPolicy    string          `json:"firewallPolicy"`
+	ObserveClients                 bool            `json:"observeClients,omitempty"`
+	ClientNodeID                   string          `json:"clientNodeId,omitempty"`
+	EntryHop                       bool            `json:"entryHop,omitempty"`
+	RouteTrafficLimit              int64           `json:"routeTrafficLimit,omitempty"`
+	RouteTrafficLimitType          string          `json:"routeTrafficLimitType,omitempty"`
+	RouteTrafficResetDay           int             `json:"routeTrafficResetDay,omitempty"`
+	RouteTrafficTimezone           string          `json:"routeTrafficTimezone,omitempty"`
+	RouteTrafficTZOffset           int             `json:"routeTrafficTzOffset,omitempty"`
+	RouteUpSpeedLimitBps           int64           `json:"routeUpSpeedLimitBps,omitempty"`
+	RouteDownSpeedLimitBps         int64           `json:"routeDownSpeedLimitBps,omitempty"`
+	RouteTrafficBaselineUp         int64           `json:"routeTrafficBaselineUp,omitempty"`
+	RouteTrafficBaselineDown       int64           `json:"routeTrafficBaselineDown,omitempty"`
+	RouteTrafficBaselineCycleStart int64           `json:"routeTrafficBaselineCycleStart,omitempty"`
+	EntryProtectionBlocked         bool            `json:"entryProtectionBlocked,omitempty"`
+	EntryProtectionCycleStart      int64           `json:"entryProtectionCycleStart,omitempty"`
+	EntryProtectionCycleEnd        int64           `json:"entryProtectionCycleEnd,omitempty"`
+	FirewallPolicy                 string          `json:"firewallPolicy"`
 	FirewallSources   string          `json:"firewallSources"`
 	Enabled           bool            `json:"enabled"`
 	Deleting          bool            `json:"deleting"`
@@ -322,16 +340,25 @@ type Route struct {
 	// NodeSourceFamily limits the exit allowlist to IPv4, IPv6 or both.
 	// Empty keeps the pre-existing destination-family behavior.
 	NodeSourceFamily string `json:"nodeSourceFamily,omitempty"`
-	Port             int    `json:"port"`
-	Enabled          bool   `json:"enabled"`
-	Notes            string `json:"notes"`
+	Port                     int        `json:"port"`
+	Enabled                  bool       `json:"enabled"`
+	Notes                    string     `json:"notes"`
+	TrafficLimit             int64      `json:"trafficLimit,omitempty"`
+	TrafficLimitType         string     `json:"trafficLimitType,omitempty"`
+	TrafficResetDay          int        `json:"trafficResetDay,omitempty"`
+	UpSpeedLimitMbps         float64    `json:"upSpeedLimitMbps,omitempty"`
+	DownSpeedLimitMbps       float64    `json:"downSpeedLimitMbps,omitempty"`
+	TrafficMeteringStartedAt *time.Time `json:"trafficMeteringStartedAt,omitempty"`
 	// Filled in for the list view: whether every hop has applied its forward.
 	Status string `json:"status,omitempty"`
 	// Error is calculated for the list view and is not stored with the route.
 	Error string `json:"error,omitempty"`
 	// Filled in for the list view; never persisted with the route definition.
-	EdgeLatencies []RouteEdgeLatency `json:"edgeLatencies,omitempty"`
-	RelayEdges    []RelayEdge        `json:"relayEdges,omitempty"`
+	CycleTraffic          *RouteCycleTrafficSummary `json:"cycleTraffic,omitempty"`
+	EnforcementCapability string                    `json:"enforcementCapability,omitempty"`
+	EnforcementNote       string                    `json:"enforcementNote,omitempty"`
+	EdgeLatencies         []RouteEdgeLatency        `json:"edgeLatencies,omitempty"`
+	RelayEdges            []RelayEdge               `json:"relayEdges,omitempty"`
 }
 
 type RouteLatency struct {
@@ -484,10 +511,11 @@ type SOCKS5Proxy struct {
 }
 
 type DesiredState struct {
-	OutboundInterface string         `json:"outboundInterface,omitempty"`
-	AgentProxy        *SOCKS5Proxy   `json:"agentProxy,omitempty"`
-	FirewallMode      string         `json:"firewallMode,omitempty"`
-	Revision          int64          `json:"revision"`
+	OutboundInterface      string                        `json:"outboundInterface,omitempty"`
+	AgentProxy             *SOCKS5Proxy                  `json:"agentProxy,omitempty"`
+	FirewallMode           string                        `json:"firewallMode,omitempty"`
+	EntryTrafficProtection *EntryTrafficProtectionPolicy `json:"entryTrafficProtection,omitempty"`
+	Revision               int64                         `json:"revision"`
 	ProtocolVersion   int            `json:"protocolVersion"`
 	Signature         string         `json:"signature"`
 	UpgradeSHA256     string         `json:"upgradeSha256,omitempty"`
@@ -594,9 +622,10 @@ type AgentReport struct {
 	NodeDomainBlock        bool                     `json:"nodeDomainBlock,omitempty"`
 	NodeSOCKSOutbound      bool                     `json:"nodeSocksOutbound,omitempty"`
 	MultiUserStats         bool                     `json:"multiUserStats,omitempty"`
-	ForwardSupport         bool                     `json:"forwardSupport,omitempty"`
-	ForwardTCPUDP          bool                     `json:"forwardTcpUdp,omitempty"`
-	ShadowTLSAuth          bool                     `json:"shadowTlsAuth,omitempty"`
+	ForwardSupport             bool                         `json:"forwardSupport,omitempty"`
+	ForwardTCPUDP              bool                         `json:"forwardTcpUdp,omitempty"`
+	ForwardTrafficLimitSupport bool                         `json:"forwardTrafficLimitSupport,omitempty"`
+	ShadowTLSAuth              bool                         `json:"shadowTlsAuth,omitempty"`
 	SnellFixedPort         bool                     `json:"snellFixedPort,omitempty"`
 	SnellV6                bool                     `json:"snellV6,omitempty"`
 	HostMonitor            bool                     `json:"hostMonitor,omitempty"`
@@ -613,8 +642,10 @@ type AgentReport struct {
 	IPv6                   string                   `json:"ipv6,omitempty"`
 	Traffic                []TrafficPoint           `json:"traffic,omitempty"`
 	UserTraffic            []UserTrafficPoint       `json:"userTraffic,omitempty"`
-	ForwardTraffic         []ForwardTrafficPoint    `json:"forwardTraffic,omitempty"`
-	ServerTraffic          []ServerTrafficPoint     `json:"serverTraffic,omitempty"`
+	ForwardTraffic         []ForwardTrafficPoint        `json:"forwardTraffic,omitempty"`
+	RouteTrafficStates     []RouteTrafficState          `json:"routeTrafficStates,omitempty"`
+	EntryProtectionState   *EntryTrafficProtectionState `json:"entryProtectionState,omitempty"`
+	ServerTraffic          []ServerTrafficPoint         `json:"serverTraffic,omitempty"`
 	Connections            []ConnectionPoint        `json:"connections,omitempty"`
 	// HostReported marks a report that carries the host firewall fields below,
 	// so that empty values mean "none" rather than "not sampled".
@@ -690,4 +721,72 @@ type CycleTrafficSummary struct {
 	Used    int64     `json:"used"`
 	Limit   int64     `json:"limit"`
 	Type    string    `json:"type"`
+}
+
+// RouteCycleTrafficSummary is the panel-computed current-cycle metering view
+// attached to Route responses. MeteringStartedAt marks when cycle metering
+// began so pre-existing cumulative history is never confused with cycle usage.
+type RouteCycleTrafficSummary struct {
+	StartAt           time.Time  `json:"startAt"`
+	ResetAt           time.Time  `json:"resetAt"`
+	MeteringStartedAt *time.Time `json:"meteringStartedAt,omitempty"`
+	HasHistoricalGap  bool       `json:"hasHistoricalGap,omitempty"`
+	Uplink            int64      `json:"uplink"`
+	Downlink          int64      `json:"downlink"`
+	Used              int64      `json:"used"`
+	Limit             int64      `json:"limit"`
+	Type              string     `json:"type"`
+	AutoPaused        bool       `json:"autoPaused,omitempty"`
+	PauseReason       string     `json:"pauseReason,omitempty"`
+	PausedAt          *time.Time `json:"pausedAt,omitempty"`
+}
+
+// RouteTrafficState is reported by mui-forward on the entry server for each
+// entry-hop route. Both TCP and UDP entry listeners for a route share one record.
+type RouteTrafficState struct {
+	RouteID      string     `json:"routeId"`
+	CycleStartMs int64      `json:"cycleStartMs"`
+	CycleEndMs   int64      `json:"cycleEndMs"`
+	Uplink       int64      `json:"uplink"`
+	Downlink     int64      `json:"downlink"`
+	Used         int64      `json:"used"`
+	Limit        int64      `json:"limit"`
+	LimitType    string     `json:"limitType"`
+	ResetDay     int        `json:"resetDay,omitempty"`
+	Timezone     string     `json:"timezone,omitempty"`
+	TZOffset     int        `json:"tzOffset,omitempty"`
+	Paused       bool       `json:"paused,omitempty"`
+	PausedAt     *time.Time `json:"pausedAt,omitempty"`
+	InstanceID   string     `json:"instanceId,omitempty"`
+	UpdatedAt    time.Time  `json:"updatedAt,omitempty"`
+}
+
+// EntryTrafficProtectionPolicy is pushed to entry/line servers in DesiredState
+// so the local Agent can enforce total traffic protection even if the panel
+// becomes unreachable.
+type EntryTrafficProtectionPolicy struct {
+	Enabled          bool   `json:"enabled"`
+	LimitBytes       int64  `json:"limitBytes"`
+	ThresholdPercent int    `json:"thresholdPercent"`
+	LimitType        string `json:"limitType"`
+	ResetDay         int    `json:"resetDay"`
+	Timezone         string `json:"timezone,omitempty"`
+	TZOffset         int    `json:"tzOffset,omitempty"`
+	CycleStartMs     int64  `json:"cycleStartMs"`
+	CycleEndMs       int64  `json:"cycleEndMs,omitempty"`
+	BaselineRx       int64  `json:"baselineRx"`
+	BaselineTx       int64  `json:"baselineTx"`
+}
+
+// EntryTrafficProtectionState records whether entry server total traffic
+// protection is currently active for the current billing cycle.
+type EntryTrafficProtectionState struct {
+	Active           bool       `json:"active"`
+	CycleStartMs     int64      `json:"cycleStartMs,omitempty"`
+	TriggeredAt      *time.Time `json:"triggeredAt,omitempty"`
+	TriggeredUsed    int64      `json:"triggeredUsed,omitempty"`
+	ThresholdBytes   int64      `json:"thresholdBytes,omitempty"`
+	LimitBytes       int64      `json:"limitBytes,omitempty"`
+	AffectedRouteIDs []string   `json:"affectedRouteIds,omitempty"`
+	Source           string     `json:"source,omitempty"`
 }

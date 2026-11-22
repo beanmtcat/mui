@@ -255,6 +255,43 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+.routeTrafficBox {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 6px;
+}
+.routeTrafficMeta {
+  font-size: 11.5px;
+  line-height: 1.35;
+  font-variant-numeric: tabular-nums;
+}
+.routeTrafficBar {
+  height: 5px;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+.routeTrafficBar > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--good);
+}
+.routeTrafficBar > span.warn {
+  background: var(--warn);
+}
+.routeTrafficBar > span.bad {
+  background: var(--bad);
+}
+.routeTrafficNote,
+.routeSpeedMeta {
+  display: block;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
 .routeRowError {
   grid-column: 1 / -1;
   margin-top: 8px;

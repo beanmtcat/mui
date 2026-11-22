@@ -91,6 +91,16 @@ type Service struct {
 	probeMu       sync.Mutex
 	probes        map[string]*probe
 	qualityGroups map[string]*relayQualityGroup
+
+	// Entry-hop route traffic quota & aggregate rate-limit groups (keyed by RouteID).
+	limitGroups         map[string]*limitGroup
+	statePath           string
+	entryProtectionPath string
+	onlineEntryBlocked  atomic.Bool
+	offlineEntryBlocked atomic.Bool
+	entryBlocked        atomic.Bool
+	flushCh             chan struct{}
+	nowFn               atomic.Pointer[func() time.Time]
 }
 
 type probe struct {
@@ -127,13 +137,36 @@ func (s *Service) probe(ctx context.Context, t *target) probeResult {
 
 // Start binds every enabled rule before returning.
 func Start(rules []shared.ForwardRule) (*Service, error) {
-	s := &Service{rules: map[string]*rule{}, counts: map[string]*counter{}, errors: make(chan error, 1), closed: make(chan struct{})}
+	return StartWithOptions(rules, "", "")
+}
+
+// StartWithOptions binds every enabled rule with optional persistent limit
+// state storage and local entry-protection signal file monitoring.
+func StartWithOptions(rules []shared.ForwardRule, statePath, entryProtectionPath string) (*Service, error) {
+	s := &Service{
+		rules:               map[string]*rule{},
+		counts:              map[string]*counter{},
+		limitGroups:         map[string]*limitGroup{},
+		statePath:           statePath,
+		entryProtectionPath: entryProtectionPath,
+		flushCh:             make(chan struct{}, 1),
+		errors:              make(chan error, 1),
+		closed:              make(chan struct{}),
+	}
+	if statePath != "" {
+		_ = s.loadLimitState(statePath)
+	}
+	if entryProtectionPath != "" {
+		s.pollEntryProtectionFile()
+	}
 	if err := s.Reload(rules); err != nil {
 		s.Close()
 		return nil, err
 	}
-	s.wg.Add(1)
+	s.wg.Add(3)
 	go s.sweep()
+	go s.persistLoop()
+	go s.entryProtectionLoop()
 	return s, nil
 }
 
@@ -274,8 +307,32 @@ func (s *Service) Reload(rules []shared.ForwardRule) error {
 		s.rules[id] = startedRule
 		started = append(started, id)
 	}
+	needFlush := false
+	now := s.now()
 	for _, id := range order {
-		s.rules[id].updateRelayTargets(wanted[id].Targets)
+		r := s.rules[id]
+		spec := wanted[id]
+		r.updateRelayTargets(spec.Targets)
+		r.entryHop.Store(isEntryRouteRule(spec))
+		if g := s.limitGroupFor(spec); g != nil {
+			prev := r.limits.Load()
+			if prev != g {
+				if prev != nil {
+					prev.detachRule(r)
+				}
+				g.attachRule(r)
+				r.limits.Store(g)
+			}
+			_, flushed := g.configure(spec, now)
+			if flushed {
+				needFlush = true
+			}
+		} else if prev := r.limits.Swap(nil); prev != nil {
+			prev.detachRule(r)
+		}
+	}
+	if needFlush {
+		s.triggerStateFlush()
 	}
 	return nil
 }
@@ -438,6 +495,14 @@ func (s *Service) startRule(spec shared.ForwardRule, stats *counter) (*rule, err
 		for i, target := range r.targets {
 			target.quality = qualityRef{r.quality, i}
 		}
+	}
+	// Install entry-hop flag and route limit group BEFORE binding and starting
+	// the listener goroutine so there is no startup race or unthrottled window.
+	r.entryHop.Store(isEntryRouteRule(spec))
+	if g := s.limitGroupFor(spec); g != nil {
+		g.configure(spec, s.now())
+		g.attachRule(r)
+		r.limits.Store(g)
 	}
 	address := forwardAddress(spec)
 	if spec.Network == "tcp" {

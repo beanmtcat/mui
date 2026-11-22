@@ -59,12 +59,26 @@ func (o *relayTCPObservation) upload(pair *tcpPair, r *rule) {
 		_ = pair.client.SetReadDeadline(time.Now().Add(relayTick))
 		n, err := pair.client.Read(first[:])
 		if n > 0 {
+			if r.trafficBlocked() {
+				pair.close()
+				return
+			}
+			if g := r.limits.Load(); g != nil && g.upBucket != nil && g.upBucket.rateBps() > 0 {
+				if !g.upBucket.waitPre(pair.closed, int64(n), r.svc.now) {
+					return
+				}
+				if r.trafficBlocked() {
+					pair.close()
+					return
+				}
+			}
 			written, writeErr := pair.upstream.Write(first[:n])
 			if written > 0 {
 				o.noteUpload()
 				r.stats.up.Add(int64(written))
 				pair.last.Store(time.Now().UnixNano())
 				pair.transferred.Store(true)
+				r.recordTraffic(int64(written), 0)
 			}
 			if writeErr != nil {
 				_ = pair.upstream.CloseWrite()
@@ -80,7 +94,7 @@ func (o *relayTCPObservation) upload(pair *tcpPair, r *rule) {
 			break
 		}
 	}
-	relay(pair.upstream, pair.client, &r.stats.up, &pair.last, &pair.transferred, func(err error) {
+	r.relay(pair.upstream, pair.client, &r.stats.up, pair, true, func(err error) {
 		// A relayed EOF is a clean client read ending. Also avoid counting
 		// ambiguous splice resets as the target's fault.
 		if errors.Is(err, io.EOF) || errors.Is(err, syscall.ECONNRESET) || errors.Is(err, net.ErrClosed) {
@@ -93,6 +107,10 @@ func (o *relayTCPObservation) download(pair *tcpPair, r *rule) {
 	var first [1024]byte
 	deadline := o.started.Add(tcpInitialTimeout)
 	for {
+		if r.trafficBlocked() {
+			pair.close()
+			return
+		}
 		now := time.Now()
 		if !now.Before(deadline) {
 			o.finish(qualityBad)
@@ -106,11 +124,25 @@ func (o *relayTCPObservation) download(pair *tcpPair, r *rule) {
 		n, err := pair.upstream.Read(first[:])
 		if n > 0 {
 			o.finish(qualityGood)
+			if r.trafficBlocked() {
+				pair.close()
+				return
+			}
+			if g := r.limits.Load(); g != nil && g.downBucket != nil && g.downBucket.rateBps() > 0 {
+				if !g.downBucket.waitPre(pair.closed, int64(n), r.svc.now) {
+					return
+				}
+				if r.trafficBlocked() {
+					pair.close()
+					return
+				}
+			}
 			written, writeErr := pair.client.Write(first[:n])
 			if written > 0 {
 				r.stats.down.Add(int64(written))
 				pair.last.Store(time.Now().UnixNano())
 				pair.transferred.Store(true)
+				r.recordTraffic(0, int64(written))
 			}
 			if writeErr != nil {
 				_ = pair.client.CloseWrite()
@@ -127,5 +159,5 @@ func (o *relayTCPObservation) download(pair *tcpPair, r *rule) {
 		_ = pair.client.CloseWrite()
 		return
 	}
-	relay(pair.client, pair.upstream, &r.stats.down, &pair.last, &pair.transferred, nil)
+	r.relay(pair.client, pair.upstream, &r.stats.down, pair, false, nil)
 }

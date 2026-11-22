@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,13 +19,20 @@ type tcpPair struct {
 	client, upstream *net.TCPConn
 	last             atomic.Int64
 	transferred      atomic.Bool
+	closeOnce        sync.Once
+	closed           chan struct{}
 }
 
 func (p *tcpPair) close() {
-	_ = p.client.Close()
-	if p.upstream != nil {
-		_ = p.upstream.Close()
-	}
+	p.closeOnce.Do(func() {
+		if p.closed != nil {
+			close(p.closed)
+		}
+		_ = p.client.Close()
+		if p.upstream != nil {
+			_ = p.upstream.Close()
+		}
+	})
 }
 
 func (r *rule) serveTCP(listener net.Listener) {
@@ -62,7 +70,7 @@ func (r *rule) serveTCP(listener net.Listener) {
 		backoff = 50 * time.Millisecond
 		client := conn.(*net.TCPConn)
 		src := sourceOf(client.RemoteAddr())
-		if !r.allowedSource(src) {
+		if !r.allowedSource(src) || r.trafficBlocked() {
 			_ = client.Close()
 			continue
 		}
@@ -80,7 +88,7 @@ func (r *rule) serveTCP(listener net.Listener) {
 }
 
 func (r *rule) proxyTCP(client *net.TCPConn) {
-	pair := &tcpPair{client: client}
+	pair := &tcpPair{client: client, closed: make(chan struct{})}
 	pair.last.Store(time.Now().UnixNano())
 	r.mu.Lock()
 	r.pairs[pair] = struct{}{}
@@ -116,9 +124,9 @@ func (r *rule) proxyTCP(client *net.TCPConn) {
 	} else {
 		go func() {
 			defer close(done)
-			relay(upstream, client, &r.stats.up, &pair.last, &pair.transferred, nil)
+			r.relay(upstream, client, &r.stats.up, pair, true, nil)
 		}()
-		relay(client, upstream, &r.stats.down, &pair.last, &pair.transferred, nil)
+		r.relay(client, upstream, &r.stats.down, pair, false, nil)
 	}
 	<-done
 }
@@ -162,14 +170,107 @@ func (r *rule) dialUpstream() (*net.TCPConn, *target) {
 // little it sends. Only the read side has a deadline: it can expire only while
 // waiting for input, when nothing is in flight, so an interruption never loses
 // data.
-func relay(dst, src *net.TCPConn, count, last *atomic.Int64, transferred *atomic.Bool, beforeClose func(error)) {
+const (
+	quotaCopyChunk    = 256 << 10
+	rateLimitBufBytes = 32 << 10
+)
+
+var rateLimitBufPool = sync.Pool{
+	New: func() any {
+		b := make([]byte, rateLimitBufBytes)
+		return &b
+	},
+}
+
+func (r *rule) relay(dst, src *net.TCPConn, count *atomic.Int64, pair *tcpPair, isUpload bool, beforeClose func(error)) {
 	for {
+		if r.trafficBlocked() {
+			pair.close()
+			return
+		}
+		chunk := int64(copyChunk)
+		var bucket *tokenBucket
+		if g := r.limits.Load(); g != nil {
+			if isUpload {
+				bucket = g.upBucket
+			} else {
+				bucket = g.downBucket
+			}
+			if g.quotaLimit() > 0 && chunk > quotaCopyChunk {
+				chunk = quotaCopyChunk
+			}
+		}
+		// Rate-limited path: read actual available bytes FIRST, then acquire
+		// global rate budget at send time so idle connections cannot bank
+		// tokens and burst simultaneously later.
+		if bucket != nil && bucket.rateBps() > 0 {
+			rate := bucket.rateBps()
+			readCap := int(min(int64(rateLimitBufBytes), max(int64(4<<10), rate/20)))
+			bufPtr := rateLimitBufPool.Get().(*[]byte)
+			buf := (*bufPtr)[:readCap]
+			_ = src.SetReadDeadline(time.Now().Add(relayTick))
+			n, readErr := src.Read(buf)
+			if n > 0 {
+				if r.trafficBlocked() {
+					rateLimitBufPool.Put(bufPtr)
+					pair.close()
+					return
+				}
+				if !bucket.waitPre(pair.closed, int64(n), r.svc.now) {
+					rateLimitBufPool.Put(bufPtr)
+					return
+				}
+				if r.trafficBlocked() {
+					rateLimitBufPool.Put(bufPtr)
+					pair.close()
+					return
+				}
+				written, writeErr := writeFullTCP(dst, buf[:n])
+				rateLimitBufPool.Put(bufPtr)
+				if written > 0 {
+					pair.transferred.Store(true)
+					count.Add(int64(written))
+					pair.last.Store(time.Now().UnixNano())
+					if isUpload {
+						r.recordTraffic(int64(written), 0)
+					} else {
+						r.recordTraffic(0, int64(written))
+					}
+				}
+				if writeErr != nil {
+					if beforeClose != nil {
+						beforeClose(writeErr)
+					}
+					break
+				}
+			} else {
+				rateLimitBufPool.Put(bufPtr)
+			}
+			if readErr == nil {
+				continue
+			}
+			var netErr net.Error
+			if errors.As(readErr, &netErr) && netErr.Timeout() {
+				continue
+			}
+			if beforeClose != nil {
+				beforeClose(readErr)
+			}
+			break
+		}
+
+		// Unlimited (or quota-only) path: keep kernel zero-copy splice(2).
 		_ = src.SetReadDeadline(time.Now().Add(relayTick))
-		n, err := io.CopyN(dst, src, copyChunk)
+		n, err := io.CopyN(dst, src, chunk)
 		if n > 0 {
-			transferred.Store(true)
+			pair.transferred.Store(true)
 			count.Add(n)
-			last.Store(time.Now().UnixNano())
+			pair.last.Store(time.Now().UnixNano())
+			if isUpload {
+				r.recordTraffic(n, 0)
+			} else {
+				r.recordTraffic(0, n)
+			}
 		}
 		if err == nil {
 			continue
@@ -185,6 +286,18 @@ func relay(dst, src *net.TCPConn, count, last *atomic.Int64, transferred *atomic
 	}
 	// Pass the end of stream on; the other direction may still have data to send.
 	_ = dst.CloseWrite()
+}
+
+func writeFullTCP(dst *net.TCPConn, data []byte) (int, error) {
+	total := 0
+	for total < len(data) {
+		n, err := dst.Write(data[total:])
+		total += n
+		if err != nil {
+			return total, err
+		}
+	}
+	return total, nil
 }
 
 func tcpHealth(spec shared.ForwardRule) bool {

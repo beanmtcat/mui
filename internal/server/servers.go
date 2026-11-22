@@ -74,12 +74,16 @@ func (a *App) servers(w http.ResponseWriter, r *http.Request) {
 			errorJSON(w, 500, err.Error())
 			return
 		}
+		allRoutes, _ := a.Store.Routes()
+		now := a.nowMonitorUTC()
+		loc := a.Store.timeLocation()
 		for i := range list {
 			list[i].Status = serverStatus(list[i])
 			list[i].RelayStates = nil
 			list[i].RelayDownstream, list[i].RelayDownstreamPending = nil, nil
 			ct := cycleMap[list[i].ID]
 			list[i].CycleTraffic = &ct
+			reconcileServerEntryProtection(&list[i], allRoutes, ct, nil, now, loc)
 		}
 		paginateList(w, r, list, func(s shared.Server) string { return s.ID })
 		return
@@ -577,8 +581,17 @@ func (a *App) serverByID(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if modeChanged || managementChanged || proxyChanged || outboundChanged || rolesChanged {
-		if err = a.queueApplyLocked(id, "nodes.apply"); err != nil {
+	protectionChanged := before.TrafficProtectionEnabled != old.TrafficProtectionEnabled ||
+		before.TrafficProtectionThreshold != old.TrafficProtectionThreshold ||
+		before.TrafficLimit != old.TrafficLimit ||
+		before.TrafficLimitType != old.TrafficLimitType ||
+		before.TrafficResetDay != old.TrafficResetDay
+	if modeChanged || managementChanged || proxyChanged || outboundChanged || rolesChanged || protectionChanged {
+		kind := "nodes.apply"
+		if !modeChanged && !managementChanged && !proxyChanged && !outboundChanged && !rolesChanged && protectionChanged {
+			kind = "forwards.apply"
+		}
+		if err = a.queueApplyLocked(id, kind); err != nil {
 			errorJSON(w, 500, err.Error())
 			return
 		}
